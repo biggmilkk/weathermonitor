@@ -53,8 +53,6 @@ total_nws = len(nws_alerts)
 new_nws = max(0, total_nws - st.session_state.get("nws_seen_count", 0))
 
 # --- UI ---
-st.title("Global Weather Monitor")
-
 with st.container():
     st.subheader("NWS Active Alerts")
     st.markdown(f"- **{total_nws}** total alerts")
