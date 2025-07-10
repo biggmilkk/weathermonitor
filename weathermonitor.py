@@ -61,23 +61,27 @@ else:
                 # RSS-style feed
                 if isinstance(data, dict) and "entries" in data:
                     st.markdown(f"### {data.get('feed_title', bm['title'])}")
-                    for entry in data["entries"]:
-                        raw_title = entry.get("title", "")
+                    for entry in data.get("entries", []):
+                    raw_title = entry.get("title")
+    
+                    if not raw_title or not str(raw_title).strip():
+                        title = "Untitled Alert"
+                    else:
                         title = str(raw_title).strip()
-                        if not title:
-                        title = "Alert (untitled)"
 
-                        summary = entry.get("summary", "")
-                        summary = summary[:500] + "..." if len(summary) > 500 else summary
-                        published = entry.get("published", "")
-                        link = entry.get("link", "")
+                    summary = str(entry.get("summary", "") or "")
+                    if len(summary) > 500:
+                        summary = summary[:500] + "..."
 
-                        with st.expander(label=title):
-                            st.markdown(summary or "_No description available._")
-                            if link:
-                                st.markdown(f"[View full alert]({link})")
-                            if published:
-                                st.caption(f"Published: {published}")
+                    published = str(entry.get("published", "") or "")
+                    link = entry.get("link", "")
+
+                    with st.expander(label=title):
+                        st.markdown(summary if summary.strip() else "_No description available._")
+                        if link:
+                            st.markdown(f"[View full alert]({link})")
+                        if published:
+                            st.caption(f"Published: {published}")
 
                 # Static weather data
                 else:
