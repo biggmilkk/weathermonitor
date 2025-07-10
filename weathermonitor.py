@@ -62,7 +62,8 @@ else:
                 if isinstance(data, dict) and "entries" in data:
                     st.markdown(f"### {data.get('feed_title', bm['title'])}")
                     for entry in data["entries"]:
-                        title = entry.get("title", "Untitled Alert")
+                        raw_title = entry.get("title")
+                        title = raw_title if raw_title and raw_title.strip() else "Untitled Alert"
                         summary = entry.get("summary", "")
                         summary = summary[:500] + "..." if len(summary) > 500 else summary
                         published = entry.get("published", "")
