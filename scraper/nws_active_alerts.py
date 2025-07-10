@@ -22,12 +22,14 @@ def scrape(url="https://api.weather.gov/alerts/active"):
             "source": url
         }
 
+    entries = []
     try:
-        entries = []
         for feature in feed["features"]:
             props = feature.get("properties")
-            if not props:
+            if not isinstance(props, dict):
+                logging.warning(f"[NWS WARN] Skipping feature with missing or invalid 'properties': {feature}")
                 continue
+
             entries.append({
                 "title": props.get("headline", "No Title"),
                 "summary": props.get("description", "")[:500],
@@ -35,17 +37,17 @@ def scrape(url="https://api.weather.gov/alerts/active"):
                 "published": props.get("effective", "")
             })
 
-        return {
-            "feed_title": "National Weather Service - Active Alerts",
-            "entries": entries,
-            "source": url
-        }
-
     except Exception as e:
-        logging.warning(f"[NWS SCRAPER ERROR] Parsing failed: {e}")
+        logging.warning(f"[NWS SCRAPER ERROR] Parsing loop failed: {e}")
         return {
             "feed_title": "NWS Alerts",
             "entries": [],
             "error": str(e),
             "source": url
         }
+
+    return {
+        "feed_title": "National Weather Service - Active Alerts",
+        "entries": entries,
+        "source": url
+    }
