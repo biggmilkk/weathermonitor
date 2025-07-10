@@ -63,7 +63,9 @@ else:
                     st.markdown(f"### {data.get('feed_title', bm['title'])}")
                     for entry in data["entries"]:
                         raw_title = entry.get("title")
-                        title = raw_title if raw_title and raw_title.strip() else "Untitled Alert"
+                        title = str(raw_title).strip() if raw_title else ""
+                        if not title:
+                            title = "Alert (no title provided)"
                         summary = entry.get("summary", "")
                         summary = summary[:500] + "..." if len(summary) > 500 else summary
                         published = entry.get("published", "")
