@@ -3,7 +3,7 @@ import os
 import sys
 import json
 
-# Extend path to enable clean imports from subfolders
+# Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from utils.domain_router import get_scraper
 
@@ -15,19 +15,15 @@ if "nws_seen_count" not in st.session_state:
 if "nws_show_alerts" not in st.session_state:
     st.session_state["nws_show_alerts"] = False
 
-# Header
-st.markdown("<h2 style='text-align: center;'>Global Weather Dashboard</h2>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; font-size: 0.9rem; color: grey;'>Monitor live weather conditions from your global bookmarks. Each tile represents a live feed, with expandable details.</p>", unsafe_allow_html=True)
-
 # Load bookmarks
 try:
-    with open("bookmarks.json", "r") as file:
-        bookmarks = json.load(file)
+    with open("bookmarks.json", "r") as f:
+        bookmarks = json.load(f)
 except Exception as e:
-    st.error(f"Unable to load bookmarks.json: {e}")
+    st.error(f"Error loading bookmarks: {e}")
     st.stop()
 
-# Filter only NWS for now
+# Filter NWS only
 nws_alerts = []
 for bm in bookmarks:
     if bm.get("domain") == "api.weather.gov":
@@ -40,66 +36,57 @@ for bm in bookmarks:
             except:
                 continue
 
-# Alert count
+# Alert counters
 total_nws = len(nws_alerts)
-new_nws = total_nws - st.session_state["nws_seen_count"]
-if new_nws < 0:
-    new_nws = 0
+new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
 
-# Columns for grid (you can increase this up to 10 later)
+# Grid: 3 columns (adjust to 7-10 later)
 cols = st.columns(3)
 
-# Tile 1: NWS Alerts
+# Tile 1: NWS
 with cols[0]:
-    st.markdown("""
-        <style>
-        .card {
-            background-color: #f8f9fa;
-            border: 1px solid #ddd;
-            padding: 1rem;
-            border-radius: 10px;
-            height: 100%;
-        }
-        .card-header {
-            font-size: 1.1rem;
-            font-weight: 600;
-            margin-bottom: 0.3rem;
-        }
-        .metric {
-            margin: 0.2rem 0;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
     with st.container():
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("<div class='card-header'>📡 NWS Active Alerts</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='metric'><strong>{total_nws}</strong> total alerts</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='metric'><strong>{new_nws}</strong> new since last viewed</div>", unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div style='
+                background-color: #f8f9fa;
+                border: 1px solid #ddd;
+                padding: 1rem;
+                border-radius: 10px;
+                height: 100%;
+                box-shadow: 1px 1px 5px rgba(0,0,0,0.05);
+            '>
+            """,
+            unsafe_allow_html=True
+        )
 
-        if st.button("View Alerts", key="nws_toggle_btn"):
+        st.markdown("#### 📡 NWS Active Alerts")
+        st.markdown(f"- **{total_nws}** total alerts")
+        st.markdown(f"- **{new_nws}** new since last view")
+
+        if st.button("View Alerts", key="nws_toggle"):
             st.session_state["nws_show_alerts"] = not st.session_state["nws_show_alerts"]
             if st.session_state["nws_show_alerts"]:
                 st.session_state["nws_seen_count"] = total_nws
 
         if st.session_state["nws_show_alerts"]:
-            for i, entry in enumerate(nws_alerts):
-                raw_title = entry.get("title", "")
-                title = str(raw_title).strip() or f"⚠️ Alert #{i + 1}"
-                summary = str(entry.get("summary", "") or "")
-                if len(summary) > 300:
-                    summary = summary[:300] + "..."
-                published = str(entry.get("published", "") or "")
-                link = entry.get("link", "").strip()
+            for i, alert in enumerate(nws_alerts):
+                title = alert.get("title", f"Alert #{i+1}").strip() or f"Alert #{i+1}"
+                summary = alert.get("summary", "") or ""
+                summary = summary[:300] + "..." if len(summary) > 300 else summary
+                published = alert.get("published", "")
+                link = alert.get("link", "")
+
                 is_new = i >= total_nws - new_nws
                 prefix = "🆕 " if is_new else ""
 
-                st.markdown(f"<div style='margin-top:0.8rem;'><strong>{prefix}{title}</strong></div>", unsafe_allow_html=True)
-                st.markdown(summary or "_No description available._", unsafe_allow_html=True)
-                if link:
-                    st.markdown(f"[Read more]({link})")
-                if published:
-                    st.caption(f"Published: {published}")
-                st.markdown("<hr>", unsafe_allow_html=True)
+                with st.container():
+                    st.markdown(f"**{prefix}{title}**")
+                    st.markdown(summary if summary.strip() else "_No summary available._")
+                    if link:
+                        st.markdown(f"[Read more]({link})", unsafe_allow_html=True)
+                    if published:
+                        st.caption(f"Published: {published}")
+                    st.markdown("---")
 
         st.markdown("</div>", unsafe_allow_html=True)
