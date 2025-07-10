@@ -62,26 +62,27 @@ else:
                 if isinstance(data, dict) and "entries" in data:
                     st.markdown(f"### {data.get('feed_title', bm['title'])}")
                     for entry in data.get("entries", []):
-                    raw_title = entry.get("title")
-    
-                    if not raw_title or not str(raw_title).strip():
-                        title = "Untitled Alert"
-                    else:
+                        raw_title = entry.get("title", "")
                         title = str(raw_title).strip()
+                        if not title:
+                            title = "🚨 Untitled Alert"
 
-                    summary = str(entry.get("summary", "") or "")
-                    if len(summary) > 500:
-                        summary = summary[:500] + "..."
+                        summary = str(entry.get("summary", "") or "")
+                        if len(summary) > 500:
+                            summary = summary[:500] + "..."
 
-                    published = str(entry.get("published", "") or "")
-                    link = entry.get("link", "")
+                        published = str(entry.get("published", "") or "")
+                        link = entry.get("link", "").strip()
 
-                    with st.expander(label=title):
-                        st.markdown(summary if summary.strip() else "_No description available._")
-                        if link:
-                            st.markdown(f"[View full alert]({link})")
-                        if published:
-                            st.caption(f"Published: {published}")
+                        try:
+                            with st.expander(label=title):
+                                st.markdown(summary if summary.strip() else "_No description available._")
+                                if link:
+                                    st.markdown(f"[View full alert]({link})")
+                                if published:
+                                    st.caption(f"Published: {published}")
+                        except Exception as e:
+                            st.error(f"⚠️ Failed to display alert: {e}")
 
                 # Static weather data
                 else:
