@@ -1,15 +1,21 @@
+# scraper/nws_active_alerts.py
 import requests
 import logging
 
 def scrape(url="https://api.weather.gov/alerts/active"):
-    headers = {"User-Agent": "WeatherMonitorApp (your@email.com)"}
+    headers = {"User-Agent": "WeatherMonitorApp (youremail@example.com)"}
+
     try:
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         feed = response.json()
     except Exception as e:
         logging.warning(f"[NWS SCRAPER ERROR] {e}")
-        return {"entries": [], "error": str(e), "source": url}
+        return {
+            "entries": [],
+            "error": str(e),
+            "source": url
+        }
 
     features = feed.get("features", [])
     logging.warning(f"[NWS DEBUG] Fetched {len(features)} features")
@@ -24,4 +30,7 @@ def scrape(url="https://api.weather.gov/alerts/active"):
             "published": props.get("effective", "")
         })
 
-    return {"entries": entries, "source": url}
+    return {
+        "entries": entries,
+        "source": url
+    }
