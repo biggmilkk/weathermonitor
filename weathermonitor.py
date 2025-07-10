@@ -38,6 +38,7 @@ state_defaults = {
     "active_feed": None,
     "previous_counts": {},
     "last_active_feed": None,
+    "last_refreshed": now,
 }
 for key, val in state_defaults.items():
     if key not in st.session_state:
@@ -52,6 +53,7 @@ if now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL:
         if fetched:
             st.session_state["nws_data"] = fetched
             st.session_state["nws_last_fetch"] = now
+            st.session_state["last_refreshed"] = now
             logging.warning("[NWS] Refreshed")
     except Exception as e:
         st.session_state["nws_data"] = {"entries": [], "error": str(e)}
@@ -72,6 +74,7 @@ if now - st.session_state["ec_last_fetch"] > REFRESH_INTERVAL:
     entries = asyncio.run(scrape_async(ec_sources))
     st.session_state["ec_data"] = entries.get("entries", [])
     st.session_state["ec_last_fetch"] = now
+    st.session_state["last_refreshed"] = now
     logging.warning("[EC] Refreshed")
 
 ec_alerts = sorted(st.session_state["ec_data"], key=lambda x: x.get("published", ""), reverse=True)
@@ -80,6 +83,7 @@ new_ec = max(0, total_ec - st.session_state["ec_seen_count"])
 
 # --- TILE BUTTONS ---
 st.title("Global Weather Monitor")
+st.caption(f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
 col1, col2 = st.columns(2)
 
 with col1:
