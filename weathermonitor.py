@@ -76,15 +76,18 @@ scraper = get_scraper("weather.gc.ca")
 
 # Fetch EC only if tile is collapsed, interval exceeded, and not due to toggle button press
 if scraper and not st.session_state[ec_tile_key] and not st.session_state[ec_toggle_clicked] and (now - st.session_state[ec_last_fetch_key] > REFRESH_INTERVAL):
-    def fetch_region(url):
+    def fetch_region(region):
+        url = region.get("ATOM URL")
+        if not url:
+            return []
         try:
-            return scraper(url).get("entries", [])
+            return scraper(url, region_name=region.get("Region Name"), province=region.get("Province-Territory")).get("entries", [])
         except Exception as e:
-            logging.warning(f"[EC FETCH ERROR] {url}: {e}")
+            logging.warning(f"[EC FETCH ERROR] {region.get('Region Name')}: {e}")
             return []
 
     with ThreadPoolExecutor(max_workers=200) as executor:
-        futures = [executor.submit(fetch_region, region.get("ATOM URL")) for region in ec_sources if region.get("ATOM URL")]
+        futures = [executor.submit(fetch_region, region) for region in ec_sources if region.get("ATOM URL")]
         all_entries = []
         for future in as_completed(futures):
             all_entries.extend(future.result())
@@ -151,11 +154,13 @@ with col2:
             summary = alert.get("summary", "")[:300]
             link = alert.get("link", "")
             published = alert.get("published", "")
+            region = alert.get("region", "")
+            province = alert.get("province", "")
             is_new = i < new_ec
 
             if is_new:
                 st.markdown("<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>", unsafe_allow_html=True)
-            st.markdown(f"**{title}**")
+            st.markdown(f"**{title}**  \n_Region: {region}, {province}_")
             st.markdown(summary if summary.strip() else "_No summary available._")
             if link:
                 st.markdown(f"[Read more]({link})")
