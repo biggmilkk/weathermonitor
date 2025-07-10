@@ -30,16 +30,16 @@ if "nws_last_fetch" not in st.session_state:
     st.session_state["nws_last_fetch"] = 0
 
 nws_url = "https://api.weather.gov/alerts/active"
-nws_scraper = get_scraper("api.weather.gov")
+scraper = get_scraper("api.weather.gov")
 
 should_fetch_nws = (
     not st.session_state["nws_show_alerts"] and
     (now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL)
 )
 
-if should_fetch_nws and nws_scraper:
+if should_fetch_nws and scraper:
     try:
-        fetched_data = nws_scraper(nws_url)
+        fetched_data = scraper(nws_url)
         if fetched_data:
             st.session_state["nws_data"] = fetched_data
             st.session_state["nws_last_fetch"] = now
@@ -57,59 +57,46 @@ total_nws = len(nws_alerts)
 new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
 
 # --- ENVIRONMENT CANADA ALERTS ---
-
-# Load EC sources
 ec_sources = []
 try:
     with open("environment_canada_sources.json") as f:
         ec_sources = json.load(f)
-    logging.warning(f"[EC] Loaded {len(ec_sources)} sources")
+    logging.info(f"Loaded EC Sources: {len(ec_sources)}")
 except Exception as e:
     logging.warning(f"[EC LOAD ERROR] Failed to load EC sources: {e}")
-    st.error(f"Failed to load Environment Canada sources: {e}")
 
-# Session keys
 ec_tile_key = "ec_show_alerts"
 ec_seen_key = "ec_seen_count"
 ec_data_key = "ec_data"
 ec_last_fetch_key = "ec_last_fetch"
 
-# Init session state
 for key, default in [(ec_tile_key, False), (ec_seen_key, 0), (ec_data_key, []), (ec_last_fetch_key, 0)]:
     if key not in st.session_state:
         st.session_state[key] = default
 
-# Prepare scraper
-ec_scraper = get_scraper("weather.gc.ca")
-if not ec_scraper:
-    st.error("❌ No scraper found for Environment Canada")
-    logging.warning("[EC SCRAPER ERROR] No scraper found for weather.gc.ca")
-
-# Only fetch EC alerts if collapsed and interval exceeded
-if ec_scraper and not st.session_state[ec_tile_key] and (now - st.session_state[ec_last_fetch_key] > REFRESH_INTERVAL):
+scraper = get_scraper("weather.gc.ca")
+if scraper and not st.session_state[ec_tile_key] and (now - st.session_state[ec_last_fetch_key] > REFRESH_INTERVAL):
     all_entries = []
     for region in ec_sources:
         url = region.get("ATOM URL")
         if not url:
             continue
         try:
-            data = ec_scraper(url)
+            data = scraper(url)
             all_entries.extend(data.get("entries", []))
         except Exception as e:
             logging.warning(f"[EC FETCH ERROR] {region.get('Region Name')}: {e}")
     st.session_state[ec_data_key] = all_entries
     st.session_state[ec_last_fetch_key] = now
-    logging.warning(f"[EC] Refreshed with {len(all_entries)} total alerts")
 
-# Prepare EC display
 ec_alerts = sorted(st.session_state[ec_data_key], key=lambda x: x.get("published", ""), reverse=True)
 total_ec = len(ec_alerts)
 new_ec = max(0, total_ec - st.session_state[ec_seen_key])
 
-# --- UI: SIDE-BY-SIDE TILES ---
+# --- UI LAYOUT ---
 col1, col2 = st.columns(2)
 
-# --- NWS TILE ---
+# --- UI: NWS ---
 with col1:
     st.subheader("NWS Active Alerts")
     st.markdown(f"- **{total_nws}** total alerts")
@@ -123,18 +110,14 @@ with col1:
 
     if st.session_state["nws_show_alerts"]:
         for i, alert in enumerate(nws_alerts):
-            title = str(alert.get("title", f"Alert #{i+1}")).strip()
-            summary = str(alert.get("summary", "") or "")[:300]
+            title = alert.get("title", f"Alert #{i+1}").strip()
+            summary = alert.get("summary", "")[:300]
             link = alert.get("link", "")
-            published = str(alert.get("published", ""))
+            published = alert.get("published", "")
             is_new = i < new_nws
 
             if is_new:
-                st.markdown(
-                    "<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>",
-                    unsafe_allow_html=True
-                )
-
+                st.markdown("<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>", unsafe_allow_html=True)
             st.markdown(f"**{title}**")
             st.markdown(summary if summary.strip() else "_No summary available._")
             if link:
@@ -143,7 +126,7 @@ with col1:
                 st.caption(f"Published: {published}")
             st.markdown("---")
 
-# --- ENVIRONMENT CANADA TILE ---
+# --- UI: Environment Canada ---
 with col2:
     st.subheader("Environment Canada Alerts")
     st.markdown(f"- **{total_ec}** total alerts")
@@ -157,18 +140,14 @@ with col2:
 
     if st.session_state[ec_tile_key]:
         for i, alert in enumerate(ec_alerts):
-            title = str(alert.get("title", f"Alert #{i+1}")).strip()
-            summary = str(alert.get("summary", "") or "")[:300]
+            title = alert.get("title", f"Alert #{i+1}").strip()
+            summary = alert.get("summary", "")[:300]
             link = alert.get("link", "")
-            published = str(alert.get("published", ""))
+            published = alert.get("published", "")
             is_new = i < new_ec
 
             if is_new:
-                st.markdown(
-                    "<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>",
-                    unsafe_allow_html=True
-                )
-
+                st.markdown("<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>", unsafe_allow_html=True)
             st.markdown(f"**{title}**")
             st.markdown(summary if summary.strip() else "_No summary available._")
             if link:
