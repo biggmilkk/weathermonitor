@@ -21,7 +21,7 @@ st_autorefresh(interval=60 * 1000, key="autorefresh")
 now = time.time()
 REFRESH_INTERVAL = 60
 
-# Initialize session state
+# Session state initialization
 defaults = {
     "nws_seen_count": 0,
     "ec_seen_count": 0,
@@ -35,11 +35,10 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# Read query param to track active feed
-query_params = st.experimental_get_query_params()
-active_feed = query_params.get("feed", [None])[0]
+# Read query param for active tile state
+active_feed = st.query_params.get("feed", None)
 
-# Fetch NWS alerts
+# --- NWS Fetch ---
 nws_scraper = get_scraper("api.weather.gov")
 nws_url = "https://api.weather.gov/alerts/active"
 if now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL:
@@ -60,7 +59,7 @@ nws_alerts = sorted(
 total_nws = len(nws_alerts)
 new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
 
-# Fetch EC alerts
+# --- EC Fetch ---
 ec_sources = []
 try:
     with open("environment_canada_sources.json") as f:
@@ -84,33 +83,34 @@ new_ec = max(0, total_ec - st.session_state["ec_seen_count"])
 
 # --- UI HEADER ---
 st.title("Global Weather Monitor")
-st.caption(f"🔄 Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
+st.caption(
+    f"🔄 Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
+)
 st.markdown("---")
 
-# --- TILE LAYOUT ---
 col1, col2 = st.columns(2)
 
+# --- Button: NWS ---
 with col1:
     label = f"NWS Alerts ({total_nws} total / {new_nws} new)"
-    clicked = st.button(label, key="btn_nws", use_container_width=True)
-    if clicked:
+    if st.button(label, key="btn_nws", use_container_width=True):
         if active_feed == "nws":
-            st.experimental_set_query_params()
+            st.query_params.clear()
         else:
-            st.experimental_set_query_params(feed="nws")
+            st.query_params = {"feed": "nws"}
             st.session_state["nws_seen_count"] = total_nws
 
+# --- Button: EC ---
 with col2:
     label = f"Environment Canada ({total_ec} total / {new_ec} new)"
-    clicked = st.button(label, key="btn_ec", use_container_width=True)
-    if clicked:
+    if st.button(label, key="btn_ec", use_container_width=True):
         if active_feed == "ec":
-            st.experimental_set_query_params()
+            st.query_params.clear()
         else:
-            st.experimental_set_query_params(feed="ec")
+            st.query_params = {"feed": "ec"}
             st.session_state["ec_seen_count"] = total_ec
 
-# --- FEED PANEL ---
+# --- Feed Panel ---
 if active_feed:
     st.markdown("---")
     if active_feed == "nws":
@@ -118,7 +118,10 @@ if active_feed:
         for i, alert in enumerate(nws_alerts):
             is_new = i < new_nws
             if is_new:
-                st.markdown("<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>",
+                    unsafe_allow_html=True,
+                )
             st.markdown(f"**{alert.get('title', '')}**")
             st.markdown(alert.get("summary", "")[:300] or "_No summary available._")
             if alert.get("link"):
@@ -131,7 +134,10 @@ if active_feed:
         for i, alert in enumerate(ec_alerts):
             is_new = i < new_ec
             if is_new:
-                st.markdown("<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>",
+                    unsafe_allow_html=True,
+                )
             st.markdown(f"**{alert.get('title', '')}**")
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
             st.markdown(alert.get("summary", "")[:300] or "_No summary available._")
