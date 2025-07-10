@@ -1,8 +1,8 @@
 [
   {
-  "title": "NWS Alerts (All US)",
-  "url": "https://alerts.weather.gov/cap/us.php?x=1",
-  "domain": "alerts.weather.gov"
+    "title": "NWS - Nationwide Active Alerts",
+    "url": "https://api.weather.gov/alerts/active",
+    "domain": "api.weather.gov"
   },
   {
     "title": "National Weather Service",
