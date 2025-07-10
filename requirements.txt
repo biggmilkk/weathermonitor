@@ -2,3 +2,4 @@ beautifulsoup4
 requests
 streamlit
 feedparser
+streamlit-extras==0.3.3
