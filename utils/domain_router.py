@@ -1,4 +1,4 @@
-from scrapers import weather_gov
+from scraper import weather_gov
 
 SCRAPER_MAP = {
     "www.weather.gov": weather_gov.scrape,
