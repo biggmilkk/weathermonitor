@@ -1,4 +1,4 @@
-from scrapers import nws_rss
+from scraper import nws_rss
 
 SCRAPER_MAP = {
     "alerts.weather.gov": nws_rss.scrape,
