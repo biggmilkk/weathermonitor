@@ -32,12 +32,8 @@ if "nws_last_fetch" not in st.session_state:
 nws_url = "https://api.weather.gov/alerts/active"
 scraper = get_scraper("api.weather.gov")
 
-should_fetch_nws = (
-    not st.session_state["nws_show_alerts"] and
-    (now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL)
-)
-
-if should_fetch_nws and scraper:
+# Only fetch if tile is collapsed and interval exceeded
+if not st.session_state["nws_show_alerts"] and (now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL):
     try:
         fetched_data = scraper(nws_url)
         if fetched_data:
@@ -75,6 +71,7 @@ for key, default in [(ec_tile_key, False), (ec_seen_key, 0), (ec_data_key, []), 
         st.session_state[key] = default
 
 scraper = get_scraper("weather.gc.ca")
+# Only fetch if tile is collapsed and interval exceeded
 if scraper and not st.session_state[ec_tile_key] and (now - st.session_state[ec_last_fetch_key] > REFRESH_INTERVAL):
     all_entries = []
     for region in ec_sources:
