@@ -7,9 +7,10 @@ import json
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from utils.domain_router import get_scraper
 
+# Page config
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 
-# Session state
+# Initialize session state
 if "nws_seen_count" not in st.session_state:
     st.session_state["nws_seen_count"] = 0
 if "nws_show_alerts" not in st.session_state:
@@ -20,10 +21,10 @@ try:
     with open("bookmarks.json", "r") as f:
         bookmarks = json.load(f)
 except Exception as e:
-    st.error(f"Error loading bookmarks: {e}")
+    st.error(f"Error loading bookmarks.json: {e}")
     st.stop()
 
-# Filter NWS only
+# Get NWS alerts
 nws_alerts = []
 for bm in bookmarks:
     if bm.get("domain") == "api.weather.gov":
@@ -33,42 +34,48 @@ for bm in bookmarks:
                 data = scraper(bm.get("url"))
                 if isinstance(data, dict) and "entries" in data:
                     nws_alerts.extend(data["entries"])
-            except:
+            except Exception:
                 continue
 
-# Alert counters
+# Count alerts
 total_nws = len(nws_alerts)
 new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
 
-# Grid: 3 columns (adjust to 7-10 later)
-cols = st.columns(3)
+# Layout grid
+cols = st.columns(3)  # Adjust this to 7 or 10 when more tiles are added
 
-# Tile 1: NWS
+# --- TILE: NWS Active Alerts ---
 with cols[0]:
     with st.container():
-        # Tile-style card using text formatting only
-        st.markdown("### 📡 NWS Active Alerts")
+        st.markdown("### NWS Active Alerts")
         st.markdown(f"- **{total_nws}** total alerts")
         st.markdown(f"- **{new_nws}** new since last view")
 
-        view_clicked = st.button("View Alerts", key="nws_toggle_btn")
-
-        if view_clicked:
+        if st.button("View Alerts", key="nws_toggle_btn"):
             st.session_state["nws_show_alerts"] = not st.session_state["nws_show_alerts"]
             if st.session_state["nws_show_alerts"]:
                 st.session_state["nws_seen_count"] = total_nws
 
         if st.session_state["nws_show_alerts"]:
             for i, alert in enumerate(nws_alerts):
-                title = alert.get("title", f"Alert #{i+1}").strip()
+                raw_title = alert.get("title")
+                title = str(raw_title).strip() if raw_title else f"Alert #{i+1}"
+
                 summary = alert.get("summary", "") or ""
                 summary = summary[:300] + "..." if len(summary) > 300 else summary
+
                 published = alert.get("published", "")
                 link = alert.get("link", "")
                 is_new = i >= total_nws - new_nws
-                prefix = "🆕 " if is_new else ""
 
-                st.markdown(f"**{prefix}{title}**")
+                # Visual new indicator
+                if is_new:
+                    st.markdown(
+                        "<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>",
+                        unsafe_allow_html=True
+                    )
+
+                st.markdown(f"**{title}**")
                 st.markdown(summary if summary.strip() else "_No summary available._")
                 if link:
                     st.markdown(f"[Read more]({link})")
