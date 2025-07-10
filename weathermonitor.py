@@ -4,6 +4,7 @@ import sys
 import json
 import time
 import logging
+import asyncio
 from utils.domain_router import get_scraper
 from scraper.environment_canada import scrape_async
 
@@ -71,8 +72,6 @@ ec_toggle_clicked = "ec_toggle_clicked"
 for key, default in [(ec_tile_key, False), (ec_seen_key, 0), (ec_data_key, []), (ec_last_fetch_key, 0), (ec_toggle_clicked, False)]:
     if key not in st.session_state:
         st.session_state[key] = default
-
-scraper = get_scraper("weather.gc.ca")
 
 # Fetch EC only if tile is collapsed, interval exceeded, and not due to toggle button press
 if not st.session_state[ec_tile_key] and not st.session_state[ec_toggle_clicked] and (now - st.session_state[ec_last_fetch_key] > REFRESH_INTERVAL):
