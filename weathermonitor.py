@@ -42,23 +42,19 @@ new_nws = 0
 
 nws_url = "https://api.weather.gov/alerts/active"
 scraper = get_scraper("api.weather.gov")
-if scraper:
+if callable(scraper):
     try:
         data = scraper(nws_url)
-
-        if not isinstance(data, dict):
-            st.error("[ERROR] NWS scraper returned non-dict type")
-        elif "entries" not in data:
-            st.error("[ERROR] 'entries' key missing in NWS data")
-        else:
+        if isinstance(data, dict) and "entries" in data:
             nws_alerts = data["entries"]
             total_nws = len(nws_alerts)
             new_nws = max(0, total_nws - st.session_state.get("nws_seen_count", 0))
-
+        else:
+            st.warning("[WARNING] NWS scraper returned unexpected structure or missing 'entries'")
     except Exception as e:
-        st.error(f"[ERROR] Exception in NWS scraper: {e}")
+        st.error(f"[ERROR] Failed fetching NWS data: {e}")
 else:
-    st.error("[ERROR] No scraper found for 'api.weather.gov'")
+    st.error("[ERROR] get_scraper('api.weather.gov') returned None")
 
 # --- TILE: NWS Active Alerts ---
 with cols[0]:
