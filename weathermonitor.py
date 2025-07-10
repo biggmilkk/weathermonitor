@@ -45,6 +45,7 @@ scraper = get_scraper("api.weather.gov")
 if scraper:
     try:
         data = scraper(nws_url)
+        st.write("[DEBUG] scraper returned:", data)
         if isinstance(data, dict) and "entries" in data:
             nws_alerts = data["entries"]
             total_nws = len(nws_alerts)
