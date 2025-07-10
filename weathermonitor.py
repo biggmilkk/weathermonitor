@@ -93,6 +93,7 @@ with col1:
     if st.button(label, key="btn_nws", use_container_width=True):
         if st.session_state["active_feed"] == "nws":
             st.session_state["active_feed"] = None
+            st.session_state["nws_seen_count"] = total_nws
         else:
             st.session_state["active_feed"] = "nws"
             st.session_state["nws_seen_count"] = total_nws
@@ -102,6 +103,7 @@ with col2:
     if st.button(label, key="btn_ec", use_container_width=True):
         if st.session_state["active_feed"] == "ec":
             st.session_state["active_feed"] = None
+            st.session_state["ec_seen_count"] = total_ec
         else:
             st.session_state["active_feed"] = "ec"
             st.session_state["ec_seen_count"] = total_ec
