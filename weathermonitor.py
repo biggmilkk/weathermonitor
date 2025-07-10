@@ -157,6 +157,8 @@ with col2:
                 st.caption(f"Published: {published}")
             st.markdown("---")
 
-# --- Refresh When All Tiles Are Closed ---
-if should_refresh_nws or should_refresh_ec:
+# --- Auto-Rerun Timer ---
+st_autorefresh = st.experimental_singleton(lambda: time.time())
+if time.time() - st_autorefresh() > REFRESH_INTERVAL:
+    st_autorefresh.clear()
     st.rerun()
