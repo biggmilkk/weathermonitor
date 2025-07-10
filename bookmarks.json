@@ -1,0 +1,638 @@
+[
+  {
+    "title": "National Weather Service",
+    "url": "https://www.weather.gov/",
+    "add_date": "1619660545",
+    "domain": "www.weather.gov"
+  },
+  {
+    "title": "NOAA/NWS Storm Prediction Center",
+    "url": "https://www.spc.noaa.gov/",
+    "add_date": "1619660979",
+    "domain": "www.spc.noaa.gov"
+  },
+  {
+    "title": "Weather Prediction Center (WPC) Home Page",
+    "url": "https://www.wpc.ncep.noaa.gov/index.shtml#page=ero",
+    "add_date": "1620106978",
+    "domain": "www.wpc.ncep.noaa.gov"
+  },
+  {
+    "title": "Current Watches, Warnings and Advisories for Alaska Issued by the National Weather Service",
+    "url": "https://alerts.weather.gov/cap/ak.php?x=1",
+    "add_date": "1644571367",
+    "domain": "alerts.weather.gov"
+  },
+  {
+    "title": "Public Weather Alerts for Canada - Environment Canada",
+    "url": "https://weather.gc.ca/index_e.html",
+    "add_date": "1619672023",
+    "domain": "weather.gc.ca"
+  },
+  {
+    "title": "meteoalarm",
+    "url": "https://meteoalarm.org/",
+    "add_date": "1625791247",
+    "domain": "meteoalarm.org"
+  },
+  {
+    "title": "National Warnings Summary",
+    "url": "http://www.bom.gov.au/australia/warnings/",
+    "add_date": "1712209711",
+    "domain": "www.bom.gov.au"
+  },
+  {
+    "title": "National Severe Weather Information - MetService is New Zealand\u2019s only authorised provider of Severe Weather Alerts",
+    "url": "https://www.metservice.com/warnings/home",
+    "add_date": "1621299444",
+    "domain": "www.metservice.com"
+  },
+  {
+    "title": "China Meteorological Administration-Weather Forecast-Warning Signals",
+    "url": "http://weather.cma.cn/web/alarm/map.html",
+    "add_date": "1619662177",
+    "domain": "weather.cma.cn"
+  },
+  {
+    "title": "IND | Sub-Divisionwise Warning",
+    "url": "https://mausam.imd.gov.in/imd_latest/contents/subdivisionwise-warning.php",
+    "add_date": "1619662799",
+    "domain": "mausam.imd.gov.in"
+  },
+  {
+    "title": "Taiwan",
+    "url": "https://www.cwa.gov.tw/eng/",
+    "add_date": "1619663775",
+    "domain": "www.cwa.gov.tw"
+  },
+  {
+    "title": "Japan Meteorological Agency",
+    "url": "http://www.jma.go.jp/jma/index.html",
+    "add_date": "1620026990",
+    "domain": "www.jma.go.jp"
+  },
+  {
+    "title": "Japan Meteorological Agancy\uff5cWeather Warnings/Advisories",
+    "url": "https://www.jma.go.jp/bosai/map.html#5/34.5/137/&elem=all&contents=warning&lang=en",
+    "add_date": "1621501304",
+    "domain": "www.jma.go.jp"
+  },
+  {
+    "title": "Vietnam",
+    "url": "https://nchmf.gov.vn/Kttvsite/vi-VN/1/thoi-tiet-1-15.html",
+    "add_date": "1623209303",
+    "domain": "nchmf.gov.vn"
+  },
+  {
+    "title": "Cambodia",
+    "url": "http://www.cambodiameteo.com/detailwarning?menu=3&lang=en",
+    "add_date": "1623227754",
+    "domain": "www.cambodiameteo.com"
+  },
+  {
+    "title": "Thai Meteorological Department - Announcement",
+    "url": "https://www.tmd.go.th/warning-and-events/warning-storm",
+    "add_date": "1621905658",
+    "domain": "www.tmd.go.th"
+  },
+  {
+    "title": "PHP PAGASA",
+    "url": "http://bagong.pagasa.dost.gov.ph/",
+    "add_date": "1619672095",
+    "domain": "bagong.pagasa.dost.gov.ph"
+  },
+  {
+    "title": "Indonesia",
+    "url": "http://web.meteo.bmkg.go.id/en/?view=mapsets&id=1",
+    "add_date": "1621821928",
+    "domain": "web.meteo.bmkg.go.id"
+  },
+  {
+    "title": "Korea",
+    "url": "https://www.weather.go.kr/w/index.do",
+    "add_date": "1619684449",
+    "domain": "www.weather.go.kr"
+  },
+  {
+    "title": "Notice > Warning/Forecast",
+    "url": "https://www.kma.go.kr/eng/weather/forecast/notice.jsp",
+    "add_date": "1622173175",
+    "domain": "www.kma.go.kr"
+  },
+  {
+    "title": "Impact Forecast - Korea Meteorological Administration Weather Nuri",
+    "url": "https://www.weather.go.kr/w/weather/warning/impact.do",
+    "add_date": "1628563624",
+    "domain": "www.weather.go.kr"
+  },
+  {
+    "title": "MetMalaysia: Utama",
+    "url": "https://www.met.gov.my/?lang=bm",
+    "add_date": "1622094272",
+    "domain": "www.met.gov.my"
+  },
+  {
+    "title": "Bhutan",
+    "url": "https://www.nchm.gov.bt/",
+    "add_date": "1623891452",
+    "domain": "www.nchm.gov.bt"
+  },
+  {
+    "title": "Nepal",
+    "url": "http://hydrology.gov.np/#/river_watch?_k=c3iv4t",
+    "add_date": "1623984267",
+    "domain": "hydrology.gov.np"
+  },
+  {
+    "title": "Nepal",
+    "url": "http://mfd.gov.np/content/?id=3190",
+    "add_date": "1625812495",
+    "domain": "mfd.gov.np"
+  },
+  {
+    "title": "Myanmar",
+    "url": "https://www.moezala.gov.mm/heavy-rainfall-warning%20",
+    "add_date": "1623985852",
+    "domain": "www.moezala.gov.mm"
+  },
+  {
+    "title": "Brunei Darussalam Meteorological Department | Bandar Seri Begawan | Facebook",
+    "url": "https://www.facebook.com/bruneiweather/",
+    "add_date": "1722481859",
+    "domain": "www.facebook.com"
+  },
+  {
+    "title": "Pakistan Meteorological Department",
+    "url": "https://www.pmd.gov.pk/en/",
+    "add_date": "1630483339",
+    "domain": "www.pmd.gov.pk"
+  },
+  {
+    "title": "Bangladesh Meteorological Department",
+    "url": "https://www.bmd.gov.bd/",
+    "add_date": "1713163654",
+    "domain": "www.bmd.gov.bd"
+  },
+  {
+    "title": "RSA",
+    "url": "https://www.weathersa.co.za/home/warnings",
+    "add_date": "1619682454",
+    "domain": "www.weathersa.co.za"
+  },
+  {
+    "title": "UK weather warnings - Met Office",
+    "url": "https://www.metoffice.gov.uk/weather/warnings-and-advice/uk-warnings#?tab=map&map=Warnings&zoom=5&lon=-3.50&lat=55.50&fcTime=1476766800&date=2021-04-29",
+    "add_date": "1619672128",
+    "domain": "www.metoffice.gov.uk"
+  },
+  {
+    "title": "Warnings & Advisories - Met \u00c9ireann - The Irish Meteorological Service",
+    "url": "https://www.met.ie/warnings-today.html",
+    "add_date": "1712299953",
+    "domain": "www.met.ie"
+  },
+  {
+    "title": "Central Federal District",
+    "url": "https://meteoinfo.ru/en/hdmapsmeteoalarmcfo",
+    "add_date": "1621557777",
+    "domain": "meteoinfo.ru"
+  },
+  {
+    "title": "Ukrainian Meteorological Center. Weather forecast Kyiv",
+    "url": "https://www.meteo.gov.ua/en/Meteorolohichni-poperedzhennya",
+    "add_date": "1622176755",
+    "domain": "www.meteo.gov.ua"
+  },
+  {
+    "title": "Turkey",
+    "url": "https://www.mgm.gov.tr/",
+    "add_date": "1623200982",
+    "domain": "www.mgm.gov.tr"
+  },
+  {
+    "title": "Bulgaria",
+    "url": "http://www.meteo.bg/",
+    "add_date": "1623201003",
+    "domain": "www.meteo.bg"
+  },
+  {
+    "title": "Belarus",
+    "url": "https://pogoda.by/observation/dangerous",
+    "add_date": "1635817123",
+    "domain": "pogoda.by"
+  },
+  {
+    "title": "Belarus water",
+    "url": "https://pogoda.by/observation/hydrology",
+    "add_date": "1635817149",
+    "domain": "pogoda.by"
+  },
+  {
+    "title": "Brazil",
+    "url": "http://alert-as.inmet.gov.br/cv/?lang=en",
+    "add_date": "1621561279",
+    "domain": "alert-as.inmet.gov.br"
+  },
+  {
+    "title": "Paraguay",
+    "url": "https://www.meteorologia.gov.py/avisos/",
+    "add_date": "1621561740",
+    "domain": "www.meteorologia.gov.py"
+  },
+  {
+    "title": "Uruguay",
+    "url": "https://www.inumet.gub.uy/",
+    "add_date": "1630987100",
+    "domain": "www.inumet.gub.uy"
+  },
+  {
+    "title": "Uruguay",
+    "url": "https://www.inumet.gub.uy/tiempo/info-a-la-poblacion",
+    "add_date": "1623374495",
+    "domain": "www.inumet.gub.uy"
+  },
+  {
+    "title": "SENAMHI - Peru",
+    "url": "https://www.senamhi.gob.pe/servicios/?p=aviso-24H",
+    "add_date": "1643088484",
+    "domain": "www.senamhi.gob.pe"
+  },
+  {
+    "title": "Guatemala",
+    "url": "https://www.hidromet.com.pa/es/",
+    "add_date": "1623804507",
+    "domain": "www.hidromet.com.pa"
+  },
+  {
+    "title": "Chile's Meteorological Directorate",
+    "url": "http://www.meteochile.cl/PortalDMC-web/index.xhtml",
+    "add_date": "1622686134",
+    "domain": "www.meteochile.cl"
+  },
+  {
+    "title": "Argentinia",
+    "url": "https://www.smn.gob.ar/alertas",
+    "add_date": "1623894459",
+    "domain": "www.smn.gob.ar"
+  },
+  {
+    "title": "Caribbean Meteorological Organization",
+    "url": "http://www.cmo.org.tt/links.html",
+    "add_date": "1628987474",
+    "domain": "www.cmo.org.tt"
+  },
+  {
+    "title": "barbados",
+    "url": "https://www.barbadosweather.org/",
+    "add_date": "1623908515",
+    "domain": "www.barbadosweather.org"
+  },
+  {
+    "title": "Trinidad & Tobago Meteorological Service",
+    "url": "http://www.metoffice.gov.tt/early_warning",
+    "add_date": "1628064971",
+    "domain": "www.metoffice.gov.tt"
+  },
+  {
+    "title": "Fiji Meteorological Service",
+    "url": "https://www.met.gov.fj/",
+    "add_date": "1619671948",
+    "domain": "www.met.gov.fj"
+  },
+  {
+    "title": "Cook Islands Met Service",
+    "url": "https://met.gov.ck/",
+    "add_date": "1658280181",
+    "domain": "met.gov.ck"
+  },
+  {
+    "title": "Vanuatu",
+    "url": "http://www.vmgd.gov.vu/vmgd/index.php/forecast-division/warnings/severe-weather-warning",
+    "add_date": "1640657750",
+    "domain": "www.vmgd.gov.vu"
+  },
+  {
+    "title": "New Caledonia - Home",
+    "url": "http://www.meteo.nc/",
+    "add_date": "1644371363",
+    "domain": "www.meteo.nc"
+  },
+  {
+    "title": "Solomon Islands Meteorological Services",
+    "url": "http://www.met.gov.sb/",
+    "add_date": "1644821173",
+    "domain": "www.met.gov.sb"
+  },
+  {
+    "title": "Algeria weather",
+    "url": "https://www.meteo.dz/home",
+    "add_date": "1626155411",
+    "domain": "www.meteo.dz"
+  },
+  {
+    "title": "Monaco",
+    "url": "http://www.marocmeteo.ma/",
+    "add_date": "1632190554",
+    "domain": "www.marocmeteo.ma"
+  },
+  {
+    "title": "Tunisia",
+    "url": "https://www.meteo.tn/fr/vigilance-meterologique",
+    "add_date": "1635142387",
+    "domain": "www.meteo.tn"
+  },
+  {
+    "title": "Costa Rica",
+    "url": "https://www.imn.ac.cr/web/imn/avisos-meteorologicos",
+    "add_date": "1642579897",
+    "domain": "www.imn.ac.cr"
+  },
+  {
+    "title": "Afghanistan Meteorological Department",
+    "url": "https://amd.gov.af/warnings/",
+    "add_date": "1641439928",
+    "domain": "amd.gov.af"
+  },
+  {
+    "title": "Saudi Arabia",
+    "url": "https://ncm.gov.sa/Ar/alert/Pages/default.aspx",
+    "add_date": "1627528540",
+    "domain": "ncm.gov.sa"
+  },
+  {
+    "title": "UAE",
+    "url": "https://www.ncm.ae/maps-radars/radar-merge-sat?lang=en",
+    "add_date": "1631667674",
+    "domain": "www.ncm.ae"
+  },
+  {
+    "title": "UAE Al Bahar | Marine Meteorological Services from National Center of Meteorology",
+    "url": "https://albahar.ncm.ae/en/marine-warnings",
+    "add_date": "1631669130",
+    "domain": "albahar.ncm.ae"
+  },
+  {
+    "title": "Guyana",
+    "url": "https://hydromet.gov.gy/",
+    "add_date": "1623376896",
+    "domain": "hydromet.gov.gy"
+  },
+  {
+    "title": "Madagascar",
+    "url": "http://www.meteomadagascar.mg/",
+    "add_date": "1642557473",
+    "domain": "www.meteomadagascar.mg"
+  },
+  {
+    "title": "Kuwait Meteorological Center - Weather Alerts",
+    "url": "https://www.met.gov.kw/warnings/warning.php?lang=eng",
+    "add_date": "1641195928",
+    "domain": "www.met.gov.kw"
+  },
+  {
+    "title": "Lebanon - Official Weather Services - Lebanon",
+    "url": "https://www.meteo.gov.lb/",
+    "add_date": "1643168877",
+    "domain": "www.meteo.gov.lb"
+  },
+  {
+    "title": "Jordan Meteorological Department > Home",
+    "url": "http://jometeo.gov.jo/",
+    "add_date": "1643168918",
+    "domain": "jometeo.gov.jo"
+  },
+  {
+    "title": "Warnings | Israel Meteorological Service",
+    "url": "https://ims.gov.il/en/IMSwarnings",
+    "add_date": "1623310746",
+    "domain": "ims.gov.il"
+  },
+  {
+    "title": "\u0e81\u0ebb\u0ea1\u0ead\u0eb8\u0e95\u0eb8\u0e99\u0eb4\u0e8d\u0ebb\u0ea1 \u0ec1\u0ea5\u0eb0 \u0ead\u0eb8\u0e97\u0ebb\u0e81\u0e81\u0eb0\u0eaa\u0eb2\u0e94. - Home | Facebook",
+    "url": "https://www.facebook.com/%E0%BA%81%E0%BA%BB%E0%BA%A1%E0%BA%AD%E0%BA%B8%E0%BA%95%E0%BA%B8%E0%BA%99%E0%BA%B4%E0%BA%8D%E0%BA%BB%E0%BA%A1-%E0%BB%81%E0%BA%A5%E0%BA%B0-%E0%BA%AD%E0%BA%B8%E0%BA%97%E0%BA%BB%E0%BA%81%E0%BA%81%E0%BA%B0%E0%BA%AA%E0%BA%B2%E0%BA%94-100578885505378/?hc_ref=ARRK0KoVHJLQZ5Ua0s2MuWFaNGcyHYSuHlRiC8zvyfdUbxL5bKFiffitUrlShoIufwE&fref=nf&__xts__[0]=68.ARA7IlZ3YvrC1_UI86CxE0l6loLuiRXS5-tZ3FADZZzNbJwPoZlrQlJR_ZFk-hN5k-bgTc0V4Rkc1_VZgiks-fi4RZrkOh3m5yf9Du-N0m5m6WIQzbZHBZ6ay8i-RF1P0e8IogsJhTI_R-l4pYkmgdP89CheFKU8TA43dd0XLVuDpsr6_4A8G9iooRqHSX2f_vbCf6cRkRbx28fB8ZGsHKm1tZLs3Mncs46ky84kD3JcYHXo23_m-dT1pLA2WNzDbh2PVz8DJHfuvukU9UBZvyNCsKpoyeLFU1QEFBFObSkbP7j-lNk",
+    "add_date": "1645432649",
+    "domain": "www.facebook.com"
+  },
+  {
+    "title": "Ecuador INAMHI (@inamhi) / Twitter",
+    "url": "https://twitter.com/inamhi_ec",
+    "add_date": "1647830914",
+    "domain": "twitter.com"
+  },
+  {
+    "title": "Kazakstan",
+    "url": "https://www.kazhydromet.kz/storm",
+    "add_date": "1648798958",
+    "domain": "www.kazhydromet.kz"
+  },
+  {
+    "title": "Warning map - Kazhydromet",
+    "url": "https://www.kazhydromet.kz/meteoalert",
+    "add_date": "1648799042",
+    "domain": "www.kazhydromet.kz"
+  },
+  {
+    "title": "Kyrgyzgidromet",
+    "url": "http://alert.kgm.kg/",
+    "add_date": "1651811886",
+    "domain": "alert.kgm.kg"
+  },
+  {
+    "title": "El Salvador",
+    "url": "http://www.snet.gob.sv/",
+    "add_date": "1655428726",
+    "domain": "www.snet.gob.sv"
+  },
+  {
+    "title": "Honduras",
+    "url": "http://cenaos.copeco.gob.hn/",
+    "add_date": "1655428806",
+    "domain": "cenaos.copeco.gob.hn"
+  },
+  {
+    "title": "Mongolia",
+    "url": "http://alarm.tsag-agaar.gov.mn/",
+    "add_date": "1673498811",
+    "domain": "alarm.tsag-agaar.gov.mn"
+  },
+  {
+    "title": "Mauritius Meteorological Services",
+    "url": "http://metservice.intnet.mu/",
+    "add_date": "1681287922",
+    "domain": "metservice.intnet.mu"
+  },
+  {
+    "title": "Yemen",
+    "url": "https://www.yms.gov.ye/",
+    "add_date": "1682653012",
+    "domain": "www.yms.gov.ye"
+  },
+  {
+    "title": "Sudan Meteorological Authority Sudan Meteorological Authority",
+    "url": "https://meteosudan.sd/",
+    "add_date": "1723077890",
+    "domain": "meteosudan.sd"
+  },
+  {
+    "title": "Dominican Republic",
+    "url": "https://www.facebook.com/ONAMETRD/?locale=pt_BR",
+    "add_date": "1684979028",
+    "domain": "www.facebook.com"
+  },
+  {
+    "title": "Libya",
+    "url": "http://www.lnmc.ly/demo/weather#RainingNews",
+    "add_date": "1695770725",
+    "domain": "www.lnmc.ly"
+  },
+  {
+    "title": "(20) \u0627\u0644\u0623\u0631\u0635\u0627\u062f \u0627\u0644\u0639\u0645\u0627\u0646\u064a\u0629 (@OmanMeteorology) / X",
+    "url": "https://twitter.com/OmanMeteorology",
+    "add_date": "1709685615",
+    "domain": "twitter.com"
+  },
+  {
+    "title": "Severe Weather Information Centre 3.0",
+    "url": "https://severeweather.wmo.int/",
+    "add_date": "1712272368",
+    "domain": "severeweather.wmo.int"
+  },
+  {
+    "title": "FloodList \u2013 Floods and flooding news from around the world",
+    "url": "https://floodlist.com/",
+    "add_date": "1641434386",
+    "domain": "floodlist.com"
+  },
+  {
+    "title": "InciWeb the Incident Information System",
+    "url": "https://inciweb-stg.fs2c.usda.gov/",
+    "add_date": "1683098993",
+    "domain": "inciweb-stg.fs2c.usda.gov"
+  },
+  {
+    "title": "Joint Typhoon Warning Center (JTWC)",
+    "url": "https://www.metoc.navy.mil/jtwc/jtwc.html",
+    "add_date": "1619660270",
+    "domain": "www.metoc.navy.mil"
+  },
+  {
+    "title": "National Hurricane Center",
+    "url": "https://www.nhc.noaa.gov/?cpac",
+    "add_date": "1619660380",
+    "domain": "www.nhc.noaa.gov"
+  },
+  {
+    "title": "Lesotho Meteorological Services | Maseru | Facebook",
+    "url": "https://www.facebook.com/lesothometeorologicalservices/",
+    "add_date": "1726793668",
+    "domain": "www.facebook.com"
+  },
+  {
+    "title": "Samoa",
+    "url": "http://www.samet.gov.ws/index.php/forecasting-services/severe-weather-information",
+    "add_date": "1736300677",
+    "domain": "www.samet.gov.ws"
+  },
+  {
+    "title": "InfoBencanaJKM - Jabatan Kebajikan Masyarakat",
+    "url": "https://infobencanajkmv2.jkm.gov.my/landing/index.php",
+    "add_date": "1736733036",
+    "domain": "infobencanajkmv2.jkm.gov.my"
+  },
+  {
+    "title": "Sri Lanka",
+    "url": "https://meteo.gov.lk/index.php?lang=en",
+    "add_date": "1737332872",
+    "domain": "meteo.gov.lk"
+  },
+  {
+    "title": "Senamhi",
+    "url": "https://senamhi.gob.bo/index.php/inicio",
+    "add_date": "1738891766",
+    "domain": "senamhi.gob.bo"
+  },
+  {
+    "title": "Mongolia 2",
+    "url": "https://weather.gov.mn/",
+    "add_date": "1742865113",
+    "domain": "weather.gov.mn"
+  },
+  {
+    "title": "Ethiopia",
+    "url": "https://www.ethiomet.gov.et/weather-warnings/",
+    "add_date": "1744675477",
+    "domain": "www.ethiomet.gov.et"
+  },
+  {
+    "title": "Guinea-Bissau",
+    "url": "https://meteoguinebissau.gw/alertas/",
+    "add_date": "1745364284",
+    "domain": "meteoguinebissau.gw"
+  },
+  {
+    "title": "PAGASA Heat",
+    "url": "https://www.pagasa.dost.gov.ph/weather/heat-index",
+    "add_date": "1745364615",
+    "domain": "www.pagasa.dost.gov.ph"
+  },
+  {
+    "title": "WA Warnings & Incidents",
+    "url": "https://www.emergency.wa.gov.au/#",
+    "add_date": "1638947613",
+    "domain": "www.emergency.wa.gov.au"
+  },
+  {
+    "title": "NSW State Emergency Service",
+    "url": "https://www.ses.nsw.gov.au/",
+    "add_date": "1638947640",
+    "domain": "www.ses.nsw.gov.au"
+  },
+  {
+    "title": "Volcano news: reports and updates on volcanic activity woldwide / 1-8 Dec, 2021 / VolcanoDiscovery",
+    "url": "https://www.volcanodiscovery.com/volcano/news.html",
+    "add_date": "1638947685",
+    "domain": "www.volcanodiscovery.com"
+  },
+  {
+    "title": "wildfire evacuation - Google Search",
+    "url": "https://www.google.com/search?q=wildfire+evacuation&biw=1707&bih=802&tbs=sbd%3A1&tbm=nws&ei=kFuwYZ_PNuKg4t4P7p-E6As&oq=wildfire+evacuation&gs_l=psy-ab.3..0i512k1l9j0i7i30k1.4304.5499.0.5579.9.9.0.0.0.0.110.640.8j1.9.0....0...1c.1.64.psy-ab..0.9.635...0i433i131i67k1j0i67k1j0i10k1j0i13k1.0.jE6FYHaREDQ",
+    "add_date": "1638947743",
+    "domain": "www.google.com"
+  },
+  {
+    "title": "bushfire evacuation - Google Search",
+    "url": "https://www.google.com/search?q=bushfire+evacuation&biw=1707&bih=802&tbs=sbd%3A1&tbm=nws&ei=l1uwYemzEN7Zz7sP3Imy2A4&oq=bushfire+evacuation&gs_l=psy-ab.3..0i7i30k1l5j0i512k1l5.12605.13728.0.15720.9.9.0.0.0.0.81.523.9.9.0....0...1c.1.64.psy-ab..0.9.520...0i13k1.0.1-6HFg-LOJ0",
+    "add_date": "1638947755",
+    "domain": "www.google.com"
+  },
+  {
+    "title": "flood - Google Search",
+    "url": "https://www.google.com/search?q=flood&biw=1707&bih=802&tbs=sbd%3A1&tbm=nws&ei=p1uwYevBNIDYz7sPkpuhmA0&oq=flood&gs_l=psy-ab.3..0i433i67k1l2j0i67k1j0i512k1l4j0i433k1j0i512k1l2.8272.8840.0.9091.5.5.0.0.0.0.173.400.4j1.5.0....0...1c.1.64.psy-ab..0.5.399...0i273k1j0i433i131i67k1j0i512i433k1j0i512i433i131k1j0i433i131k1.0.em0JdPZdKnA",
+    "add_date": "1638947769",
+    "domain": "www.google.com"
+  },
+  {
+    "title": "weather evacuation - Google Search",
+    "url": "https://www.google.com/search?q=weather+evacuation&biw=1707&bih=802&tbs=sbd%3A1&tbm=nws&ei=vluwYe7pNZ3A3LUP8o6fqAs&oq=weather+evacuation&gs_l=psy-ab.3..0i512k1l2j0i7i30k1l2j0i30k1j0i7i5i30k1j0i5i30k1l4.14473.15241.0.15458.8.8.0.0.0.0.145.598.7j1.8.0....0...1c.1.64.psy-ab..1.7.531...0i433i131i67k1j0i67k1j0i10k1j0i13k1j0i7i10i30k1j0i8i13i30k1.0.LSwrNnLQCk8",
+    "add_date": "1638947799",
+    "domain": "www.google.com"
+  },
+  {
+    "title": "VicEmergency",
+    "url": "https://emergency.vic.gov.au/respond/",
+    "add_date": "1640938199",
+    "domain": "emergency.vic.gov.au"
+  },
+  {
+    "title": "Badan Nasional Penanggulangan Bencana",
+    "url": "https://www.bnpb.go.id/",
+    "add_date": "1748318008",
+    "domain": "www.bnpb.go.id"
+  },
+  {
+    "title": "Hydrometeorological Service of the Kyrgyz Republic under the Ministry of Emergency Situations",
+    "url": "https://meteo.kg/",
+    "add_date": "1750914260",
+    "domain": "meteo.kg"
+  }
+]
