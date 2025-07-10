@@ -66,14 +66,16 @@ ec_tile_key = "ec_show_alerts"
 ec_seen_key = "ec_seen_count"
 ec_data_key = "ec_data"
 ec_last_fetch_key = "ec_last_fetch"
+ec_toggle_clicked = "ec_toggle_clicked"
 
-for key, default in [(ec_tile_key, False), (ec_seen_key, 0), (ec_data_key, []), (ec_last_fetch_key, 0)]:
+for key, default in [(ec_tile_key, False), (ec_seen_key, 0), (ec_data_key, []), (ec_last_fetch_key, 0), (ec_toggle_clicked, False)]:
     if key not in st.session_state:
         st.session_state[key] = default
 
 scraper = get_scraper("weather.gc.ca")
-# Only fetch if tile is collapsed and interval exceeded
-if scraper and not st.session_state[ec_tile_key] and (now - st.session_state[ec_last_fetch_key] > REFRESH_INTERVAL):
+
+# Fetch EC only if tile is collapsed, interval exceeded, and not due to toggle button press
+if scraper and not st.session_state[ec_tile_key] and not st.session_state[ec_toggle_clicked] and (now - st.session_state[ec_last_fetch_key] > REFRESH_INTERVAL):
     def fetch_region(url):
         try:
             return scraper(url).get("entries", [])
@@ -81,7 +83,7 @@ if scraper and not st.session_state[ec_tile_key] and (now - st.session_state[ec_
             logging.warning(f"[EC FETCH ERROR] {url}: {e}")
             return []
 
-    with ThreadPoolExecutor(max_workers=50) as executor:
+    with ThreadPoolExecutor(max_workers=200) as executor:
         futures = [executor.submit(fetch_region, region.get("ATOM URL")) for region in ec_sources if region.get("ATOM URL")]
         all_entries = []
         for future in as_completed(futures):
@@ -89,6 +91,9 @@ if scraper and not st.session_state[ec_tile_key] and (now - st.session_state[ec_
 
     st.session_state[ec_data_key] = all_entries
     st.session_state[ec_last_fetch_key] = now
+
+# Reset toggle interaction flag for next run
+st.session_state[ec_toggle_clicked] = False
 
 ec_alerts = sorted(st.session_state[ec_data_key], key=lambda x: x.get("published", ""), reverse=True)
 total_ec = len(ec_alerts)
@@ -135,6 +140,7 @@ with col2:
     st.caption(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state[ec_last_fetch_key]))}")
 
     if st.button("View Alerts", key="ec_toggle_btn"):
+        st.session_state[ec_toggle_clicked] = True
         st.session_state[ec_tile_key] = not st.session_state[ec_tile_key]
         if st.session_state[ec_tile_key]:
             st.session_state[ec_seen_key] = total_ec
