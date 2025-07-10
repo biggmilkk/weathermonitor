@@ -100,7 +100,7 @@ try:
         ec_sources = json.load(f)
 except Exception as e:
     logging.warning(f"Failed to load EC sources: {e}")
-st.write("EC Sources loaded:", len(ec_sources))
+st.write("✅ Loaded EC Sources:", len(ec_sources))
 
 # Session keys
 ec_tile_key = "ec_show_alerts"
@@ -128,12 +128,13 @@ if not st.session_state[ec_tile_key] and (now - st.session_state[ec_last_fetch_k
             logging.warning(f"[EC FETCH ERROR] {region.get('Region Name')}: {e}")
     st.session_state[ec_data_key] = all_entries
     st.session_state[ec_last_fetch_key] = now
+    st.write("✅ Fetched EC Alerts:", len(st.session_state[ec_data_key]))
 
 # Prepare EC display
 ec_alerts = sorted(st.session_state[ec_data_key], key=lambda x: x.get("published", ""), reverse=True)
 total_ec = len(ec_alerts)
 new_ec = max(0, total_ec - st.session_state[ec_seen_key])
-st.write("EC Alerts fetched:", len(ec_alerts))
+st.write("✅ Preparing EC tile with", total_ec, "alerts")
 
 # --- UI: Environment Canada ---
 with st.container():
