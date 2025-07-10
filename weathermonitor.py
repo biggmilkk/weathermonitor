@@ -5,6 +5,7 @@ import json
 import time
 import logging
 from utils.domain_router import get_scraper
+from streamlit_autorefresh import st_autorefresh
 
 # Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -14,6 +15,9 @@ st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 
 # Logging
 logging.basicConfig(level=logging.WARNING)
+
+# Refresh the app every 60 seconds (120000 ms = 60s)
+st_autorefresh(interval=60000, key="nws_autorefresh")
 
 # Session state
 if "nws_seen_count" not in st.session_state:
@@ -25,7 +29,7 @@ if "nws_data" not in st.session_state:
 if "nws_last_fetch" not in st.session_state:
     st.session_state["nws_last_fetch"] = 0
 
-# --- NWS ALERTS FETCH (auto-refresh every 60s) ---
+# --- NWS ALERTS FETCH (every 60s) ---
 nws_url = "https://api.weather.gov/alerts/active"
 scraper = get_scraper("api.weather.gov")
 now = time.time()
@@ -42,7 +46,6 @@ if now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL:
                 "source": nws_url
             }
     st.session_state["nws_last_fetch"] = now
-    st.rerun()
 
 nws_data = st.session_state.get("nws_data", {})
 nws_alerts = nws_data.get("entries", [])
@@ -56,7 +59,7 @@ with st.container():
     st.subheader("NWS Active Alerts")
     st.markdown(f"- **{total_nws}** total alerts")
     st.markdown(f"- **{new_nws}** new since last view")
-    st.caption(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.session_state['nws_last_fetch']))}")
+    st.caption(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.session_state['nws_last_fetch']))} UTC")
 
     if st.button("View Alerts", key="nws_toggle_btn"):
         st.session_state["nws_show_alerts"] = not st.session_state["nws_show_alerts"]
