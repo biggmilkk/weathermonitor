@@ -2,17 +2,13 @@ import streamlit as st
 import os
 import sys
 import json
-import logging
 from utils.domain_router import get_scraper
-
-# Logging setup
-logging.basicConfig(level=logging.DEBUG)
 
 # Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Page config
-st.set_page_config(page_title="NWS Weather Monitor", layout="wide")
+st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 
 # Initialize session state
 if "nws_seen_count" not in st.session_state:
@@ -21,7 +17,7 @@ if "nws_show_alerts" not in st.session_state:
     st.session_state["nws_show_alerts"] = False
 
 # Layout grid
-cols = st.columns(1)
+cols = st.columns(3)
 
 # --- NWS ALERTS FETCH ---
 nws_alerts = []
@@ -30,29 +26,22 @@ new_nws = 0
 
 nws_url = "https://api.weather.gov/alerts/active"
 scraper = get_scraper("api.weather.gov")
-
-if not scraper:
-    st.error("[ERROR] No scraper registered for 'api.weather.gov'")
-else:
+if scraper:
     try:
         data = scraper(nws_url)
-
-        st.subheader("📦 NWS Raw Scraper Output")
-        st.json(data)
-
         if isinstance(data, dict) and "entries" in data:
             nws_alerts = data["entries"]
             total_nws = len(nws_alerts)
             new_nws = max(0, total_nws - st.session_state.get("nws_seen_count", 0))
-        else:
-            st.warning("[WARNING] 'entries' key missing or data is not a dict")
     except Exception as e:
-        st.error(f"[ERROR] Failed fetching NWS data: {e}")
+        st.error(f"Error fetching NWS data: {e}")
+else:
+    st.error("No scraper found for National Weather Service.")
 
 # --- TILE: NWS Active Alerts ---
 with cols[0]:
     with st.container():
-        st.markdown("### 🚨 NWS Active Alerts")
+        st.markdown("### National Weather Service - Active Alerts")
         st.markdown(f"- **{total_nws}** total alerts")
         st.markdown(f"- **{new_nws}** new since last view")
 
@@ -71,7 +60,7 @@ with cols[0]:
 
                 if is_new:
                     st.markdown(
-                        "<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>",
+                        "<div style='height: 3px; background-color: #cc0000; margin: 10px 0; border-radius: 2px;'></div>",
                         unsafe_allow_html=True
                     )
 
