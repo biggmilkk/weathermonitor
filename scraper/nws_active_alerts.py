@@ -1,7 +1,6 @@
 import requests
 import logging
 
-# ✅ Only keep alerts that match these event types
 ALLOWED_EVENTS = {
     "Severe Thunderstorm Warning",
     "Evacuation Immediate",
@@ -23,7 +22,11 @@ def scrape(url="https://api.weather.gov/alerts/active"):
     try:
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
+        if not response.content:
+            raise ValueError("Empty response body from NWS")
         feed = response.json()
+        if not isinstance(feed, dict):
+            raise ValueError("Invalid JSON structure from NWS")
         logging.warning(f"[NWS DEBUG] Successfully fetched JSON with {len(feed.get('features', []))} features")
     except Exception as e:
         logging.warning(f"[NWS SCRAPER ERROR] Fetch failed: {e}")
@@ -43,7 +46,7 @@ def scrape(url="https://api.weather.gov/alerts/active"):
 
             event_type = props.get("event", "")
             if event_type not in ALLOWED_EVENTS:
-                continue  # Skip anything not explicitly allowed
+                continue
 
             entries.append({
                 "title": props.get("headline", event_type or "No Title"),
@@ -51,7 +54,6 @@ def scrape(url="https://api.weather.gov/alerts/active"):
                 "link": props.get("web", ""),
                 "published": props.get("effective", "")
             })
-
     except Exception as parse_err:
         logging.warning(f"[NWS SCRAPER ERROR] Parsing failed: {parse_err}")
         return {
