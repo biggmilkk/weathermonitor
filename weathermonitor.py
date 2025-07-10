@@ -81,7 +81,7 @@ if scraper and not st.session_state[ec_tile_key] and (now - st.session_state[ec_
             logging.warning(f"[EC FETCH ERROR] {url}: {e}")
             return []
 
-    with ThreadPoolExecutor(max_workers=100) as executor:
+    with ThreadPoolExecutor(max_workers=50) as executor:
         futures = [executor.submit(fetch_region, region.get("ATOM URL")) for region in ec_sources if region.get("ATOM URL")]
         all_entries = []
         for future in as_completed(futures):
