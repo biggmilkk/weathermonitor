@@ -1,32 +1,52 @@
-import feedparser
+import aiohttp
+import asyncio
+import xml.etree.ElementTree as ET
+import logging
 
-def is_red_warning(title: str) -> bool:
-    title = title.strip().upper()
-    return (
-        "WARNING" in title and
-        not title.startswith("NO ALERTS") and
-        "WATCH" not in title
-    ) or "SEVERE THUNDERSTORM WATCH" in title
+async def fetch_and_parse(session, region):
+    url = region.get("ATOM URL")
+    if not url:
+        return []
 
-def scrape(url, region_name=None, province=None):
-    feed = feedparser.parse(url)
-    entries = []
+    try:
+        async with session.get(url, timeout=10) as resp:
+            text = await resp.text()
+            root = ET.fromstring(text)
+            entries = []
 
-    for entry in feed.entries:
-        raw_title = entry.get("title", "")
-        if not is_red_warning(raw_title):
-            continue
+            for entry in root.findall("{http://www.w3.org/2005/Atom}entry"):
+                title_elem = entry.find("{http://www.w3.org/2005/Atom}title")
+                summary_elem = entry.find("{http://www.w3.org/2005/Atom}summary")
+                link_elem = entry.find("{http://www.w3.org/2005/Atom}link")
+                published_elem = entry.find("{http://www.w3.org/2005/Atom}published")
 
-        entries.append({
-            "title": raw_title,
-            "summary": entry.get("summary", "")[:500],
-            "link": entry.get("link", ""),
-            "published": entry.get("published", ""),
-            "region": region_name or "",
-            "province": province or ""
-        })
+                title = title_elem.text if title_elem is not None else ""
+                if not title or title.strip().upper().startswith("NO ALERT"):
+                    continue
 
-    return {
-        "entries": entries,
-        "source": url
-    }
+                entries.append({
+                    "title": title,
+                    "summary": summary_elem.text[:500] if summary_elem is not None else "",
+                    "link": link_elem.attrib.get("href", "") if link_elem is not None else "",
+                    "published": published_elem.text if published_elem is not None else "",
+                    "region": region.get("Region Name", ""),
+                    "province": region.get("Province-Territory", "")
+                })
+
+            return entries
+
+    except Exception as e:
+        logging.warning(f"[EC FETCH ERROR] {region.get('Region Name')}: {e}")
+        return []
+
+async def scrape_async(sources):
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_and_parse(session, region) for region in sources if region.get("ATOM URL")]
+        results = await asyncio.gather(*tasks)
+        all_entries = []
+        for result in results:
+            all_entries.extend(result)
+        return {
+            "entries": all_entries,
+            "source": "Environment Canada"
+        }
