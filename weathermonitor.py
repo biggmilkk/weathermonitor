@@ -4,6 +4,7 @@ import sys
 import json
 import time
 import logging
+from datetime import datetime
 from utils.domain_router import get_scraper
 
 # Extend import path
@@ -15,61 +16,65 @@ st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 # Logging
 logging.basicConfig(level=logging.WARNING)
 
-# Constants
-REFRESH_INTERVAL = 60  # seconds
-
 # Session state defaults
-defaults = {
-    "nws_seen_count": 0,
-    "nws_show_alerts": False,
-    "nws_data": None,
-    "nws_last_fetch": 0,
-    "ec_seen_count": 0,
-    "ec_show_alerts": False,
-    "ec_data": None,
-    "ec_last_fetch": 0
-}
-for key, value in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
+if "nws_seen_count" not in st.session_state:
+    st.session_state["nws_seen_count"] = 0
+if "nws_show_alerts" not in st.session_state:
+    st.session_state["nws_show_alerts"] = False
+if "nws_data" not in st.session_state:
+    st.session_state["nws_data"] = None
+if "nws_last_fetch" not in st.session_state:
+    st.session_state["nws_last_fetch"] = 0
 
-# Determine if any tile is open (used to pause refresh)
-any_tile_open = st.session_state["nws_show_alerts"] or st.session_state["ec_show_alerts"]
-
-# Current time
+# Fetch interval
+REFRESH_INTERVAL = 60  # seconds
 now = time.time()
 
-# --- NWS FETCH ---
-nws_url = "https://api.weather.gov/alerts/active"
-nws_scraper = get_scraper("api.weather.gov")
+# Only fetch if tile is collapsed AND refresh interval has passed
+should_fetch_nws = (
+    not st.session_state["nws_show_alerts"] and
+    (now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL)
+)
 
-if not any_tile_open and now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL:
-    if nws_scraper:
-        try:
-            st.session_state["nws_data"] = nws_scraper(nws_url)
-        except Exception as e:
-            st.session_state["nws_data"] = {
-                "entries": [],
-                "error": str(e),
-                "source": nws_url
-            }
+# Fetch NWS alerts if needed
+nws_url = "https://api.weather.gov/alerts/active"
+scraper = get_scraper("api.weather.gov")
+
+if should_fetch_nws and scraper:
+    try:
+        st.session_state["nws_data"] = scraper(nws_url)
+    except Exception as e:
+        st.session_state["nws_data"] = {
+            "entries": [],
+            "error": str(e),
+            "source": nws_url
+        }
     st.session_state["nws_last_fetch"] = now
 
+# Parse & sort alerts
+def parse_time_safe(t):
+    try:
+        return datetime.fromisoformat(t.replace("Z", "+00:00"))
+    except Exception:
+        return datetime.min  # fallback
+
 nws_data = st.session_state.get("nws_data", {})
-nws_alerts = nws_data.get("entries", [])
+nws_alerts = sorted(
+    nws_data.get("entries", []),
+    key=lambda x: parse_time_safe(x.get("published", "")),
+    reverse=True
+)
 total_nws = len(nws_alerts)
 new_nws = max(0, total_nws - st.session_state.get("nws_seen_count", 0))
 
 # --- UI ---
 st.title("Global Weather Monitor")
-cols = st.columns(2)
 
-# --- TILE: NWS ---
-with cols[0]:
+with st.container():
     st.subheader("NWS Active Alerts")
     st.markdown(f"- **{total_nws}** total alerts")
     st.markdown(f"- **{new_nws}** new since last view")
-    st.caption(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['nws_last_fetch']))}")
+    st.caption(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(st.session_state['nws_last_fetch']))} UTC")
 
     if st.button("View Alerts", key="nws_toggle_btn"):
         st.session_state["nws_show_alerts"] = not st.session_state["nws_show_alerts"]
@@ -82,10 +87,13 @@ with cols[0]:
             summary = (alert.get("summary", "") or "")[:300]
             link = alert.get("link", "")
             published = alert.get("published", "")
-            is_new = i >= total_nws - new_nws
+            is_new = i < new_nws  # now that list is sorted, latest alerts are at top
 
             if is_new:
-                st.markdown("<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>",
+                    unsafe_allow_html=True
+                )
 
             st.markdown(f"**{title}**")
             st.markdown(summary if summary.strip() else "_No summary available._")
@@ -94,9 +102,3 @@ with cols[0]:
             if published:
                 st.caption(f"Published: {published}")
             st.markdown("---")
-
-# --- TILE: Environment Canada (Coming Soon) ---
-with cols[1]:
-    st.subheader("Environment Canada Alerts")
-    st.markdown("- No data yet")
-    st.caption("Coming soon...")
