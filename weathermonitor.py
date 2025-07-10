@@ -160,7 +160,8 @@ with col2:
 
             if is_new:
                 st.markdown("<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>", unsafe_allow_html=True)
-            st.markdown(f"**{title}**  \n_Region: {region}, {province}_")
+            st.markdown(f"**{title}**")
+            st.caption(f"Region: {region}, {province}")
             st.markdown(summary if summary.strip() else "_No summary available._")
             if link:
                 st.markdown(f"[Read more]({link})")
