@@ -20,9 +20,9 @@ logging.basicConfig(level=logging.WARNING)
 
 # --- Auto-Refresh Only When All Tiles Are Collapsed ---
 if not st.session_state.get("nws_show_alerts", False) and not st.session_state.get("ec_show_alerts", False):
-    st_autorefresh(interval=60 * 1000, key="global_autorefresh")
+    st_autorefresh(interval=60, key="global_autorefresh")
 
-# Shared timestamp (must be after autorefresh)
+# Shared timestamp
 now = time.time()
 REFRESH_INTERVAL = 60  # seconds
 
