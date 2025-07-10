@@ -1,14 +1,14 @@
 [
   {
+  "title": "NWS Alerts (All US)",
+  "url": "https://alerts.weather.gov/cap/us.php?x=1",
+  "domain": "alerts.weather.gov"
+  },
+  {
     "title": "National Weather Service",
     "url": "https://www.weather.gov/",
     "add_date": "1619660545",
     "domain": "www.weather.gov"
-  },
-  {
-  "title": "NWS Alerts RSS",
-  "url": "https://alerts.weather.gov/cap/us.php?x=1",
-  "domain": "alerts.weather.gov"
   },
   {
     "title": "NOAA/NWS Storm Prediction Center",
