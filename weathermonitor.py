@@ -3,7 +3,7 @@ import os
 import sys
 import json
 from utils.domain_router import get_scraper
-from streamlit_extras.st_autorefresh import st_autorefresh
+from streamlit_extras.autorefresh import st_autorefresh
 
 # Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -11,8 +11,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Page config
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 
-# Auto-refresh every 60 seconds (60000 ms)
-st_autorefresh(interval=60000, key="refresh_nws")
+# Automatically refresh the app every 60 seconds
+st_autorefresh(interval=60000, limit=None, key="nws_auto_refresh")
 
 # Initialize session state
 if "nws_seen_count" not in st.session_state:
