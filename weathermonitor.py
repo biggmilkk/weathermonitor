@@ -5,15 +5,16 @@ import json
 
 # Extend path to enable clean imports from subfolders
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 from utils.domain_router import get_scraper
 
 # Page config
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 
-# Session state: track "seen" NWS alerts
+# Session state: track "seen" + UI toggle per feed
 if "nws_seen_count" not in st.session_state:
     st.session_state["nws_seen_count"] = 0
+if "nws_show_alerts" not in st.session_state:
+    st.session_state["nws_show_alerts"] = False
 
 # Header
 st.markdown("<h2 style='text-align: center;'>Global Weather Dashboard</h2>", unsafe_allow_html=True)
@@ -41,113 +42,78 @@ filtered = [
     if query.lower() in bm["title"].lower() or query.lower() in bm["domain"].lower()
 ]
 
-# Collect NWS alerts separately
+# Collect NWS alerts
 nws_alerts = []
-other_feeds = []
-
 for bm in filtered:
     domain = bm.get("domain", "")
     url = bm.get("url")
-    title = bm.get("title", "Untitled")
+    if domain == "api.weather.gov":
+        scraper = get_scraper(domain)
+        if scraper:
+            try:
+                data = scraper(url)
+                if isinstance(data, dict) and "entries" in data:
+                    nws_alerts.extend(data["entries"])
+            except:
+                continue
 
-    scraper = get_scraper(domain)
-    if not scraper:
-        other_feeds.append((bm, None, f"No scraper for domain: {domain}"))
-        continue
+# Count new alerts
+total_nws = len(nws_alerts)
+new_nws = total_nws - st.session_state["nws_seen_count"]
+if new_nws < 0:
+    new_nws = 0
 
-    try:
-        data = scraper(url)
-        if domain == "api.weather.gov" and isinstance(data, dict) and "entries" in data:
-            nws_alerts.extend(data["entries"])
-        else:
-            other_feeds.append((bm, data, None))
-    except Exception as e:
-        other_feeds.append((bm, None, str(e)))
+# Card UI for NWS
+with st.container():
+    st.markdown("""
+    <style>
+    .card {
+        background-color: #f8f9fa;
+        border: 1px solid #ddd;
+        padding: 1rem;
+        border-radius: 10px;
+        margin-bottom: 1.5rem;
+    }
+    .card-header {
+        font-size: 1.2rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-# Display NWS alerts in a styled tile
-if nws_alerts:
-    new_alerts_count = len(nws_alerts) - st.session_state["nws_seen_count"]
-    if new_alerts_count < 0:
-        new_alerts_count = 0
-
-    # Tile header string
-    nws_header = f"📡 NWS Active Alerts ({len(nws_alerts)} total"
-    if new_alerts_count > 0:
-        nws_header += f", {new_alerts_count} new"
-    nws_header += ")"
-
-    # Tile-style container
-    with st.container():
-        st.markdown(f"""
-            <div style='background-color: #f1f3f6; padding: 1rem; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 1rem;'>
-                <h4 style='margin: 0 0 0.5rem 0;'>{nws_header}</h4>
+    st.markdown(f"""
+        <div class="card">
+            <div class="card-header">📡 NWS Active Alerts</div>
+            <p><strong>{total_nws}</strong> total alerts</p>
+            <p><strong>{new_nws}</strong> new since last viewed</p>
         """, unsafe_allow_html=True)
 
-        # Expander inside tile
-        with st.expander("View Alerts", expanded=False):
-            # Update seen count if opened
-            st.session_state["nws_seen_count"] = len(nws_alerts)
+    if st.button("View Alerts", key="nws_toggle_btn"):
+        # Toggle visibility and reset "new" count
+        st.session_state["nws_show_alerts"] = not st.session_state["nws_show_alerts"]
+        if st.session_state["nws_show_alerts"]:
+            st.session_state["nws_seen_count"] = total_nws
 
-            for i, entry in enumerate(nws_alerts):
-                raw_title = entry.get("title", "")
-                title = str(raw_title).strip() or f"⚠️ Alert #{i + 1}"
-                summary = str(entry.get("summary", "") or "")
-                if len(summary) > 500:
-                    summary = summary[:500] + "..."
-
-                published = str(entry.get("published", "") or "")
-                link = entry.get("link", "").strip()
-
-                is_new = i >= len(nws_alerts) - new_alerts_count
-                prefix = "🆕 " if is_new else ""
-
-                try:
-                    with st.expander(label=f"{prefix}{title}"):
-                        st.markdown(summary if summary.strip() else "_No description available._")
-                        if link:
-                            st.markdown(f"[View full alert]({link})")
-                        if published:
-                            st.caption(f"Published: {published}")
-                except Exception as e:
-                    st.error(f"⚠️ Failed to display alert: {e}")
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-# Display other feeds normally
-for bm, data, error in other_feeds:
-    domain = bm.get("domain")
-    title = bm.get("title")
-    url = bm.get("url")
-
-    if error:
-        st.warning(f"{title}: {error}")
-        continue
-
-    if isinstance(data, dict) and "entries" in data:
-        st.markdown(f"### {data.get('feed_title', title)}")
-        for i, entry in enumerate(data.get("entries", [])):
+    if st.session_state["nws_show_alerts"]:
+        for i, entry in enumerate(nws_alerts):
             raw_title = entry.get("title", "")
-            item_title = str(raw_title).strip() or f"⚠️ Alert #{i + 1}"
-
+            title = str(raw_title).strip() or f"⚠️ Alert #{i + 1}"
             summary = str(entry.get("summary", "") or "")
             if len(summary) > 500:
                 summary = summary[:500] + "..."
-
             published = str(entry.get("published", "") or "")
             link = entry.get("link", "").strip()
+            is_new = i >= total_nws - new_nws
+            prefix = "🆕 " if is_new else ""
 
-            try:
-                with st.expander(label=item_title):
-                    st.markdown(summary if summary.strip() else "_No description available._")
-                    if link:
-                        st.markdown(f"[View full alert]({link})")
-                    if published:
-                        st.caption(f"Published: {published}")
-            except Exception as e:
-                st.error(f"⚠️ Failed to display alert: {e}")
-    else:
-        st.markdown(f"### {data.get('location', title)}")
-        st.markdown(f"**Temperature:** {data.get('temperature', 'N/A')}")
-        st.markdown(f"**Condition:** {data.get('condition', 'N/A')}")
-        st.markdown(f"[View source]({data.get('source', url)})")
-        st.markdown("---")
+            st.markdown(f"**{prefix}{title}**")
+            if summary.strip():
+                st.markdown(summary)
+            if link:
+                st.markdown(f"[Read more]({link})")
+            if published:
+                st.caption(f"Published: {published}")
+            st.markdown("---")
+
+    st.markdown("</div>", unsafe_allow_html=True)
