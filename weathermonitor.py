@@ -51,12 +51,13 @@ for bm in bookmarks:
                 data = scraper(bm.get("url"))
                 if isinstance(data, dict) and "entries" in data:
                     nws_alerts.extend(data["entries"])
-            except Exception:
-                continue
+                    st.write(f"[DEBUG] Added {len(data['entries'])} entries from {bm['url']}")
+            except Exception as e:
+                st.error(f"[ERROR] Failed fetching NWS data: {e}")
 
 # Count alerts
 total_nws = len(nws_alerts)
-new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
+st.write(f"[DEBUG] total_nws = {total_nws}")
 
 # --- TILE: NWS Active Alerts ---
 with cols[0]:
