@@ -7,7 +7,7 @@ import logging
 import asyncio
 from utils.domain_router import get_scraper
 from scraper.environment_canada import scrape_async
-from streamlit_autorefresh import st_autorefresh
+from streamlit_autorefresh import st_autorefresh  # ✅ NEW
 
 # Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -18,7 +18,11 @@ st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 # Logging
 logging.basicConfig(level=logging.WARNING)
 
-# Shared timestamp
+# --- Auto-Refresh Only When All Tiles Are Collapsed ---
+if not st.session_state.get("nws_show_alerts", False) and not st.session_state.get("ec_show_alerts", False):
+    st_autorefresh(interval=60 * 1000, key="global_autorefresh")
+
+# Shared timestamp (must be after autorefresh)
 now = time.time()
 REFRESH_INTERVAL = 60  # seconds
 
@@ -157,7 +161,3 @@ with col2:
             if published:
                 st.caption(f"Published: {published}")
             st.markdown("---")
-
-# --- Auto-Refresh Only When All Tiles Are Collapsed ---
-if not st.session_state["nws_show_alerts"] and not st.session_state["ec_show_alerts"]:
-    st_autorefresh(interval=REFRESH_INTERVAL * 1000, key="global_autorefresh")
