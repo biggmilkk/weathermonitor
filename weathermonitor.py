@@ -5,7 +5,6 @@ import json
 import time
 import logging
 from utils.domain_router import get_scraper
-from streamlit_autorefresh import st_autorefresh
 
 # Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -16,29 +15,38 @@ st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 # Logging
 logging.basicConfig(level=logging.WARNING)
 
-# Refresh the app every 60 seconds (120000 ms = 60s)
-st_autorefresh(interval=60000, key="nws_autorefresh")
-
-# Session state
-if "nws_seen_count" not in st.session_state:
-    st.session_state["nws_seen_count"] = 0
-if "nws_show_alerts" not in st.session_state:
-    st.session_state["nws_show_alerts"] = False
-if "nws_data" not in st.session_state:
-    st.session_state["nws_data"] = None
-if "nws_last_fetch" not in st.session_state:
-    st.session_state["nws_last_fetch"] = 0
-
-# --- NWS ALERTS FETCH (every 60s) ---
-nws_url = "https://api.weather.gov/alerts/active"
-scraper = get_scraper("api.weather.gov")
-now = time.time()
+# Constants
 REFRESH_INTERVAL = 60  # seconds
 
-if now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL:
-    if scraper:
+# Session state defaults
+defaults = {
+    "nws_seen_count": 0,
+    "nws_show_alerts": False,
+    "nws_data": None,
+    "nws_last_fetch": 0,
+    "ec_seen_count": 0,
+    "ec_show_alerts": False,
+    "ec_data": None,
+    "ec_last_fetch": 0
+}
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+# Determine if any tile is open (used to pause refresh)
+any_tile_open = st.session_state["nws_show_alerts"] or st.session_state["ec_show_alerts"]
+
+# Current time
+now = time.time()
+
+# --- NWS FETCH ---
+nws_url = "https://api.weather.gov/alerts/active"
+nws_scraper = get_scraper("api.weather.gov")
+
+if not any_tile_open and now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL:
+    if nws_scraper:
         try:
-            st.session_state["nws_data"] = scraper(nws_url)
+            st.session_state["nws_data"] = nws_scraper(nws_url)
         except Exception as e:
             st.session_state["nws_data"] = {
                 "entries": [],
@@ -53,11 +61,15 @@ total_nws = len(nws_alerts)
 new_nws = max(0, total_nws - st.session_state.get("nws_seen_count", 0))
 
 # --- UI ---
-with st.container():
+st.title("Global Weather Monitor")
+cols = st.columns(2)
+
+# --- TILE: NWS ---
+with cols[0]:
     st.subheader("NWS Active Alerts")
     st.markdown(f"- **{total_nws}** total alerts")
     st.markdown(f"- **{new_nws}** new since last view")
-    st.caption(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.session_state['nws_last_fetch']))} UTC")
+    st.caption(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['nws_last_fetch']))}")
 
     if st.button("View Alerts", key="nws_toggle_btn"):
         st.session_state["nws_show_alerts"] = not st.session_state["nws_show_alerts"]
@@ -73,10 +85,7 @@ with st.container():
             is_new = i >= total_nws - new_nws
 
             if is_new:
-                st.markdown(
-                    "<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>",
-                    unsafe_allow_html=True
-                )
+                st.markdown("<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>", unsafe_allow_html=True)
 
             st.markdown(f"**{title}**")
             st.markdown(summary if summary.strip() else "_No summary available._")
@@ -85,3 +94,9 @@ with st.container():
             if published:
                 st.caption(f"Published: {published}")
             st.markdown("---")
+
+# --- TILE: Environment Canada (Coming Soon) ---
+with cols[1]:
+    st.subheader("Environment Canada Alerts")
+    st.markdown("- No data yet")
+    st.caption("Coming soon...")
