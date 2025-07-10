@@ -3,11 +3,13 @@ import os
 import sys
 import json
 import logging
+from utils.domain_router import get_scraper
+
+# Logging setup
 logging.basicConfig(level=logging.WARNING)
 
 # Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from utils.domain_router import get_scraper
 
 # Page config
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
@@ -22,14 +24,6 @@ if "ec_seen_count" not in st.session_state:
 if "ec_show_alerts" not in st.session_state:
     st.session_state["ec_show_alerts"] = False
 
-# Load bookmarks
-try:
-    with open("bookmarks.json", "r") as f:
-        bookmarks = json.load(f)
-except Exception as e:
-    st.error(f"Error loading bookmarks.json: {e}")
-    st.stop()
-
 # Load Environment Canada sources
 try:
     with open("environment_canada_sources.json", "r") as f:
@@ -39,33 +33,26 @@ except Exception as e:
     ec_sources = []
 
 # Layout grid
-cols = st.columns(3)  # Adjust this to 7 or 10 when more tiles are added
+cols = st.columns(3)  # Expand as needed
 
-# Initialize alert lists and counters
+# --- NWS ALERTS FETCH ---
 nws_alerts = []
 total_nws = 0
 new_nws = 0
 
-# Get NWS alerts
-for bm in bookmarks:
-    if bm.get("domain") == "api.weather.gov":
-        scraper = get_scraper("api.weather.gov")
-        if scraper:
-            try:
-                data = scraper(bm.get("url"))
-                st.write(f"[DEBUG] Scraper returned: {type(data)} - keys: {list(data.keys()) if data else 'None'}")
-
-                if isinstance(data, dict) and "entries" in data:
-                    nws_alerts.extend(data["entries"])
-                    st.write(f"[DEBUG] Added {len(data['entries'])} entries from {bm['url']}")
-                else:
-                    st.warning(f"[WARNING] No 'entries' in data from {bm['url']}")
-            except Exception as e:
-                st.error(f"[ERROR] Failed fetching NWS data: {e}")
-
-# Compute counts regardless of scraper success
-total_nws = len(nws_alerts)
-new_nws = max(0, total_nws - st.session_state.get("nws_seen_count", 0))
+nws_url = "https://api.weather.gov/alerts/active"
+scraper = get_scraper("api.weather.gov")
+if scraper:
+    try:
+        data = scraper(nws_url)
+        if isinstance(data, dict) and "entries" in data:
+            nws_alerts = data["entries"]
+            total_nws = len(nws_alerts)
+            new_nws = max(0, total_nws - st.session_state.get("nws_seen_count", 0))
+        else:
+            st.warning("[WARNING] NWS scraper returned unexpected structure.")
+    except Exception as e:
+        st.error(f"[ERROR] Failed fetching NWS data: {e}")
 
 # --- TILE: NWS Active Alerts ---
 with cols[0]:
@@ -81,17 +68,12 @@ with cols[0]:
 
         if st.session_state["nws_show_alerts"]:
             for i, alert in enumerate(nws_alerts):
-                raw_title = alert.get("title")
-                title = str(raw_title).strip() if raw_title else f"Alert #{i+1}"
-
-                summary = alert.get("summary", "") or ""
-                summary = summary[:300] + "..." if len(summary) > 300 else summary
-
-                published = alert.get("published", "")
+                title = str(alert.get("title", f"Alert #{i+1}")).strip()
+                summary = (alert.get("summary", "") or "")[:300]
                 link = alert.get("link", "")
+                published = alert.get("published", "")
                 is_new = i >= total_nws - new_nws
 
-                # Visual new indicator
                 if is_new:
                     st.markdown(
                         "<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>",
@@ -106,7 +88,7 @@ with cols[0]:
                     st.caption(f"Published: {published}")
                 st.markdown("---")
 
-# Get Environment Canada alerts
+# --- Environment Canada Alerts ---
 ec_alerts = []
 for src in ec_sources:
     scraper = get_scraper("weather.gc.ca")
@@ -136,14 +118,10 @@ with cols[1]:
 
         if st.session_state["ec_show_alerts"]:
             for i, alert in enumerate(ec_alerts):
-                raw_title = alert.get("title")
-                title = str(raw_title).strip() if raw_title else f"Alert #{i+1}"
-
-                summary = alert.get("summary", "") or ""
-                summary = summary[:300] + "..." if len(summary) > 300 else summary
-
-                published = alert.get("published", "")
+                title = str(alert.get("title", f"Alert #{i+1}")).strip()
+                summary = (alert.get("summary", "") or "")[:300]
                 link = alert.get("link", "")
+                published = alert.get("published", "")
                 is_new = i >= total_ec - new_ec
 
                 if is_new:
@@ -159,4 +137,3 @@ with cols[1]:
                 if published:
                     st.caption(f"Published: {published}")
                 st.markdown("---")
-
