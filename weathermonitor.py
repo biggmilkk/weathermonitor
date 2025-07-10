@@ -37,18 +37,21 @@ should_fetch_nws = (
     and now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL
 )
 
-# Fetch data
-if should_fetch_nws and scraper:
-    try:
-        st.session_state["nws_data"] = scraper(nws_url)
-        st.session_state["nws_last_fetch"] = now  # ✅ Only update timestamp on actual fetch
-        logging.warning(f"[NWS] Data refreshed at {time.strftime('%H:%M:%S', time.gmtime(now))}")
-    except Exception as e:
-        st.session_state["nws_data"] = {
-            "entries": [],
-            "error": str(e),
-            "source": nws_url
-        }
+# Fetch data (only when tile is closed and interval passed)
+if not st.session_state["nws_show_alerts"]:
+    if now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL and scraper:
+        try:
+            fetched_data = scraper(nws_url)
+            if fetched_data:
+                st.session_state["nws_data"] = fetched_data
+                st.session_state["nws_last_fetch"] = now  # ✅ Only update if fetched while closed
+                logging.warning(f"[NWS] Refreshed at {time.strftime('%H:%M:%S', time.gmtime(now))}")
+        except Exception as e:
+            st.session_state["nws_data"] = {
+                "entries": [],
+                "error": str(e),
+                "source": nws_url
+            }
 
 # Extract alert data
 nws_data = st.session_state.get("nws_data", {})
