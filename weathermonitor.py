@@ -49,9 +49,12 @@ for bm in bookmarks:
         if scraper:
             try:
                 data = scraper(bm.get("url"))
+                st.write(f"[DEBUG] Scraper returned: {type(data)} - keys: {list(data.keys()) if data else 'None'}")
                 if isinstance(data, dict) and "entries" in data:
                     nws_alerts.extend(data["entries"])
                     st.write(f"[DEBUG] Added {len(data['entries'])} entries from {bm['url']}")
+                else:
+                    st.warning(f"[WARNING] No entries found in data from {bm['url']}")
             except Exception as e:
                 st.error(f"[ERROR] Failed fetching NWS data: {e}")
 
