@@ -46,47 +46,32 @@ cols = st.columns(3)
 # Tile 1: NWS
 with cols[0]:
     with st.container():
-        st.markdown(
-            """
-            <div style='
-                background-color: #f8f9fa;
-                border: 1px solid #ddd;
-                padding: 1rem;
-                border-radius: 10px;
-                height: 100%;
-                box-shadow: 1px 1px 5px rgba(0,0,0,0.05);
-            '>
-            """,
-            unsafe_allow_html=True
-        )
-
-        st.markdown("#### 📡 NWS Active Alerts")
+        # Tile-style card using text formatting only
+        st.markdown("### 📡 NWS Active Alerts")
         st.markdown(f"- **{total_nws}** total alerts")
         st.markdown(f"- **{new_nws}** new since last view")
 
-        if st.button("View Alerts", key="nws_toggle"):
+        view_clicked = st.button("View Alerts", key="nws_toggle_btn")
+
+        if view_clicked:
             st.session_state["nws_show_alerts"] = not st.session_state["nws_show_alerts"]
             if st.session_state["nws_show_alerts"]:
                 st.session_state["nws_seen_count"] = total_nws
 
         if st.session_state["nws_show_alerts"]:
             for i, alert in enumerate(nws_alerts):
-                title = alert.get("title", f"Alert #{i+1}").strip() or f"Alert #{i+1}"
+                title = alert.get("title", f"Alert #{i+1}").strip()
                 summary = alert.get("summary", "") or ""
                 summary = summary[:300] + "..." if len(summary) > 300 else summary
                 published = alert.get("published", "")
                 link = alert.get("link", "")
-
                 is_new = i >= total_nws - new_nws
                 prefix = "🆕 " if is_new else ""
 
-                with st.container():
-                    st.markdown(f"**{prefix}{title}**")
-                    st.markdown(summary if summary.strip() else "_No summary available._")
-                    if link:
-                        st.markdown(f"[Read more]({link})", unsafe_allow_html=True)
-                    if published:
-                        st.caption(f"Published: {published}")
-                    st.markdown("---")
-
-        st.markdown("</div>", unsafe_allow_html=True)
+                st.markdown(f"**{prefix}{title}**")
+                st.markdown(summary if summary.strip() else "_No summary available._")
+                if link:
+                    st.markdown(f"[Read more]({link})")
+                if published:
+                    st.caption(f"Published: {published}")
+                st.markdown("---")
