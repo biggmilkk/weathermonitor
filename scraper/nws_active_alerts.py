@@ -27,7 +27,8 @@ def scrape(url="https://api.weather.gov/alerts/active"):
             "published": props.get("effective", "")
         })
 
-    return {  # <-- this must not be missing!
+    logging.warning("[NWS SCRAPER] Returning entries count: %d", len(entries))
+    return { 
         "feed_title": "National Weather Service - Active Alerts",
         "entries": entries,
         "source": url
