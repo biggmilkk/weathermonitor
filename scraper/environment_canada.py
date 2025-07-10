@@ -2,13 +2,11 @@ import feedparser
 
 def is_red_warning(title: str) -> bool:
     title = title.strip().upper()
-    if title.startswith("NO ALERTS"):
-        return False
-    if "WARNING" in title:
-        return True
-    if "SEVERE THUNDERSTORM WATCH" in title:
-        return True
-    return False
+    return (
+        "WARNING" in title and
+        not title.startswith("NO ALERTS") and
+        "WATCH" not in title
+    ) or "SEVERE THUNDERSTORM WATCH" in title
 
 def scrape(url, region_name=None, province=None):
     feed = feedparser.parse(url)
@@ -24,8 +22,8 @@ def scrape(url, region_name=None, province=None):
             "summary": entry.get("summary", "")[:500],
             "link": entry.get("link", ""),
             "published": entry.get("published", ""),
-            "region": region_name or "Unknown",
-            "province": province or "Unknown"
+            "region": region_name or "",
+            "province": province or ""
         })
 
     return {
