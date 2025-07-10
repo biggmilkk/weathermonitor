@@ -144,3 +144,10 @@ with cols[1]:
                 if published:
                     st.caption(f"Published: {published}")
                 st.markdown("---")
+
+
+from scraper.nws_active_alerts import scrape as test_scrape
+result = test_scrape()
+st.subheader("Manual test_scrape result:")
+st.json(result)
+
