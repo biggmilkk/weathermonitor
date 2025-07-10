@@ -156,3 +156,7 @@ with col2:
             if published:
                 st.caption(f"Published: {published}")
             st.markdown("---")
+
+# --- Refresh When All Tiles Are Closed ---
+if should_refresh_nws or should_refresh_ec:
+    st.rerun()
