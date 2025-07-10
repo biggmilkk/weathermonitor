@@ -10,14 +10,14 @@ from utils.domain_router import get_scraper
 
 # Page configuration
 st.set_page_config(
-    page_title="🌍 Global Weather Monitor",
+    page_title="Global Weather Monitor",
     layout="wide"
 )
 
 # Header
-st.markdown("<h2 style='text-align: center;'>🌦️ Global Weather Dashboard</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align: center;'>Global Weather Dashboard</h2>", unsafe_allow_html=True)
 st.markdown(
-    "<p style='text-align: center; font-size: 0.9rem; color: grey;'>Monitor live weather conditions from your global bookmarks. Search, refresh, and view structured data from weather.gov, RSS feeds, and other sources.</p>",
+    "<p style='text-align: center; font-size: 0.9rem; color: grey;'>Monitor live weather conditions from your global bookmarks. Search, refresh, and view structured data from weather and alert feeds.</p>",
     unsafe_allow_html=True
 )
 
@@ -31,8 +31,8 @@ except Exception as e:
 
 # Sidebar controls
 with st.sidebar:
-    query = st.text_input("🔍 Search by title or domain", "")
-    refresh = st.button("🔄 Refresh All")
+    query = st.text_input("Search by title or domain", "")
+    refresh = st.button("Refresh All Feeds")
 
 # Filter bookmarks
 filtered = [
@@ -58,22 +58,22 @@ else:
                     st.error(f"Error fetching data from {url}: {e}")
                     continue
 
-                # RSS feed display
+                # RSS-style feed
                 if isinstance(data, dict) and "entries" in data:
                     st.markdown(f"### {data.get('feed_title', title)}")
                     for entry in data["entries"]:
                         st.markdown(f"**{entry['title']}**")
                         st.markdown(entry.get("summary", ""))
-                        st.markdown(f"[📰 Read more]({entry['link']})")
+                        st.markdown(f"[Read more]({entry['link']})")
                         st.caption(entry.get("published", ""))
                         st.markdown("---")
 
-                # Weather snapshot display
+                # Static weather data
                 else:
                     st.markdown(f"### {data.get('location', title)}")
-                    st.markdown(f"**🌡 Temperature:** {data.get('temperature', 'N/A')}")
-                    st.markdown(f"**☁ Condition:** {data.get('condition', 'N/A')}")
-                    st.markdown(f"[🔗 Source]({data.get('source', url)})")
+                    st.markdown(f"**Temperature:** {data.get('temperature', 'N/A')}")
+                    st.markdown(f"**Condition:** {data.get('condition', 'N/A')}")
+                    st.markdown(f"[View source]({data.get('source', url)})")
                     st.markdown("---")
         else:
             st.warning(f"No scraper available for domain: {domain}")
