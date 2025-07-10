@@ -15,7 +15,7 @@ st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 # Logging
 logging.basicConfig(level=logging.WARNING)
 
-# Session state initialization
+# Session state
 if "nws_seen_count" not in st.session_state:
     st.session_state["nws_seen_count"] = 0
 if "nws_show_alerts" not in st.session_state:
@@ -25,45 +25,38 @@ if "nws_data" not in st.session_state:
 if "nws_last_fetch" not in st.session_state:
     st.session_state["nws_last_fetch"] = 0
 
-# Constants
+# --- NWS ALERTS FETCH ---
 nws_url = "https://api.weather.gov/alerts/active"
-REFRESH_INTERVAL = 60  # seconds
-now = time.time()
 scraper = get_scraper("api.weather.gov")
+now = time.time()
+REFRESH_INTERVAL = 60  # seconds
 
-# Only auto-refresh if tile is closed
-should_fetch_nws = (
-    not st.session_state["nws_show_alerts"]
-    and now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL
+should_fetch = (
+    not st.session_state["nws_show_alerts"] and
+    (now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL)
 )
 
-# Fetch data (only when tile is closed and interval passed)
-if not st.session_state["nws_show_alerts"]:
-    if now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL and scraper:
-        try:
-            fetched_data = scraper(nws_url)
-            if fetched_data:
-                st.session_state["nws_data"] = fetched_data
-                st.session_state["nws_last_fetch"] = now  # ✅ Only update if fetched while closed
-                logging.warning(f"[NWS] Refreshed at {time.strftime('%H:%M:%S', time.gmtime(now))}")
-        except Exception as e:
-            st.session_state["nws_data"] = {
-                "entries": [],
-                "error": str(e),
-                "source": nws_url
-            }
+if should_fetch and scraper:
+    try:
+        fetched_data = scraper(nws_url)
+        if fetched_data:
+            st.session_state["nws_data"] = fetched_data
+            st.session_state["nws_last_fetch"] = now
+            logging.warning(f"[NWS] Refreshed at {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(now))}")
+    except Exception as e:
+        st.session_state["nws_data"] = {
+            "entries": [],
+            "error": str(e),
+            "source": nws_url
+        }
 
-# Extract alert data
 nws_data = st.session_state.get("nws_data", {})
 nws_alerts = nws_data.get("entries", [])
-# Sort latest first
-nws_alerts.sort(key=lambda x: x.get("published", ""), reverse=True)
+nws_alerts = sorted(nws_alerts, key=lambda a: a.get("published", ""), reverse=True)  # sort newest first
 total_nws = len(nws_alerts)
 new_nws = max(0, total_nws - st.session_state.get("nws_seen_count", 0))
 
 # --- UI ---
-st.title("Global Weather Monitor")
-
 with st.container():
     st.subheader("NWS Active Alerts")
     st.markdown(f"- **{total_nws}** total alerts")
@@ -81,7 +74,7 @@ with st.container():
             summary = (alert.get("summary", "") or "")[:300]
             link = alert.get("link", "")
             published = alert.get("published", "")
-            is_new = i < new_nws  # Because sorted newest-first
+            is_new = i < new_nws  # newest are at top
 
             if is_new:
                 st.markdown(
