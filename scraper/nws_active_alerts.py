@@ -1,0 +1,26 @@
+import requests
+
+def scrape(url="https://api.weather.gov/alerts/active"):
+    headers = {"User-Agent": "WeatherMonitorApp (your@email.com)"}
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        feed = response.json()
+    except Exception as e:
+        return {"feed_title": "NWS Alerts", "entries": [], "error": str(e), "source": url}
+
+    entries = []
+    for feature in feed.get("features", [])[:10]:  # Limit to 10 alerts
+        props = feature.get("properties", {})
+        entries.append({
+            "title": props.get("headline", "No Title"),
+            "summary": props.get("description", "")[:500],
+            "link": props.get("web", ""),
+            "published": props.get("effective", "")
+        })
+
+    return {
+        "feed_title": "National Weather Service - Active Alerts",
+        "entries": entries,
+        "source": url
+    }
