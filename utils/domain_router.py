@@ -1,8 +1,8 @@
-from scraper import environment_canada, nws_active_alerts
+from scraper import nws_active_alerts, environment_canada
 
 SCRAPER_MAP = {
     "api.weather.gov": nws_active_alerts.scrape,
-    "weather.gc.ca": environment_canada.scrape
+    "weather.gc.ca": environment_canada.scrape_async
 }
 
 def get_scraper(domain):
