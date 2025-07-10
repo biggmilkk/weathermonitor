@@ -5,7 +5,7 @@ import json
 import time
 import logging
 from utils.domain_router import get_scraper
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from scraper.environment_canada import scrape_async
 
 # Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
