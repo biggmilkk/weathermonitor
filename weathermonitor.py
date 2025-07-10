@@ -21,7 +21,7 @@ st_autorefresh(interval=60 * 1000, key="autorefresh")
 now = time.time()
 REFRESH_INTERVAL = 60
 
-# Session state initialization
+# Initialize session state
 defaults = {
     "nws_seen_count": 0,
     "ec_seen_count": 0,
@@ -35,11 +35,11 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# Read query param for active tile state
+# Read query param to track active feed
 query_params = st.experimental_get_query_params()
 active_feed = query_params.get("feed", [None])[0]
 
-# --- NWS Fetch ---
+# Fetch NWS alerts
 nws_scraper = get_scraper("api.weather.gov")
 nws_url = "https://api.weather.gov/alerts/active"
 if now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL:
@@ -52,11 +52,15 @@ if now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL:
     except Exception as e:
         st.session_state["nws_data"] = {"entries": [], "error": str(e)}
 
-nws_alerts = sorted(st.session_state["nws_data"].get("entries", []), key=lambda x: x.get("published", ""), reverse=True)
+nws_alerts = sorted(
+    st.session_state["nws_data"].get("entries", []),
+    key=lambda x: x.get("published", ""),
+    reverse=True,
+)
 total_nws = len(nws_alerts)
 new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
 
-# --- EC Fetch ---
+# Fetch EC alerts
 ec_sources = []
 try:
     with open("environment_canada_sources.json") as f:
@@ -70,7 +74,11 @@ if now - st.session_state["ec_last_fetch"] > REFRESH_INTERVAL:
     st.session_state["ec_last_fetch"] = now
     st.session_state["last_refreshed"] = now
 
-ec_alerts = sorted(st.session_state["ec_data"], key=lambda x: x.get("published", ""), reverse=True)
+ec_alerts = sorted(
+    st.session_state["ec_data"],
+    key=lambda x: x.get("published", ""),
+    reverse=True,
+)
 total_ec = len(ec_alerts)
 new_ec = max(0, total_ec - st.session_state["ec_seen_count"])
 
@@ -79,29 +87,30 @@ st.title("Global Weather Monitor")
 st.caption(f"🔄 Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
 st.markdown("---")
 
+# --- TILE LAYOUT ---
 col1, col2 = st.columns(2)
 
-# --- Button: NWS ---
 with col1:
     label = f"NWS Alerts ({total_nws} total / {new_nws} new)"
-    if st.button(label, key="btn_nws", use_container_width=True):
+    clicked = st.button(label, key="btn_nws", use_container_width=True)
+    if clicked:
         if active_feed == "nws":
-            st.experimental_set_query_params()  # clear
+            st.experimental_set_query_params()
         else:
             st.experimental_set_query_params(feed="nws")
             st.session_state["nws_seen_count"] = total_nws
 
-# --- Button: EC ---
 with col2:
     label = f"Environment Canada ({total_ec} total / {new_ec} new)"
-    if st.button(label, key="btn_ec", use_container_width=True):
+    clicked = st.button(label, key="btn_ec", use_container_width=True)
+    if clicked:
         if active_feed == "ec":
-            st.experimental_set_query_params()  # clear
+            st.experimental_set_query_params()
         else:
             st.experimental_set_query_params(feed="ec")
             st.session_state["ec_seen_count"] = total_ec
 
-# --- Feed Panel ---
+# --- FEED PANEL ---
 if active_feed:
     st.markdown("---")
     if active_feed == "nws":
