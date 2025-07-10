@@ -1,6 +1,6 @@
 beautifulsoup4
 requests
-streamlit
+streamlit>=1.30.0
 feedparser
 streamlit-autorefresh
 aiohttp>=3.8.0
