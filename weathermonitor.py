@@ -75,24 +75,9 @@ for key, default in [(ec_tile_key, False), (ec_seen_key, 0), (ec_data_key, []), 
 scraper = get_scraper("weather.gc.ca")
 
 # Fetch EC only if tile is collapsed, interval exceeded, and not due to toggle button press
-if scraper and not st.session_state[ec_tile_key] and not st.session_state[ec_toggle_clicked] and (now - st.session_state[ec_last_fetch_key] > REFRESH_INTERVAL):
-    def fetch_region(region):
-        url = region.get("ATOM URL")
-        if not url:
-            return []
-        try:
-            return scraper(url, region_name=region.get("Region Name"), province=region.get("Province-Territory")).get("entries", [])
-        except Exception as e:
-            logging.warning(f"[EC FETCH ERROR] {region.get('Region Name')}: {e}")
-            return []
-
-    with ThreadPoolExecutor(max_workers=200) as executor:
-        futures = [executor.submit(fetch_region, region) for region in ec_sources if region.get("ATOM URL")]
-        all_entries = []
-        for future in as_completed(futures):
-            all_entries.extend(future.result())
-
-    st.session_state[ec_data_key] = all_entries
+if not st.session_state[ec_tile_key] and not st.session_state[ec_toggle_clicked] and (now - st.session_state[ec_last_fetch_key] > REFRESH_INTERVAL):
+    all_entries = asyncio.run(scrape_async(ec_sources))
+    st.session_state[ec_data_key] = all_entries.get("entries", [])
     st.session_state[ec_last_fetch_key] = now
 
 # Reset toggle interaction flag for next run
