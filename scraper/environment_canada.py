@@ -10,7 +10,6 @@ def is_red_warning(title: str) -> bool:
     if "SEVERE THUNDERSTORM WATCH" in title:
         return True
     return False
-    )
 
 def scrape(url):
     feed = feedparser.parse(url)
