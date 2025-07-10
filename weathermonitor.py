@@ -59,15 +59,20 @@ else:
                     continue
 
                 # RSS-style feed
-                st.write("DEBUG RSS data:", data)
                 if isinstance(data, dict) and "entries" in data:
-                    st.markdown(f"### {data.get('feed_title', title)}")
+                    st.markdown(f"### {data.get('feed_title', bm['title'])}")
                     for entry in data["entries"]:
-                        st.markdown(f"**{entry['title']}**")
-                        st.markdown(entry.get("summary", ""))
-                        st.markdown(f"[Read more]({entry['link']})")
-                        st.caption(entry.get("published", ""))
-                        st.markdown("---")
+                        summary = entry.get("summary", "")
+                        summary = summary[:500] + "..." if len(summary) > 500 else summary
+                        published = entry.get("published", "")
+                        link = entry.get("link", "")
+
+                        with st.expander(entry['title']):
+                            st.markdown(summary)
+                            if link:
+                                st.markdown(f"[View full alert]({link})")
+                            if published:
+                                st.caption(f"Published: {published}")
 
                 # Static weather data
                 else:
