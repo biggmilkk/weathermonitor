@@ -7,7 +7,7 @@ import logging
 import asyncio
 from utils.domain_router import get_scraper
 from scraper.environment_canada import scrape_async
-from streamlit_autorefresh import st_autorefresh  # ✅ NEW
+from streamlit_autorefresh import st_autorefresh
 
 # Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -18,11 +18,10 @@ st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 # Logging
 logging.basicConfig(level=logging.WARNING)
 
-# --- Auto-Refresh Only When All Tiles Are Collapsed ---
-if not st.session_state.get("nws_show_alerts", False) and not st.session_state.get("ec_show_alerts", False):
-    st_autorefresh(interval=60, key="global_autorefresh")
+# --- UI Auto Refresh Every 60s ---
+st_autorefresh(interval=60 * 1000, key="autorefresh_key")
 
-# Shared timestamp
+# Shared timestamp (must be after autorefresh)
 now = time.time()
 REFRESH_INTERVAL = 60  # seconds
 
@@ -39,12 +38,7 @@ if "nws_last_fetch" not in st.session_state:
 nws_url = "https://api.weather.gov/alerts/active"
 scraper = get_scraper("api.weather.gov")
 
-should_refresh_nws = (
-    not st.session_state["nws_show_alerts"] and
-    (now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL)
-)
-
-if should_refresh_nws:
+if now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL:
     try:
         fetched_data = scraper(nws_url)
         if fetched_data:
@@ -81,12 +75,7 @@ for key, default in [(ec_tile_key, False), (ec_seen_key, 0), (ec_data_key, []), 
     if key not in st.session_state:
         st.session_state[key] = default
 
-should_refresh_ec = (
-    not st.session_state["ec_show_alerts"] and
-    (now - st.session_state["ec_last_fetch"] > REFRESH_INTERVAL)
-)
-
-if should_refresh_ec:
+if now - st.session_state["ec_last_fetch"] > REFRESH_INTERVAL:
     all_entries = asyncio.run(scrape_async(ec_sources))
     st.session_state[ec_data_key] = all_entries.get("entries", [])
     st.session_state[ec_last_fetch_key] = now
@@ -106,12 +95,9 @@ with col1:
     st.markdown(f"- **{new_nws}** new since last view")
     st.caption(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['nws_last_fetch']))}")
 
-    if st.button("View Alerts", key="nws_toggle_btn"):
-        st.session_state["nws_show_alerts"] = not st.session_state["nws_show_alerts"]
-        if st.session_state["nws_show_alerts"]:
-            st.session_state["nws_seen_count"] = total_nws
-
-    if st.session_state["nws_show_alerts"]:
+    with st.expander("View Alerts", expanded=st.session_state["nws_show_alerts"]):
+        st.session_state["nws_show_alerts"] = True
+        st.session_state["nws_seen_count"] = total_nws
         for i, alert in enumerate(nws_alerts):
             title = alert.get("title", f"Alert #{i+1}").strip()
             summary = alert.get("summary", "")[:300]
@@ -136,12 +122,9 @@ with col2:
     st.markdown(f"- **{new_ec}** new since last view")
     st.caption(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state[ec_last_fetch_key]))}")
 
-    if st.button("View Alerts", key="ec_toggle_btn"):
-        st.session_state[ec_tile_key] = not st.session_state[ec_tile_key]
-        if st.session_state[ec_tile_key]:
-            st.session_state[ec_seen_key] = total_ec
-
-    if st.session_state[ec_tile_key]:
+    with st.expander("View Alerts", expanded=st.session_state[ec_tile_key]):
+        st.session_state[ec_tile_key] = True
+        st.session_state[ec_seen_key] = total_ec
         for i, alert in enumerate(ec_alerts):
             title = alert.get("title", f"Alert #{i+1}").strip()
             summary = alert.get("summary", "")[:300]
