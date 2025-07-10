@@ -26,60 +26,59 @@ if "nws_data" not in st.session_state:
 if "nws_last_fetch" not in st.session_state:
     st.session_state["nws_last_fetch"] = 0
 
-# Fetch interval
-REFRESH_INTERVAL = 60  # seconds
-now = time.time()
-
-# Only fetch if tile is collapsed AND refresh interval has passed
-should_fetch_nws = (
-    not st.session_state["nws_show_alerts"] and
-    (now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL)
-)
-
-# Fetch NWS alerts if needed
-nws_url = "https://api.weather.gov/alerts/active"
-scraper = get_scraper("api.weather.gov")
-
-if should_fetch_nws and scraper:
-    try:
-        st.session_state["nws_data"] = scraper(nws_url)
-    except Exception as e:
-        st.session_state["nws_data"] = {
-            "entries": [],
-            "error": str(e),
-            "source": nws_url
-        }
-    st.session_state["nws_last_fetch"] = now
-
-# Parse & sort alerts
-def parse_time_safe(t):
-    try:
-        return datetime.fromisoformat(t.replace("Z", "+00:00"))
-    except Exception:
-        return datetime.min  # fallback
-
-nws_data = st.session_state.get("nws_data", {})
-nws_alerts = sorted(
-    nws_data.get("entries", []),
-    key=lambda x: parse_time_safe(x.get("published", "")),
-    reverse=True
-)
-total_nws = len(nws_alerts)
-new_nws = max(0, total_nws - st.session_state.get("nws_seen_count", 0))
-
 # --- UI ---
 st.title("Global Weather Monitor")
 
 with st.container():
     st.subheader("NWS Active Alerts")
-    st.markdown(f"- **{total_nws}** total alerts")
-    st.markdown(f"- **{new_nws}** new since last view")
-    st.caption(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(st.session_state['nws_last_fetch']))} UTC")
 
+    # Toggle Button
     if st.button("View Alerts", key="nws_toggle_btn"):
         st.session_state["nws_show_alerts"] = not st.session_state["nws_show_alerts"]
         if st.session_state["nws_show_alerts"]:
-            st.session_state["nws_seen_count"] = total_nws
+            st.session_state["nws_seen_count"] = len(st.session_state.get("nws_data", {}).get("entries", []))
+
+    # Only fetch if tile is collapsed AND refresh interval has passed
+    REFRESH_INTERVAL = 60  # seconds
+    now = time.time()
+    should_fetch_nws = (
+        not st.session_state["nws_show_alerts"] and
+        (now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL)
+    )
+
+    nws_url = "https://api.weather.gov/alerts/active"
+    scraper = get_scraper("api.weather.gov")
+    if should_fetch_nws and scraper:
+        try:
+            st.session_state["nws_data"] = scraper(nws_url)
+        except Exception as e:
+            st.session_state["nws_data"] = {
+                "entries": [],
+                "error": str(e),
+                "source": nws_url
+            }
+        st.session_state["nws_last_fetch"] = now
+
+    # Extract and sort
+    def parse_time_safe(t):
+        try:
+            return datetime.fromisoformat(t.replace("Z", "+00:00"))
+        except Exception:
+            return datetime.min
+
+    nws_data = st.session_state.get("nws_data", {})
+    nws_alerts = sorted(
+        nws_data.get("entries", []),
+        key=lambda x: parse_time_safe(x.get("published", "")),
+        reverse=True
+    )
+    total_nws = len(nws_alerts)
+    new_nws = max(0, total_nws - st.session_state.get("nws_seen_count", 0))
+
+    # Alert summary
+    st.markdown(f"- **{total_nws}** total alerts")
+    st.markdown(f"- **{new_nws}** new since last view")
+    st.caption(f"Last updated: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(st.session_state['nws_last_fetch']))} UTC")
 
     if st.session_state["nws_show_alerts"]:
         for i, alert in enumerate(nws_alerts):
@@ -87,7 +86,7 @@ with st.container():
             summary = (alert.get("summary", "") or "")[:300]
             link = alert.get("link", "")
             published = alert.get("published", "")
-            is_new = i < new_nws  # now that list is sorted, latest alerts are at top
+            is_new = i < new_nws
 
             if is_new:
                 st.markdown(
