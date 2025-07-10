@@ -90,7 +90,6 @@ with st.container():
                 st.caption(f"Published: {published}")
             st.markdown("---")
 
-
 # --- ENVIRONMENT CANADA ALERTS ---
 
 # Load EC sources
@@ -98,9 +97,10 @@ ec_sources = []
 try:
     with open("environment_canada_sources.json") as f:
         ec_sources = json.load(f)
+    st.write("✅ Loaded EC Sources:", len(ec_sources))
 except Exception as e:
-    logging.warning(f"Failed to load EC sources: {e}")
-st.write("✅ Loaded EC Sources:", len(ec_sources))
+    logging.warning(f"[EC LOAD ERROR] Failed to load EC sources: {e}")
+    st.error(f"Failed to load Environment Canada sources: {e}")
 
 # Session keys
 ec_tile_key = "ec_show_alerts"
@@ -113,10 +113,17 @@ for key, default in [(ec_tile_key, False), (ec_seen_key, 0), (ec_data_key, []), 
     if key not in st.session_state:
         st.session_state[key] = default
 
+# Prepare scraper
+scraper = get_scraper("weather.gc.ca")
+if not scraper:
+    st.error("❌ No scraper found for Environment Canada")
+    logging.warning("[EC SCRAPER ERROR] No scraper found for weather.gc.ca")
+
 # Only fetch EC alerts if collapsed and interval exceeded
-if not st.session_state[ec_tile_key] and (now - st.session_state[ec_last_fetch_key] > REFRESH_INTERVAL):
+now = time.time()
+REFRESH_INTERVAL = 60  # seconds
+if scraper and not st.session_state[ec_tile_key] and (now - st.session_state[ec_last_fetch_key] > REFRESH_INTERVAL):
     all_entries = []
-    scraper = get_scraper("weather.gc.ca")
     for region in ec_sources:
         url = region.get("ATOM URL")
         if not url:
@@ -137,6 +144,7 @@ new_ec = max(0, total_ec - st.session_state[ec_seen_key])
 st.write("✅ Preparing EC tile with", total_ec, "alerts")
 
 # --- UI: Environment Canada ---
+st.write("✅ Rendering EC Tile")
 with st.container():
     st.subheader("Environment Canada Alerts")
     st.markdown(f"- **{total_ec}** total alerts")
@@ -169,3 +177,4 @@ with st.container():
             if published:
                 st.caption(f"Published: {published}")
             st.markdown("---")
+
