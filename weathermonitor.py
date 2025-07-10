@@ -5,6 +5,7 @@ import json
 import time
 import logging
 from utils.domain_router import get_scraper
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -73,16 +74,19 @@ for key, default in [(ec_tile_key, False), (ec_seen_key, 0), (ec_data_key, []), 
 scraper = get_scraper("weather.gc.ca")
 # Only fetch if tile is collapsed and interval exceeded
 if scraper and not st.session_state[ec_tile_key] and (now - st.session_state[ec_last_fetch_key] > REFRESH_INTERVAL):
-    all_entries = []
-    for region in ec_sources:
-        url = region.get("ATOM URL")
-        if not url:
-            continue
+    def fetch_region(url):
         try:
-            data = scraper(url)
-            all_entries.extend(data.get("entries", []))
+            return scraper(url).get("entries", [])
         except Exception as e:
-            logging.warning(f"[EC FETCH ERROR] {region.get('Region Name')}: {e}")
+            logging.warning(f"[EC FETCH ERROR] {url}: {e}")
+            return []
+
+    with ThreadPoolExecutor(max_workers=100) as executor:
+        futures = [executor.submit(fetch_region, region.get("ATOM URL")) for region in ec_sources if region.get("ATOM URL")]
+        all_entries = []
+        for future in as_completed(futures):
+            all_entries.extend(future.result())
+
     st.session_state[ec_data_key] = all_entries
     st.session_state[ec_last_fetch_key] = now
 
