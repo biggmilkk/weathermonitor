@@ -45,18 +45,15 @@ scraper = get_scraper("api.weather.gov")
 if callable(scraper):
     try:
         data = scraper(nws_url)
-        st.write("[DEBUG] NWS scraper returned type:", type(data))
-        st.write("[DEBUG] NWS scraper returned value:", data)
-        if isinstance(data, dict) and "entries" in data:
+        if data is None:
+            st.error("[ERROR] NWS scraper returned None")
+        elif isinstance(data, dict) and "entries" in data:
             nws_alerts = data["entries"]
             total_nws = len(nws_alerts)
             new_nws = max(0, total_nws - st.session_state.get("nws_seen_count", 0))
         else:
-            st.warning("[WARNING] NWS scraper returned unexpected structure or missing 'entries'")
-    except Exception as e:
-        st.error(f"[ERROR] Failed fetching NWS data: {e}")
-else:
-    st.error("[ERROR] get_scraper('api.weather.gov') returned None")
+            st.warning("[WARNING] NWS scraper returned unexpected structure")
+            st.json(data)  # Show actual response
 
 # --- TILE: NWS Active Alerts ---
 with cols[0]:
