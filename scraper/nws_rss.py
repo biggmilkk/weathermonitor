@@ -2,16 +2,18 @@ import feedparser
 
 def scrape(url):
     feed = feedparser.parse(url)
-    items = []
-    for entry in feed.entries[:5]:  # Limit to 5 items
-        items.append({
-            "title": entry.title,
-            "summary": entry.get("summary", ""),
-            "published": entry.published,
-            "link": entry.link
+    entries = []
+
+    for item in feed.entries[:10]:  # limit to 10 items
+        entries.append({
+            "title": item.get("title", "No Title"),
+            "summary": item.get("summary", ""),
+            "link": item.get("link", ""),
+            "published": item.get("published", "")
         })
+
     return {
-        "source": url,
-        "feed_title": feed.feed.get("title", "NWS Feed"),
-        "entries": items
+        "feed_title": feed.feed.get("title", "NWS RSS Feed"),
+        "entries": entries,
+        "source": url
     }
