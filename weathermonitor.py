@@ -88,19 +88,25 @@ with cols[0]:
                     st.caption(f"Published: {published}")
                 st.markdown("---")
 
-# --- Environment Canada Alerts ---
+# --- ENVIRONMENT CANADA ALERTS ---
 ec_alerts = []
-for src in ec_sources:
-    scraper = get_scraper("weather.gc.ca")
-    if scraper:
+total_ec = 0
+new_ec = 0
+
+scraper = get_scraper("weather.gc.ca")
+if scraper:
+    for src in ec_sources:
+        url = src.get("url") or src.get("ATOM URL")
+        if not url:
+            continue
         try:
-            data = scraper(src.get("url"))
+            data = scraper(url)
             if isinstance(data, dict) and "entries" in data:
                 ec_alerts.extend(data["entries"])
-        except Exception:
+        except Exception as e:
+            logging.warning(f"[EC SCRAPER WARNING] Failed {url}: {e}")
             continue
 
-# Count EC alerts
 total_ec = len(ec_alerts)
 new_ec = max(0, total_ec - st.session_state["ec_seen_count"])
 
