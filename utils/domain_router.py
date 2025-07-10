@@ -1,9 +1,8 @@
-from scraper import nws_rss
+from scraper import nws_active_alerts
 
 SCRAPER_MAP = {
-    "alerts.weather.gov": nws_rss.scrape,
-    "www.weather.gov/rss_page.php": nws_rss.scrape,
-    "www.weather.gov": nws_rss.scrape,  # optional fallback
+    "api.weather.gov": nws_active_alerts.scrape,
+    # other domains...
 }
 
 def get_scraper(domain):
