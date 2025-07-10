@@ -10,7 +10,7 @@ def scrape(url="https://api.weather.gov/alerts/active"):
         return {"feed_title": "NWS Alerts", "entries": [], "error": str(e), "source": url}
 
     entries = []
-    for feature in feed.get("features", [])[:10]:  # Limit to 10 alerts
+    for feature in feed.get("features", []):
         props = feature.get("properties", {})
         entries.append({
             "title": props.get("headline", "No Title"),
