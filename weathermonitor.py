@@ -37,6 +37,7 @@ state_defaults = {
     "ec_last_fetch": 0,
     "active_feed": None,
     "previous_counts": {},
+    "last_active_feed": None,
 }
 for key, val in state_defaults.items():
     if key not in st.session_state:
@@ -82,14 +83,22 @@ st.title("Global Weather Monitor")
 col1, col2 = st.columns(2)
 
 with col1:
-    if st.button(f"NWS Alerts ({total_nws})", use_container_width=True):
-        st.session_state["active_feed"] = "nws"
-        st.session_state["nws_seen_count"] = total_nws
+    nws_label = f"NWS Alerts ({total_nws} total / {new_nws} new)"
+    if st.button(nws_label, use_container_width=True):
+        if st.session_state["active_feed"] == "nws":
+            st.session_state["active_feed"] = None
+        else:
+            st.session_state["active_feed"] = "nws"
+            st.session_state["nws_seen_count"] = total_nws
 
 with col2:
-    if st.button(f"Environment Canada ({total_ec})", use_container_width=True):
-        st.session_state["active_feed"] = "ec"
-        st.session_state["ec_seen_count"] = total_ec
+    ec_label = f"Environment Canada ({total_ec} total / {new_ec} new)"
+    if st.button(ec_label, use_container_width=True):
+        if st.session_state["active_feed"] == "ec":
+            st.session_state["active_feed"] = None
+        else:
+            st.session_state["active_feed"] = "ec"
+            st.session_state["ec_seen_count"] = total_ec
 
 # --- ACTIVE READING PANE ---
 active = st.session_state["active_feed"]
