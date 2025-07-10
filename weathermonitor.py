@@ -59,6 +59,7 @@ else:
                     continue
 
                 # RSS-style feed
+                st.write("DEBUG RSS data:", data)
                 if isinstance(data, dict) and "entries" in data:
                     st.markdown(f"### {data.get('feed_title', title)}")
                     for entry in data["entries"]:
