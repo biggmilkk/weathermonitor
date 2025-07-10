@@ -41,8 +41,12 @@ except Exception as e:
 # Layout grid
 cols = st.columns(3)  # Adjust this to 7 or 10 when more tiles are added
 
-# Get NWS alerts
+# Initialize alert lists and counters
 nws_alerts = []
+total_nws = 0
+new_nws = 0
+
+# Get NWS alerts
 for bm in bookmarks:
     if bm.get("domain") == "api.weather.gov":
         scraper = get_scraper("api.weather.gov")
@@ -50,17 +54,18 @@ for bm in bookmarks:
             try:
                 data = scraper(bm.get("url"))
                 st.write(f"[DEBUG] Scraper returned: {type(data)} - keys: {list(data.keys()) if data else 'None'}")
+
                 if isinstance(data, dict) and "entries" in data:
                     nws_alerts.extend(data["entries"])
                     st.write(f"[DEBUG] Added {len(data['entries'])} entries from {bm['url']}")
                 else:
-                    st.warning(f"[WARNING] No entries found in data from {bm['url']}")
+                    st.warning(f"[WARNING] No 'entries' in data from {bm['url']}")
             except Exception as e:
                 st.error(f"[ERROR] Failed fetching NWS data: {e}")
 
-# Count alerts
+# Compute counts regardless of scraper success
 total_nws = len(nws_alerts)
-st.write(f"[DEBUG] total_nws = {total_nws}")
+new_nws = max(0, total_nws - st.session_state.get("nws_seen_count", 0))
 
 # --- TILE: NWS Active Alerts ---
 with cols[0]:
