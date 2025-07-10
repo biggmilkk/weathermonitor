@@ -33,7 +33,7 @@ REFRESH_INTERVAL = 60  # seconds
 now = time.time()
 if now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL:
     st.session_state["nws_last_fetch"] = now
-    st.experimental_rerun()
+    st.rerun()
 
 # Fetch NWS alerts if not already stored
 nws_url = "https://api.weather.gov/alerts/active"
