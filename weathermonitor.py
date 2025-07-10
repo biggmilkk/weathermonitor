@@ -92,9 +92,11 @@ with col1:
     label = f"NWS Alerts ({total_nws} total / {new_nws} new)"
     if st.button(label, key="btn_nws", use_container_width=True):
         if st.session_state["active_feed"] == "nws":
-            st.session_state["active_feed"] = None
+            # SECOND CLICK: clear and close
             st.session_state["nws_seen_count"] = total_nws
+            st.session_state["active_feed"] = None
         else:
+            # FIRST CLICK: open and clear
             st.session_state["active_feed"] = "nws"
             st.session_state["nws_seen_count"] = total_nws
 
@@ -102,9 +104,11 @@ with col2:
     label = f"Environment Canada ({total_ec} total / {new_ec} new)"
     if st.button(label, key="btn_ec", use_container_width=True):
         if st.session_state["active_feed"] == "ec":
-            st.session_state["active_feed"] = None
+            # SECOND CLICK: clear and close
             st.session_state["ec_seen_count"] = total_ec
+            st.session_state["active_feed"] = None
         else:
+            # FIRST CLICK: open and clear
             st.session_state["active_feed"] = "ec"
             st.session_state["ec_seen_count"] = total_ec
 
