@@ -3,7 +3,6 @@ import logging
 
 def scrape(url="https://api.weather.gov/alerts/active"):
     headers = {"User-Agent": "WeatherMonitorApp (your@email.com)"}
-    
     try:
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
@@ -18,10 +17,7 @@ def scrape(url="https://api.weather.gov/alerts/active"):
         }
 
     entries = []
-    features = feed.get("features", [])
-    logging.warning(f"[NWS] Fetched {len(features)} features")
-
-    for feature in features:
+    for feature in feed.get("features", []):
         props = feature.get("properties", {})
         entries.append({
             "title": props.get("headline", "No Title"),
