@@ -18,18 +18,18 @@ st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 # Logging
 logging.basicConfig(level=logging.WARNING)
 
-# --- Auto Refresh Every 60s ---
+# Auto refresh every 60 seconds
 st_autorefresh(interval=60 * 1000, key="autorefresh")
 
-# Shared timestamp
-now = time.time()
+# Constants
 REFRESH_INTERVAL = 60  # seconds
+now = time.time()
 
-# --- Initialize session state ---
+# --- Session State Initialization ---
 defaults = {
     "nws_seen_count": 0,
     "ec_seen_count": 0,
-    "nws_data": None,
+    "nws_data": {"entries": []},
     "ec_data": [],
     "nws_last_fetch": 0,
     "ec_last_fetch": 0,
@@ -51,10 +51,15 @@ if now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL:
             st.session_state["nws_data"] = fetched
             st.session_state["nws_last_fetch"] = now
             st.session_state["last_refreshed"] = now
+            logging.warning("[NWS] Refreshed")
     except Exception as e:
         st.session_state["nws_data"] = {"entries": [], "error": str(e)}
 
-nws_alerts = sorted(st.session_state["nws_data"].get("entries", []), key=lambda x: x.get("published", ""), reverse=True)
+nws_alerts = sorted(
+    st.session_state["nws_data"].get("entries", []),
+    key=lambda x: x.get("published", ""),
+    reverse=True,
+)
 total_nws = len(nws_alerts)
 new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
 
@@ -71,51 +76,75 @@ if now - st.session_state["ec_last_fetch"] > REFRESH_INTERVAL:
     st.session_state["ec_data"] = entries.get("entries", [])
     st.session_state["ec_last_fetch"] = now
     st.session_state["last_refreshed"] = now
+    logging.warning("[EC] Refreshed")
 
-ec_alerts = sorted(st.session_state["ec_data"], key=lambda x: x.get("published", ""), reverse=True)
+ec_alerts = sorted(
+    st.session_state["ec_data"], key=lambda x: x.get("published", ""), reverse=True
+)
 total_ec = len(ec_alerts)
 new_ec = max(0, total_ec - st.session_state["ec_seen_count"])
 
 # --- UI HEADER ---
 st.title("Global Weather Monitor")
-st.caption(f"🔄 Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
+st.caption(
+    f"🔄 Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
+)
 st.markdown("---")
 
-# --- UI: Tiles ---
+# --- Handle Tile Click Logic ---
+query_params = st.get_query_params()
+clicked = query_params.get("clicked", [None])[0]
+
+if clicked == "nws":
+    if st.session_state["active_feed"] == "nws":
+        st.session_state["active_feed"] = None
+    else:
+        st.session_state["active_feed"] = "nws"
+        st.session_state["nws_seen_count"] = total_nws
+elif clicked == "ec":
+    if st.session_state["active_feed"] == "ec":
+        st.session_state["active_feed"] = None
+    else:
+        st.session_state["active_feed"] = "ec"
+        st.session_state["ec_seen_count"] = total_ec
+
+# Reset query param
+st.set_query_params()
+
+# --- UI: Feed Tiles ---
 col1, col2 = st.columns(2)
 
-def tile_style(active, has_new):
-    if active:
-        return "background-color: #f0f2f6; border: 2px solid #2c91f0; font-weight: bold;"
-    elif has_new:
-        return "background-color: #fff5f5; border: 2px solid red;"
-    return "background-color: #f9f9f9; border: 1px solid #ccc;"
-
-# --- Tile: NWS ---
 with col1:
-    if st.button(
-        f"NWS Alerts ({total_nws} total / {new_nws} new)",
-        use_container_width=True,
-    ):
-        if st.session_state["active_feed"] == "nws":
-            st.session_state["active_feed"] = None
-        else:
-            st.session_state["active_feed"] = "nws"
-            st.session_state["nws_seen_count"] = total_nws
+    is_active = st.session_state["active_feed"] == "nws"
+    label = f"🔴 NWS Alerts ({total_nws} / {new_nws} new)" if new_nws > 0 else f"NWS Alerts ({total_nws})"
+    css = "border: 2px solid red;" if new_nws > 0 else "border: 1px solid #ccc;"
+    st.markdown(
+        f"""
+        <a href="?clicked=nws">
+            <div style="padding: 12px; text-align: center; font-weight: bold; {css} border-radius: 6px; background-color: {'#e6f2ff' if is_active else '#f9f9f9'};">
+                {label}
+            </div>
+        </a>
+        """,
+        unsafe_allow_html=True,
+    )
 
-# --- Tile: EC ---
 with col2:
-    if st.button(
-        f"Environment Canada ({total_ec} total / {new_ec} new)",
-        use_container_width=True,
-    ):
-        if st.session_state["active_feed"] == "ec":
-            st.session_state["active_feed"] = None
-        else:
-            st.session_state["active_feed"] = "ec"
-            st.session_state["ec_seen_count"] = total_ec
+    is_active = st.session_state["active_feed"] == "ec"
+    label = f"🔴 Environment Canada ({total_ec} / {new_ec} new)" if new_ec > 0 else f"Environment Canada ({total_ec})"
+    css = "border: 2px solid red;" if new_ec > 0 else "border: 1px solid #ccc;"
+    st.markdown(
+        f"""
+        <a href="?clicked=ec">
+            <div style="padding: 12px; text-align: center; font-weight: bold; {css} border-radius: 6px; background-color: {'#e6f2ff' if is_active else '#f9f9f9'};">
+                {label}
+            </div>
+        </a>
+        """,
+        unsafe_allow_html=True,
+    )
 
-# --- READ-ONLY FEED PANEL ---
+# --- READ-ONLY FEED PANE ---
 feed = st.session_state["active_feed"]
 if feed:
     st.markdown("---")
@@ -124,7 +153,10 @@ if feed:
         for i, alert in enumerate(nws_alerts):
             is_new = i < new_nws
             if is_new:
-                st.markdown("<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>",
+                    unsafe_allow_html=True,
+                )
             st.markdown(f"**{alert.get('title', '')}**")
             st.markdown(alert.get("summary", "")[:300] or "_No summary available._")
             if alert.get("link"):
@@ -137,7 +169,10 @@ if feed:
         for i, alert in enumerate(ec_alerts):
             is_new = i < new_ec
             if is_new:
-                st.markdown("<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div style='height: 4px; background-color: red; margin: 10px 0; border-radius: 2px;'></div>",
+                    unsafe_allow_html=True,
+                )
             st.markdown(f"**{alert.get('title', '')}**")
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
             st.markdown(alert.get("summary", "")[:300] or "_No summary available._")
