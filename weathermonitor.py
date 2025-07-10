@@ -7,6 +7,7 @@ import logging
 import asyncio
 from utils.domain_router import get_scraper
 from scraper.environment_canada import scrape_async
+from streamlit_autorefresh import st_autorefresh
 
 # Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -157,8 +158,6 @@ with col2:
                 st.caption(f"Published: {published}")
             st.markdown("---")
 
-# --- Auto-Rerun Timer ---
-st_autorefresh = st.experimental_singleton(lambda: time.time())
-if time.time() - st_autorefresh() > REFRESH_INTERVAL:
-    st_autorefresh.clear()
-    st.rerun()
+# --- Auto-Refresh Only When All Tiles Are Collapsed ---
+if not st.session_state["nws_show_alerts"] and not st.session_state["ec_show_alerts"]:
+    st_autorefresh(interval=REFRESH_INTERVAL * 1000, key="global_autorefresh")
