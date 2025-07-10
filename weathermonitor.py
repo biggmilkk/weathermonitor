@@ -64,20 +64,30 @@ for bm in filtered:
     except Exception as e:
         other_feeds.append((bm, None, str(e)))
 
-# Display NWS alerts with "new" logic
+# Display NWS alerts in a styled tile
 if nws_alerts:
-    st.markdown(f"### NWS Active Alerts ({len(nws_alerts)} total)")
-
     new_alerts_count = len(nws_alerts) - st.session_state["nws_seen_count"]
     if new_alerts_count < 0:
         new_alerts_count = 0
 
-    show_nws = st.checkbox(f"📡 Show NWS Alerts ({new_alerts_count} new)", value=False)
+    # Tile header string
+    nws_header = f"📡 NWS Active Alerts ({len(nws_alerts)} total"
+    if new_alerts_count > 0:
+        nws_header += f", {new_alerts_count} new"
+    nws_header += ")"
 
-    if show_nws:
-        st.session_state["nws_seen_count"] = len(nws_alerts)
+    # Tile-style container
+    with st.container():
+        st.markdown(f"""
+            <div style='background-color: #f1f3f6; padding: 1rem; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 1rem;'>
+                <h4 style='margin: 0 0 0.5rem 0;'>{nws_header}</h4>
+        """, unsafe_allow_html=True)
 
-        with st.expander("NWS Alerts", expanded=True):
+        # Expander inside tile
+        with st.expander("View Alerts", expanded=False):
+            # Update seen count if opened
+            st.session_state["nws_seen_count"] = len(nws_alerts)
+
             for i, entry in enumerate(nws_alerts):
                 raw_title = entry.get("title", "")
                 title = str(raw_title).strip() or f"⚠️ Alert #{i + 1}"
@@ -101,7 +111,9 @@ if nws_alerts:
                 except Exception as e:
                     st.error(f"⚠️ Failed to display alert: {e}")
 
-# Display all other feeds normally
+        st.markdown("</div>", unsafe_allow_html=True)
+
+# Display other feeds normally
 for bm, data, error in other_feeds:
     domain = bm.get("domain")
     title = bm.get("title")
