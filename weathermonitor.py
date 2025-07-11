@@ -85,9 +85,15 @@ st.markdown("---")
 col1, col2 = st.columns(2)
 
 # --- Button: NWS Alerts ---
-nws_total = len(nws_alerts)
-nws_new = max(0, nws_total - st.session_state["nws_seen_count"])
-nws_label = f"NWS Alerts ({nws_total} total / {nws_new} new)"
+total_nws = len(nws_alerts)
+seen_nws = st.session_state["nws_seen_count"]
+is_open = st.session_state["active_feed"] == "nws"
+nws_will_close = is_open
+nws_future_seen = total_nws if nws_will_close else seen_nws
+nws_new_count = max(0, total_nws - nws_future_seen)
+
+nws_label = f"NWS Alerts ({total_nws} total / {nws_new_count} new)"
+
 with col1:
     if st.button(nws_label, key="btn_nws", use_container_width=True):
         if st.session_state["active_feed"] == "nws":
@@ -97,9 +103,15 @@ with col1:
             st.session_state["active_feed"] = "nws"
 
 # --- Button: EC Alerts ---
-ec_total = len(ec_alerts)
-ec_new = max(0, ec_total - st.session_state["ec_seen_count"])
-ec_label = f"Environment Canada ({ec_total} total / {ec_new} new)"
+total_ec = len(ec_alerts)
+seen_ec = st.session_state["ec_seen_count"]
+is_open_ec = st.session_state["active_feed"] == "ec"
+ec_will_close = is_open_ec
+ec_future_seen = total_ec if ec_will_close else seen_ec
+ec_new_count = max(0, total_ec - ec_future_seen)
+
+ec_label = f"Environment Canada ({total_ec} total / {ec_new_count} new)"
+
 with col2:
     if st.button(ec_label, key="btn_ec", use_container_width=True):
         if st.session_state["active_feed"] == "ec":
