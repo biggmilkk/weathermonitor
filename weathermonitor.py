@@ -94,9 +94,13 @@ nws_new_count = max(0, total_nws - nws_future_seen)
 nws_label = f"NWS Alerts ({total_nws} total / {nws_new_count} new)"
 
 with col1:
-    if st.button(nws_label, key="btn_nws", use_container_width=True):
-        st.session_state["nws_seen_count"] = total_nws
-        st.session_state["active_feed"] = None if is_open_nws else "nws"
+    if st.button(f"NWS Alerts ({total_nws} total / {new_nws} new)", use_container_width=True):
+        # Toggle feed
+        if active_feed == "nws":
+            st.session_state["active_feed"] = None  # Close
+        else:
+            st.session_state["active_feed"] = "nws"  # Open
+            st.session_state["nws_seen_count"] = total_nws  # Clear new alerts immediately
 
 # --- Button: EC Alerts ---
 total_ec = len(ec_alerts)
@@ -108,14 +112,21 @@ ec_new_count = max(0, total_ec - ec_future_seen)
 ec_label = f"Environment Canada ({total_ec} total / {ec_new_count} new)"
 
 with col2:
-    if st.button(ec_label, key="btn_ec", use_container_width=True):
-        st.session_state["ec_seen_count"] = total_ec
-        st.session_state["active_feed"] = None if is_open_ec else "ec"
+    if st.button(f"Environment Canada ({total_ec} total / {new_ec} new)", use_container_width=True):
+        # Toggle feed
+        if active_feed == "ec":
+            st.session_state["active_feed"] = None  # Close
+        else:
+            st.session_state["active_feed"] = "ec"  # Open
+            st.session_state["ec_seen_count"] = total_ec  # Clear new alerts immediately
 
-# --- Recalculate totals AFTER click state updates ---
+# --- Determine current feed state ---
+active_feed = st.session_state["active_feed"]
+
+# --- Compute alert counts ---
 total_nws = len(nws_alerts)
-new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
 total_ec = len(ec_alerts)
+new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
 new_ec = max(0, total_ec - st.session_state["ec_seen_count"])
 
 # --- Display Updated Tile Labels ---
