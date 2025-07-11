@@ -106,7 +106,7 @@ if active:
                 for line in summary.split("\n"):
                     color = "gray"
                     if "[Yellow]" in line:
-                        color = "#FFC000"
+                        color = "#FFFF00"
                     elif "[Orange]" in line:
                         color = "#FFA500"
                     elif "[Red]" in line:
