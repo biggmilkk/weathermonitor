@@ -12,7 +12,7 @@ def get_feed_definitions():
         },
         "meteoalarm": {
             "label": "Meteoalarm Europe",
-            "type": "rss",
+            "type": "rss_meteoalarm",
             "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"
         }
     }
