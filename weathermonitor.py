@@ -105,7 +105,9 @@ if active:
             if active == "meteoalarm":
                 for line in summary.split("\n"):
                     color = "gray"
-                    if "[Orange]" in line:
+                    if "[Yellow]" in line:
+                        color = "#FFC000"
+                    elif "[Orange]" in line:
                         color = "#FFA500"
                     elif "[Red]" in line:
                         color = "#FF0000"
