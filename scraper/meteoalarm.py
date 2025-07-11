@@ -70,7 +70,7 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
                 summary = "\n".join(alert_blocks)
                 entries.append({
                     "title": f"{country} Alerts",
-                    "summary": summary[:500],
+                    "summary": summary,
                     "link": link,
                     "published": pub_date,
                     "region": country,
