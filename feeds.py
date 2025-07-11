@@ -10,4 +10,9 @@ def get_feed_definitions():
             "type": "ec_async",
             "source_file": "environment_canada_sources.json"
         }
+        "meteoalarm": {
+            "label": "Meteoalarm Europe",
+            "type": "rss",
+            "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"
+        }
     }
