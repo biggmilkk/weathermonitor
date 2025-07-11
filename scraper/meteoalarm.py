@@ -4,6 +4,7 @@ import re
 from bs4 import BeautifulSoup
 
 AWARENESS_LEVELS = {
+    "2": "Yellow",
     "3": "Orange",
     "4": "Red",
 }
@@ -35,7 +36,7 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
             description_html = entry.get("description", "")
             link = entry.get("link", "")
 
-            soup = BeautifulSoup(description_html, "html.parser")  # Ensure HTML parser is used
+            soup = BeautifulSoup(description_html, "html.parser")
             rows = soup.find_all("tr")
 
             alert_blocks = []
