@@ -55,8 +55,6 @@ nws_alerts = sorted(
     key=lambda x: x.get("published", ""),
     reverse=True,
 )
-total_nws = len(nws_alerts)
-new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
 
 # --- EC Fetch ---
 ec_sources = []
@@ -75,8 +73,6 @@ if now - st.session_state["ec_last_fetch"] > REFRESH_INTERVAL:
 ec_alerts = sorted(
     st.session_state["ec_data"], key=lambda x: x.get("published", ""), reverse=True
 )
-total_ec = len(ec_alerts)
-new_ec = max(0, total_ec - st.session_state["ec_seen_count"])
 
 # --- UI Header ---
 st.title("Global Weather Monitor")
@@ -88,27 +84,32 @@ st.markdown("---")
 # --- Tile Buttons ---
 col1, col2 = st.columns(2)
 
-# --- Tile: NWS ---
 with col1:
-    label = f"NWS Alerts ({total_nws} total / {new_nws} new)"
-    if st.button(label, key="btn_nws", use_container_width=True):
+    if st.button("NWS Alerts", key="btn_nws", use_container_width=True):
+        st.session_state["nws_seen_count"] = len(nws_alerts)
         if st.session_state["active_feed"] == "nws":
-            # If already open, close it
             st.session_state["active_feed"] = None
         else:
-            # Open and clear new count in one click
             st.session_state["active_feed"] = "nws"
-            st.session_state["nws_seen_count"] = total_nws
 
-# --- Tile: Environment Canada ---
 with col2:
-    label = f"Environment Canada ({total_ec} total / {new_ec} new)"
-    if st.button(label, key="btn_ec", use_container_width=True):
+    if st.button("Environment Canada", key="btn_ec", use_container_width=True):
+        st.session_state["ec_seen_count"] = len(ec_alerts)
         if st.session_state["active_feed"] == "ec":
             st.session_state["active_feed"] = None
         else:
             st.session_state["active_feed"] = "ec"
-            st.session_state["ec_seen_count"] = total_ec
+
+# --- Recalculate totals AFTER click state updates ---
+total_nws = len(nws_alerts)
+new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
+total_ec = len(ec_alerts)
+new_ec = max(0, total_ec - st.session_state["ec_seen_count"])
+
+# --- Display Updated Tile Labels ---
+col1, col2 = st.columns(2)
+col1.markdown(f"**NWS Alerts:** {total_nws} total / {new_nws} new")
+col2.markdown(f"**Environment Canada:** {total_ec} total / {new_ec} new")
 
 # --- Read-Only Feed Panel ---
 feed = st.session_state["active_feed"]
@@ -130,6 +131,7 @@ if feed:
             if alert.get("published"):
                 st.caption(f"Published: {alert['published']}")
             st.markdown("---")
+
     elif feed == "ec":
         st.subheader("Environment Canada Alerts")
         for i, alert in enumerate(ec_alerts):
