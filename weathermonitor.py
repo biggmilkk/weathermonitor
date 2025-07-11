@@ -5,6 +5,7 @@ import json
 import time
 import logging
 import asyncio
+from feeds import get_feed_definitions
 from utils.domain_router import get_scraper
 from scraper.environment_canada import scrape_async
 from streamlit_autorefresh import st_autorefresh
@@ -22,43 +23,42 @@ st_autorefresh(interval=60 * 1000, key="autorefresh")
 now = time.time()
 REFRESH_INTERVAL = 60  # seconds
 
-# --- Feed Configuration ---
-FEEDS = {
-    "nws": {
-        "label": "NWS Alerts",
-        "fetcher": lambda: get_scraper("api.weather.gov")("https://api.weather.gov/alerts/active"),
-        "entries_key": "nws_data",
-        "seen_key": "nws_seen_count",
-        "last_fetch_key": "nws_last_fetch",
-    },
-    "ec": {
-        "label": "Environment Canada",
-        "fetcher": lambda: asyncio.run(scrape_async(json.load(open("environment_canada_sources.json")))),
-        "entries_key": "ec_data",
-        "seen_key": "ec_seen_count",
-        "last_fetch_key": "ec_last_fetch",
-    },
-}
+FEED_CONFIG = get_feed_definitions()
 
-# --- Initialize Session State ---
-for key in FEEDS:
-    st.session_state.setdefault(FEEDS[key]["entries_key"], {"entries": []})
-    st.session_state.setdefault(FEEDS[key]["seen_key"], 0)
-    st.session_state.setdefault(FEEDS[key]["last_fetch_key"], 0)
-st.session_state.setdefault("last_refreshed", now)
-st.session_state.setdefault("active_feed", None)
+# --- Session State Defaults ---
+for key in FEED_CONFIG.keys():
+    if f"{key}_seen_count" not in st.session_state:
+        st.session_state[f"{key}_seen_count"] = 0
+    if f"{key}_data" not in st.session_state:
+        st.session_state[f"{key}_data"] = []
+    if f"{key}_last_fetch" not in st.session_state:
+        st.session_state[f"{key}_last_fetch"] = 0
+
+if "last_refreshed" not in st.session_state:
+    st.session_state["last_refreshed"] = now
+if "active_feed" not in st.session_state:
+    st.session_state["active_feed"] = None
 
 # --- Fetch Feed Data ---
-for feed_key, config in FEEDS.items():
-    if now - st.session_state[config["last_fetch_key"]] > REFRESH_INTERVAL:
+for key, conf in FEED_CONFIG.items():
+    last_fetch = st.session_state[f"{key}_last_fetch"]
+    if now - last_fetch > REFRESH_INTERVAL:
         try:
-            data = config["fetcher"]()
-            if data:
-                st.session_state[config["entries_key"]] = data
-                st.session_state[config["last_fetch_key"]] = now
-                st.session_state["last_refreshed"] = now
+            if conf["type"] == "json":
+                scraper = get_scraper("api.weather.gov")
+                data = scraper(conf["url"])
+            elif conf["type"] == "ec_async":
+                with open(conf["source_file"]) as f:
+                    sources = json.load(f)
+                data = asyncio.run(scrape_async(sources))
+            else:
+                data = {"entries": [], "error": "Unsupported type"}
+            st.session_state[f"{key}_data"] = data.get("entries", [])
+            st.session_state[f"{key}_last_fetch"] = now
+            st.session_state["last_refreshed"] = now
         except Exception as e:
-            st.session_state[config["entries_key"]] = {"entries": [], "error": str(e)}
+            st.session_state[f"{key}_data"] = []
+            logging.warning(f"[{key.upper()} FETCH ERROR] {e}")
 
 # --- UI Header ---
 st.title("Global Weather Monitor")
@@ -67,56 +67,51 @@ st.caption(
 )
 st.markdown("---")
 
-# --- Feed Buttons ---
-with st.container():
-    cols = st.columns(len(FEEDS))
-    clicked_feed = None
-    for idx, (feed_key, config) in enumerate(FEEDS.items()):
-        if cols[idx].button(config["label"], key=f"btn_{feed_key}", use_container_width=True):
-            if st.session_state["active_feed"] == feed_key:
-                # Closing this feed
-                st.session_state[config["seen_key"]] = len(st.session_state[config["entries_key"]]["entries"])
+# --- Handle Button Clicks ---
+cols = st.columns(len(FEED_CONFIG))
+for i, (key, conf) in enumerate(FEED_CONFIG.items()):
+    with cols[i]:
+        if st.button(conf["label"], key=f"btn_{key}", use_container_width=True):
+            if st.session_state["active_feed"] == key:
+                st.session_state[f"{key}_seen_count"] = len(st.session_state[f"{key}_data"])
                 st.session_state["active_feed"] = None
             else:
-                # Switching feeds: clear the *previous* feed's seen count
+                # Clear previous feed's count
                 prev = st.session_state["active_feed"]
-                if prev and prev in FEEDS:
-                    prev_key = FEEDS[prev]["seen_key"]
-                    st.session_state[prev_key] = len(st.session_state[FEEDS[prev]["entries_key"]]["entries"])
-                st.session_state["active_feed"] = feed_key
-            clicked_feed = feed_key
+                if prev:
+                    st.session_state[f"{prev}_seen_count"] = len(st.session_state[f"{prev}_data"])
+                st.session_state["active_feed"] = key
 
-# --- Feed Counters ---
-with st.container():
-    cols = st.columns(len(FEEDS))
-    for idx, (feed_key, config) in enumerate(FEEDS.items()):
-        entries = st.session_state[config["entries_key"]]["entries"]
-        total = len(entries)
-        seen = st.session_state[config["seen_key"]]
-        new = max(0, total - seen)
-        cols[idx].markdown(f"**{config['label']}:** {total} total / {new} new")
+# --- Counters ---
+count_cols = st.columns(len(FEED_CONFIG))
+for i, (key, conf) in enumerate(FEED_CONFIG.items()):
+    data = st.session_state[f"{key}_data"]
+    total = len(data)
+    new = max(0, total - st.session_state[f"{key}_seen_count"])
+    with count_cols[i]:
+        st.markdown(f"**{conf['label']}:** {total} total / {new} new")
 
-# --- Feed Viewer ---
-feed = st.session_state["active_feed"]
-if feed and feed in FEEDS:
+# --- Feed Display ---
+active = st.session_state["active_feed"]
+if active:
     st.markdown("---")
-    entries = st.session_state[FEEDS[feed]["entries_key"]]["entries"]
-    seen_count = st.session_state[FEEDS[feed]["seen_key"]]
-    new_count = max(0, len(entries) - seen_count)
-
-    st.subheader(FEEDS[feed]["label"])
-    for i, alert in enumerate(entries):
-        is_new = i < new_count
+    st.subheader(f"{FEED_CONFIG[active]['label']} Feed")
+    alerts = sorted(
+        st.session_state[f"{active}_data"],
+        key=lambda x: x.get("published", ""),
+        reverse=True
+    )
+    seen_count = st.session_state[f"{active}_seen_count"]
+    for i, alert in enumerate(alerts):
+        is_new = i < (len(alerts) - seen_count)
         if is_new:
             st.markdown(
                 "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>",
-                unsafe_allow_html=True,
+                unsafe_allow_html=True
             )
         st.markdown(f"**{alert.get('title', '')}**")
-        region = alert.get("region", "")
-        province = alert.get("province", "")
-        if region or province:
-            st.caption(f"Region: {region}, {province}")
+        if "region" in alert:
+            st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
         st.markdown(alert.get("summary", "")[:300] or "_No summary available._")
         if alert.get("link"):
             st.markdown(f"[Read more]({alert['link']})")
