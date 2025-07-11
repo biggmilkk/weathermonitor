@@ -28,6 +28,14 @@ AWARENESS_TYPES = {
 
 CACHE_PATH = os.path.join("data", "meteoalarm_cache.json")
 
+test_path = os.path.join("data", "test_write.txt")
+try:
+    with open(test_path, "w") as f:
+        f.write("streamlit write test")
+    logging.warning("[TEST] File written successfully")
+except Exception as e:
+    logging.warning(f"[TEST ERROR] Failed to write file: {e}")
+
 def load_cache():
     if os.path.exists(CACHE_PATH):
         try:
