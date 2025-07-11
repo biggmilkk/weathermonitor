@@ -46,6 +46,7 @@ async def scrape_async(sources):
         all_entries = []
         for result in results:
             all_entries.extend(result)
+        logging.warning(f"[EC DEBUG] Successfully fetched {len(all_entries)} alerts")
         return {
             "entries": all_entries,
             "source": "Environment Canada"
