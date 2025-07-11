@@ -99,6 +99,7 @@ if active:
         st.markdown(f"**{alert.get('title', '')}**")
         if "region" in alert:
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
+
         summary = alert.get("summary", "")
         if summary:
             if active == "meteoalarm":
@@ -108,13 +109,15 @@ if active:
                         color = "#FFA500"
                     elif "[Red]" in line:
                         color = "#FF0000"
-
                     st.markdown(
                         f"<span style='color:{color};font-size:18px'>&#9679;</span> {line}",
                         unsafe_allow_html=True
                     )
             else:
-                st.markdown(summary)
+                max_len = 500
+                is_truncated = len(summary) > max_len
+                truncated = summary[:max_len] + ("..." if is_truncated else "")
+                st.markdown(truncated)
         else:
             st.markdown("_No summary available._")
 
