@@ -108,7 +108,7 @@ if active:
                     if "[Yellow]" in line:
                         color = "#FFFF00"
                     elif "[Orange]" in line:
-                        color = "#FFA500"
+                        color = "#FF8C00"
                     elif "[Red]" in line:
                         color = "#FF0000"
                     st.markdown(
