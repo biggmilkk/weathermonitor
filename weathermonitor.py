@@ -109,12 +109,6 @@ if active:
                     color = "#FFA500"  # orange
                 elif line.startswith("[Red]"):
                     color = "#FF0000"  # red
-
-                text = line.replace("[Orange]", "").replace("[Red]", "").strip()
-                st.markdown(
-                    f"<span style='color:{color};font-size:18px'>&#9679;</span> {text}",
-                    unsafe_allow_html=True
-                )
             else:
                 st.markdown(summary)
         else:
