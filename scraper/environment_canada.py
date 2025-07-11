@@ -43,7 +43,7 @@ async def fetch_and_parse(session, region):
     except Exception as e:
         return []
 
-async def scrape_async(sources):
+async def scrape_ec(sources):
     async with aiohttp.ClientSession() as session:
         tasks = [fetch_and_parse(session, region) for region in sources if region.get("ATOM URL")]
         results = await asyncio.gather(*tasks)
