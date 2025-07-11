@@ -80,7 +80,7 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
                     if match:
                         awt, level = match.groups()
 
-                if level in ["3", "4"]:  # Only orange/red
+                if level in ["2", "3", "4"]:
                     level_name = AWARENESS_LEVELS[level]
                     type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
                     time_info = cells[1].get_text(" ", strip=True)
