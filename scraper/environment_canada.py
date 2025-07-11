@@ -41,7 +41,6 @@ async def fetch_and_parse(session, region):
             return entries
 
     except Exception as e:
-        logging.warning(f"[EC FETCH ERROR] {region.get('Region Name')}: {e}")
         return []
 
 async def scrape_async(sources):
