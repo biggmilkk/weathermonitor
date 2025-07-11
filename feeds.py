@@ -9,7 +9,7 @@ def get_feed_definitions():
             "label": "Environment Canada",
             "type": "ec_async",
             "source_file": "environment_canada_sources.json"
-        }
+        },
         "meteoalarm": {
             "label": "Meteoalarm Europe",
             "type": "rss",
