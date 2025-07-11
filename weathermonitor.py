@@ -100,22 +100,23 @@ if active:
         if "region" in alert:
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
         summary = alert.get("summary", "")
-        if summary:
-            if active == "meteoalarm":
-                for line in summary.split("\n"):
-                    color = "gray"
-                if line.startswith("[Orange]"):
-                    color = "#FFA500"  # orange
-                elif line.startswith("[Red]"):
-                    color = "#FF0000"  # red
-                st.markdown(
-                    f"<span style='color:{color};font-size:18px'>&#9679;</span> {line}",
-                    unsafe_allow_html=True
-                )
-            else:
-                st.markdown(summary)
-        else:
-            st.markdown("_No summary available._")
+if summary:
+    if active == "meteoalarm":
+        for line in summary.split("\n"):
+            color = "gray"
+            if line.startswith("[Orange]"):
+                color = "#FFA500"
+            elif line.startswith("[Red]"):
+                color = "#FF0000"
+
+            text = line.replace("[Orange]", "").replace("[Red]", "").strip()
+            st.markdown(
+                f"<span style='color:{color};font-size:18px'>&#9679;</span> {text}",
+                unsafe_allow_html=True
+            )
+    else:
+        st.markdown(summary)
+
 
         if alert.get("link"):
             st.markdown(f"[Read more]({alert['link']})")
