@@ -27,7 +27,7 @@ def scrape(url="https://api.weather.gov/alerts/active"):
         feed = response.json()
         if not isinstance(feed, dict):
             raise ValueError("Invalid JSON structure from NWS")
-        logging.warning(f"[NWS DEBUG] Successfully fetched JSON with {len(feed.get('features', []))} features")
+        logging.warning(f"[NWS DEBUG] Successfully fetched {len(feed.get('features', []))} alerts")
     except Exception as e:
         logging.warning(f"[NWS SCRAPER ERROR] Fetch failed: {e}")
         return {
