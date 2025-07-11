@@ -6,6 +6,6 @@ from scraper.nws_active_alerts import scrape_nws
 
 SCRAPER_REGISTRY = {
     "json": lambda conf: scrape_nws(conf["url"]),
-    "ec_async": lambda conf: asyncio.run(scrape_async(json.load(open(conf["source_file"])))),
+    "ec_async": lambda conf: asyncio.run(scrape_ec(json.load(open(conf["source_file"])))),
     "rss_meteoalarm": lambda conf: scrape_meteoalarm(conf["url"]),
 }
