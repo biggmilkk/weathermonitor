@@ -25,8 +25,12 @@ async def fetch_and_parse(session, region):
                 if not title or title.strip().upper().startswith("NO ALERT"):
                     continue
 
+                alert_type = re.split(r",\s*", title)[0].strip().upper()
+                if "WARNING" not in alert_type and alert_type != "SEVERE THUNDERSTORM WATCH":
+                    continue
+                
                 entries.append({
-                    "title": re.split(r",\s*", title)[0].strip(),
+                    "title": alert_type,
                     "summary": summary_elem.text[:500] if summary_elem is not None else "",
                     "link": link_elem.attrib.get("href", "") if link_elem is not None else "",
                     "published": published_elem.text if published_elem is not None else "",
