@@ -48,7 +48,7 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
     try:
         feed = feedparser.parse(url)
         entries = []
-        cache = load_cache()
+        old_cache = load_cache()
         new_cache = {}
 
         for entry in feed.entries:
@@ -59,7 +59,7 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
 
             soup = BeautifulSoup(description_html, "html.parser")
             rows = soup.find_all("tr")
-            alert_blocks = []
+            summary_lines = []
             fingerprint_blocks = []
 
             for row in rows:
@@ -67,38 +67,34 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
                 if len(cells) != 2:
                     continue
 
-                level = None
-                awt = None
-
                 cell = cells[0]
                 level = cell.get("data-awareness-level")
                 awt = cell.get("data-awareness-type")
 
-                # Fallback: regex from text
                 if not level or not awt:
                     match = re.search(r"awt:(\d+)\s+level:(\d+)", cell.get_text(strip=True))
                     if match:
                         awt, level = match.groups()
 
-                if level in ["2", "3", "4"]:
-                    level_name = AWARENESS_LEVELS[level]
-                    type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
-                    time_info = cells[1].get_text(" ", strip=True)
-                    alert_text = f"[{level_name}] {type_name} - {time_info}"
-                    alert_blocks.append(alert_text)
-                    fingerprint_blocks.append(f"{level}:{awt}:{time_info}")
+                if level not in AWARENESS_LEVELS:
+                    continue
 
-            if not alert_blocks:
-                continue  # No relevant alerts
+                level_name = AWARENESS_LEVELS[level]
+                type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
+                time_info = cells[1].get_text(" ", strip=True)
 
-            new_cache[country] = fingerprint_blocks
+                fingerprint = f"{level}:{awt}:{time_info}"
+                fingerprint_blocks.append(fingerprint)
 
-            # Compare with cached version
-            if cache.get(country) != fingerprint_blocks:
-                summary = "\n".join(alert_blocks)
+                prev_fps = old_cache.get(country, [])
+                prefix = "[NEW] " if fingerprint not in prev_fps else ""
+                summary_lines.append(f"{prefix}[{level_name}] {type_name} - {time_info}")
+
+            if summary_lines:
+                new_cache[country] = fingerprint_blocks
                 entries.append({
                     "title": f"{country} Alerts",
-                    "summary": summary,
+                    "summary": "\n".join(summary_lines),
                     "link": link,
                     "published": pub_date,
                     "region": country,
@@ -107,7 +103,7 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
 
         save_cache(new_cache)
 
-        logging.warning(f"[METEOALARM DEBUG] Found {len(entries)} updated country alerts with yellow/orange/red levels")
+        logging.warning(f"[METEOALARM DEBUG] Found {len(entries)} country alerts with yellow/orange/red levels")
         return {
             "entries": entries,
             "source": url
