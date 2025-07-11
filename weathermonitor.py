@@ -110,7 +110,7 @@ if active:
                 elif line.startswith("[Red]"):
                     color = "#FF0000"  # red
                 st.markdown(
-                    f"<span style='color:{color};font-size:18px'>&#9679;</span> {text}",
+                    f"<span style='color:{color};font-size:18px'>&#9679;</span> {line}",
                     unsafe_allow_html=True
                 )
             else:
