@@ -77,7 +77,7 @@ ec_alerts = sorted(
 # --- UI Header ---
 st.title("Global Weather Monitor")
 st.caption(
-    f"🔄 Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
+    f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
 )
 st.markdown("---")
 
@@ -85,22 +85,26 @@ st.markdown("---")
 col1, col2 = st.columns(2)
 
 # --- Button: NWS Alerts ---
-nws_label = f"NWS Alerts ({len(nws_alerts)} total / {max(0, len(nws_alerts) - st.session_state['nws_seen_count'])} new)"
+nws_total = len(nws_alerts)
+nws_new = max(0, nws_total - st.session_state["nws_seen_count"])
+nws_label = f"NWS Alerts ({nws_total} total / {nws_new} new)"
 with col1:
     if st.button(nws_label, key="btn_nws", use_container_width=True):
-        st.session_state["nws_seen_count"] = len(nws_alerts)
         if st.session_state["active_feed"] == "nws":
             st.session_state["active_feed"] = None
+            st.session_state["nws_seen_count"] = nws_total
         else:
             st.session_state["active_feed"] = "nws"
 
 # --- Button: EC Alerts ---
-ec_label = f"Environment Canada ({len(ec_alerts)} total / {max(0, len(ec_alerts) - st.session_state['ec_seen_count'])} new)"
+ec_total = len(ec_alerts)
+ec_new = max(0, ec_total - st.session_state["ec_seen_count"])
+ec_label = f"Environment Canada ({ec_total} total / {ec_new} new)"
 with col2:
     if st.button(ec_label, key="btn_ec", use_container_width=True):
-        st.session_state["ec_seen_count"] = len(ec_alerts)
         if st.session_state["active_feed"] == "ec":
             st.session_state["active_feed"] = None
+            st.session_state["ec_seen_count"] = ec_total
         else:
             st.session_state["active_feed"] = "ec"
 
