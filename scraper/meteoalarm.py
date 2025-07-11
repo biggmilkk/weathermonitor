@@ -44,9 +44,9 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
                     continue
 
                 cell = cells[0]
-                level = cell.attrs.get("data-awareness-level")
-                awt = cell.attrs.get("data-awareness-type")
-
+                print("DEBUG RAW CELL:", cell)
+                print("data-awareness-level:", cell.get("data-awareness-level"))
+                print("data-awareness-type:", cell.get("data-awareness-type"))
                 if level in AWARENESS_LEVELS:
                     level_name = AWARENESS_LEVELS[level]
                     type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
