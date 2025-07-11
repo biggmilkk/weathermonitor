@@ -50,7 +50,7 @@ def scrape_nws(url="https://api.weather.gov/alerts/active"):
 
             entries.append({
                 "title": props.get("headline", event_type or "No Title"),
-                "summary": props.get("description", "")[:500],
+                "summary": props.get("description", ""),
                 "link": props.get("web", ""),
                 "published": props.get("effective", "")
             })
