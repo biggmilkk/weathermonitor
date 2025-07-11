@@ -2,7 +2,7 @@ import feedparser
 import logging
 from bs4 import BeautifulSoup
 
-def scrape(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"):
+def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"):
     try:
         feed = feedparser.parse(url)
         entries = []
