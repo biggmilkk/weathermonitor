@@ -100,7 +100,6 @@ if active:
         if "region" in alert:
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
         summary = alert.get("summary", "")
-        summary = alert.get("summary", "")
         if summary:
             if active == "meteoalarm":
                 for line in summary.split("\n"):
