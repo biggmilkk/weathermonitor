@@ -1,5 +1,6 @@
 import feedparser
 import logging
+import re
 from bs4 import BeautifulSoup
 
 AWARENESS_LEVELS = {
