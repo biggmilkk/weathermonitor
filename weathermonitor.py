@@ -22,59 +22,43 @@ st_autorefresh(interval=60 * 1000, key="autorefresh")
 now = time.time()
 REFRESH_INTERVAL = 60  # seconds
 
-# --- Session State Defaults ---
-defaults = {
-    "nws_seen_count": 0,
-    "ec_seen_count": 0,
-    "nws_data": None,
-    "ec_data": [],
-    "nws_last_fetch": 0,
-    "ec_last_fetch": 0,
-    "last_refreshed": now,
-    "active_feed": None,
+# --- Feed Configuration ---
+FEEDS = {
+    "nws": {
+        "label": "NWS Alerts",
+        "fetcher": lambda: get_scraper("api.weather.gov")("https://api.weather.gov/alerts/active"),
+        "entries_key": "nws_data",
+        "seen_key": "nws_seen_count",
+        "last_fetch_key": "nws_last_fetch",
+    },
+    "ec": {
+        "label": "Environment Canada",
+        "fetcher": lambda: asyncio.run(scrape_async(json.load(open("environment_canada_sources.json")))),
+        "entries_key": "ec_data",
+        "seen_key": "ec_seen_count",
+        "last_fetch_key": "ec_last_fetch",
+    },
 }
-for key, val in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
 
-# --- Fetch NWS Alerts ---
-nws_scraper = get_scraper("api.weather.gov")
-nws_url = "https://api.weather.gov/alerts/active"
-if now - st.session_state["nws_last_fetch"] > REFRESH_INTERVAL:
-    try:
-        nws_data = nws_scraper(nws_url)
-        if nws_data:
-            st.session_state["nws_data"] = nws_data
-            st.session_state["nws_last_fetch"] = now
-            st.session_state["last_refreshed"] = now
-    except Exception as e:
-        st.session_state["nws_data"] = {"entries": [], "error": str(e)}
+# --- Initialize Session State ---
+for key in FEEDS:
+    st.session_state.setdefault(FEEDS[key]["entries_key"], {"entries": []})
+    st.session_state.setdefault(FEEDS[key]["seen_key"], 0)
+    st.session_state.setdefault(FEEDS[key]["last_fetch_key"], 0)
+st.session_state.setdefault("last_refreshed", now)
+st.session_state.setdefault("active_feed", None)
 
-nws_alerts = sorted(
-    st.session_state["nws_data"].get("entries", []),
-    key=lambda x: x.get("published", ""),
-    reverse=True,
-)
-
-# --- Fetch Environment Canada Alerts ---
-ec_sources = []
-try:
-    with open("environment_canada_sources.json") as f:
-        ec_sources = json.load(f)
-except Exception as e:
-    logging.warning(f"[EC LOAD ERROR] {e}")
-
-if now - st.session_state["ec_last_fetch"] > REFRESH_INTERVAL:
-    entries = asyncio.run(scrape_async(ec_sources))
-    st.session_state["ec_data"] = entries.get("entries", [])
-    st.session_state["ec_last_fetch"] = now
-    st.session_state["last_refreshed"] = now
-
-ec_alerts = sorted(
-    st.session_state["ec_data"],
-    key=lambda x: x.get("published", ""),
-    reverse=True,
-)
+# --- Fetch Feed Data ---
+for feed_key, config in FEEDS.items():
+    if now - st.session_state[config["last_fetch_key"]] > REFRESH_INTERVAL:
+        try:
+            data = config["fetcher"]()
+            if data:
+                st.session_state[config["entries_key"]] = data
+                st.session_state[config["last_fetch_key"]] = now
+                st.session_state["last_refreshed"] = now
+        except Exception as e:
+            st.session_state[config["entries_key"]] = {"entries": [], "error": str(e)}
 
 # --- UI Header ---
 st.title("Global Weather Monitor")
@@ -83,83 +67,59 @@ st.caption(
 )
 st.markdown("---")
 
-# --- Handle Button Clicks ---
-nws_clicked = False
-ec_clicked = False
-
-# Determine toggle logic and update seen counts only on close
+# --- Feed Buttons ---
 with st.container():
-    col1, col2 = st.columns([1, 1])
-
-    with col1:
-        if st.button("NWS Alerts", key="btn_nws", use_container_width=True):
-            nws_clicked = True
-            if st.session_state["active_feed"] == "nws":
-                st.session_state["nws_seen_count"] = len(nws_alerts)
+    cols = st.columns(len(FEEDS))
+    clicked_feed = None
+    for idx, (feed_key, config) in enumerate(FEEDS.items()):
+        if cols[idx].button(config["label"], key=f"btn_{feed_key}", use_container_width=True):
+            if st.session_state["active_feed"] == feed_key:
+                # Closing this feed
+                st.session_state[config["seen_key"]] = len(st.session_state[config["entries_key"]]["entries"])
                 st.session_state["active_feed"] = None
             else:
-                st.session_state["active_feed"] = "nws"
+                # Switching feeds: clear the *previous* feed's seen count
+                prev = st.session_state["active_feed"]
+                if prev and prev in FEEDS:
+                    prev_key = FEEDS[prev]["seen_key"]
+                    st.session_state[prev_key] = len(st.session_state[FEEDS[prev]["entries_key"]]["entries"])
+                st.session_state["active_feed"] = feed_key
+            clicked_feed = feed_key
 
-    with col2:
-        if st.button("Environment Canada", key="btn_ec", use_container_width=True):
-            ec_clicked = True
-            if st.session_state["active_feed"] == "ec":
-                st.session_state["ec_seen_count"] = len(ec_alerts)
-                st.session_state["active_feed"] = None
-            else:
-                st.session_state["active_feed"] = "ec"
-
-# --- Recalculate counters after click logic ---
-total_nws = len(nws_alerts)
-new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
-total_ec = len(ec_alerts)
-new_ec = max(0, total_ec - st.session_state["ec_seen_count"])
-
-# --- Counters Positioned Directly Under Buttons ---
+# --- Feed Counters ---
 with st.container():
-    counter1, counter2 = st.columns([1, 1])
-    with counter1:
-        st.markdown(f"**NWS:** {total_nws} total / {new_nws} new")
-    with counter2:
-        st.markdown(f"**Environment Canada:** {total_ec} total / {new_ec} new")
+    cols = st.columns(len(FEEDS))
+    for idx, (feed_key, config) in enumerate(FEEDS.items()):
+        entries = st.session_state[config["entries_key"]]["entries"]
+        total = len(entries)
+        seen = st.session_state[config["seen_key"]]
+        new = max(0, total - seen)
+        cols[idx].markdown(f"**{config['label']}:** {total} total / {new} new")
 
-# --- Read-Only Feed Panel ---
+# --- Feed Viewer ---
 feed = st.session_state["active_feed"]
-if feed:
+if feed and feed in FEEDS:
     st.markdown("---")
-    if feed == "nws":
-        st.subheader("NWS Active Alerts")
-        for i, alert in enumerate(nws_alerts):
-            is_new = i < new_nws
-            if is_new:
-                st.markdown(
-                    "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>",
-                    unsafe_allow_html=True,
-                )
-            st.markdown(f"**{alert.get('title', '')}**")
-            st.markdown(alert.get("summary", "")[:300] or "_No summary available._")
-            if alert.get("link"):
-                st.markdown(f"[Read more]({alert['link']})")
-            if alert.get("published"):
-                st.caption(f"Published: {alert['published']}")
-            st.markdown("---")
+    entries = st.session_state[FEEDS[feed]["entries_key"]]["entries"]
+    seen_count = st.session_state[FEEDS[feed]["seen_key"]]
+    new_count = max(0, len(entries) - seen_count)
 
-    elif feed == "ec":
-        st.subheader("Environment Canada Alerts")
-        for i, alert in enumerate(ec_alerts):
-            is_new = i < new_ec
-            if is_new:
-                st.markdown(
-                    "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>",
-                    unsafe_allow_html=True,
-                )
-            st.markdown(f"**{alert.get('title', '')}**")
-            st.caption(
-                f"Region: {alert.get('region', '')}, {alert.get('province', '')}"
+    st.subheader(FEEDS[feed]["label"])
+    for i, alert in enumerate(entries):
+        is_new = i < new_count
+        if is_new:
+            st.markdown(
+                "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>",
+                unsafe_allow_html=True,
             )
-            st.markdown(alert.get("summary", "")[:300] or "_No summary available._")
-            if alert.get("link"):
-                st.markdown(f"[Read more]({alert['link']})")
-            if alert.get("published"):
-                st.caption(f"Published: {alert['published']}")
-            st.markdown("---")
+        st.markdown(f"**{alert.get('title', '')}**")
+        region = alert.get("region", "")
+        province = alert.get("province", "")
+        if region or province:
+            st.caption(f"Region: {region}, {province}")
+        st.markdown(alert.get("summary", "")[:300] or "_No summary available._")
+        if alert.get("link"):
+            st.markdown(f"[Read more]({alert['link']})")
+        if alert.get("published"):
+            st.caption(f"Published: {alert['published']}")
+        st.markdown("---")
