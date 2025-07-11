@@ -76,6 +76,13 @@ ec_alerts = sorted(
     reverse=True,
 )
 
+# --- UI Header ---
+st.title("Global Weather Monitor")
+st.caption(
+    f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
+)
+st.markdown("---")
+
 # --- Handle Button Clicks ---
 nws_clicked = False
 ec_clicked = False
@@ -107,13 +114,6 @@ total_nws = len(nws_alerts)
 new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
 total_ec = len(ec_alerts)
 new_ec = max(0, total_ec - st.session_state["ec_seen_count"])
-
-# --- UI Header ---
-st.title("Global Weather Monitor")
-st.caption(
-    f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
-)
-st.markdown("---")
 
 # --- Counters Positioned Directly Under Buttons ---
 with st.container():
