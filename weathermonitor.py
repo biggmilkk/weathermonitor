@@ -5,6 +5,7 @@ import json
 import time
 import logging
 import asyncio
+from datetime import datetime
 from feeds import get_feed_definitions
 from utils.domain_router import get_scraper
 from scraper.environment_canada import scrape_async
@@ -92,13 +93,19 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         st.markdown(f"**{conf['label']}:** {total} total / {new} new")
 
 # --- Feed Display ---
+def parse_published(alert):
+    try:
+        return datetime.fromisoformat(alert.get("published", "").replace("Z", "+00:00"))
+    except Exception:
+        return datetime.min
+
 active = st.session_state["active_feed"]
 if active:
     st.markdown("---")
     st.subheader(f"{FEED_CONFIG[active]['label']} Feed")
     alerts = sorted(
         st.session_state[f"{active}_data"],
-        key=lambda x: x.get("published", ""),
+        key=parse_published,
         reverse=True
     )
     seen_count = st.session_state[f"{active}_seen_count"]
