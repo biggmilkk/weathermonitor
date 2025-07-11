@@ -25,7 +25,7 @@ async def fetch_and_parse(session, region):
                     continue
 
                 entries.append({
-                    "title": title,
+                    "title": title.split(",")[0].strip(),
                     "summary": summary_elem.text[:500] if summary_elem is not None else "",
                     "link": link_elem.attrib.get("href", "") if link_elem is not None else "",
                     "published": published_elem.text if published_elem is not None else "",
