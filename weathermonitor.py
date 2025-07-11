@@ -22,7 +22,7 @@ st_autorefresh(interval=60 * 1000, key="autorefresh")
 now = time.time()
 REFRESH_INTERVAL = 60  # seconds
 
-# Session state defaults
+# --- Session State Defaults ---
 defaults = {
     "nws_seen_count": 0,
     "ec_seen_count": 0,
@@ -33,9 +33,9 @@ defaults = {
     "last_refreshed": now,
     "active_feed": None,
 }
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+for key, val in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
 
 # --- Fetch NWS Alerts ---
 nws_scraper = get_scraper("api.weather.gov")
@@ -56,7 +56,7 @@ nws_alerts = sorted(
     reverse=True,
 )
 
-# --- Fetch EC Alerts ---
+# --- Fetch Environment Canada Alerts ---
 ec_sources = []
 try:
     with open("environment_canada_sources.json") as f:
@@ -71,58 +71,62 @@ if now - st.session_state["ec_last_fetch"] > REFRESH_INTERVAL:
     st.session_state["last_refreshed"] = now
 
 ec_alerts = sorted(
-    st.session_state["ec_data"], key=lambda x: x.get("published", ""), reverse=True
+    st.session_state["ec_data"],
+    key=lambda x: x.get("published", ""),
+    reverse=True,
 )
 
-# --- Calculate counts ---
+# --- Handle Button Clicks ---
+nws_clicked = False
+ec_clicked = False
+
+# Determine toggle logic and update seen counts only on close
+with st.container():
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        if st.button("NWS Alerts", key="btn_nws", use_container_width=True):
+            nws_clicked = True
+            if st.session_state["active_feed"] == "nws":
+                st.session_state["nws_seen_count"] = len(nws_alerts)
+                st.session_state["active_feed"] = None
+            else:
+                st.session_state["active_feed"] = "nws"
+
+    with col2:
+        if st.button("Environment Canada", key="btn_ec", use_container_width=True):
+            ec_clicked = True
+            if st.session_state["active_feed"] == "ec":
+                st.session_state["ec_seen_count"] = len(ec_alerts)
+                st.session_state["active_feed"] = None
+            else:
+                st.session_state["active_feed"] = "ec"
+
+# --- Recalculate counters after click logic ---
 total_nws = len(nws_alerts)
 new_nws = max(0, total_nws - st.session_state["nws_seen_count"])
 total_ec = len(ec_alerts)
 new_ec = max(0, total_ec - st.session_state["ec_seen_count"])
 
-# --- Header ---
+# --- UI Header ---
 st.title("Global Weather Monitor")
 st.caption(
-    f"🔄 Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
+    f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
 )
 st.markdown("---")
 
-# --- Tile Layout ---
-tile1, tile2 = st.columns(2)
+# --- Counters Positioned Directly Under Buttons ---
+with st.container():
+    counter1, counter2 = st.columns([1, 1])
+    with counter1:
+        st.markdown(f"**NWS:** {total_nws} total / {new_nws} new")
+    with counter2:
+        st.markdown(f"**Environment Canada:** {total_ec} total / {new_ec} new")
 
-# --- NWS Tile ---
-with tile1:
-    with st.container():
-        if st.button("NWS Alerts", key="btn_nws", use_container_width=True):
-            if st.session_state["active_feed"] == "nws":
-                st.session_state["active_feed"] = None
-                st.session_state["nws_seen_count"] = total_nws
-            else:
-                st.session_state["active_feed"] = "nws"
-        st.markdown(
-            f"<div style='text-align:center; font-size: 0.9em;'>🧭 {total_nws} total / 🔴 {new_nws} new</div>",
-            unsafe_allow_html=True,
-        )
-
-# --- EC Tile ---
-with tile2:
-    with st.container():
-        if st.button("Environment Canada", key="btn_ec", use_container_width=True):
-            if st.session_state["active_feed"] == "ec":
-                st.session_state["active_feed"] = None
-                st.session_state["ec_seen_count"] = total_ec
-            else:
-                st.session_state["active_feed"] = "ec"
-        st.markdown(
-            f"<div style='text-align:center; font-size: 0.9em;'>🧭 {total_ec} total / 🔴 {new_ec} new</div>",
-            unsafe_allow_html=True,
-        )
-
-# --- Feed Panel ---
+# --- Read-Only Feed Panel ---
 feed = st.session_state["active_feed"]
 if feed:
     st.markdown("---")
-
     if feed == "nws":
         st.subheader("NWS Active Alerts")
         for i, alert in enumerate(nws_alerts):
