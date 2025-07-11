@@ -87,20 +87,16 @@ col1, col2 = st.columns(2)
 # --- Button: NWS Alerts ---
 total_nws = len(nws_alerts)
 seen_nws = st.session_state["nws_seen_count"]
-is_open = st.session_state["active_feed"] == "nws"
-nws_will_close = is_open
+is_open_nws = st.session_state["active_feed"] == "nws"
+nws_will_close = is_open_nws
 nws_future_seen = total_nws if nws_will_close else seen_nws
 nws_new_count = max(0, total_nws - nws_future_seen)
-
 nws_label = f"NWS Alerts ({total_nws} total / {nws_new_count} new)"
 
 with col1:
     if st.button(nws_label, key="btn_nws", use_container_width=True):
-        if st.session_state["active_feed"] == "nws":
-            st.session_state["nws_seen_count"] = nws_total
-            st.session_state["active_feed"] = None
-        else:
-            st.session_state["active_feed"] = "nws"
+        st.session_state["nws_seen_count"] = total_nws
+        st.session_state["active_feed"] = None if is_open_nws else "nws"
 
 # --- Button: EC Alerts ---
 total_ec = len(ec_alerts)
@@ -109,16 +105,12 @@ is_open_ec = st.session_state["active_feed"] == "ec"
 ec_will_close = is_open_ec
 ec_future_seen = total_ec if ec_will_close else seen_ec
 ec_new_count = max(0, total_ec - ec_future_seen)
-
 ec_label = f"Environment Canada ({total_ec} total / {ec_new_count} new)"
 
 with col2:
     if st.button(ec_label, key="btn_ec", use_container_width=True):
-        if st.session_state["active_feed"] == "ec":
-            st.session_state["ec_seen_count"] = ec_total
-            st.session_state["active_feed"] = None
-        else:
-            st.session_state["active_feed"] = "ec"
+        st.session_state["ec_seen_count"] = total_ec
+        st.session_state["active_feed"] = None if is_open_ec else "ec"
 
 # --- Recalculate totals AFTER click state updates ---
 total_nws = len(nws_alerts)
