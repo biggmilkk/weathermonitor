@@ -14,7 +14,7 @@ ALLOWED_EVENTS = {
     "Air Quality Alert"
 }
 
-def scrape(url="https://api.weather.gov/alerts/active"):
+def scrape_nws(url="https://api.weather.gov/alerts/active"):
     headers = {
         "User-Agent": "WeatherMonitorApp (your@email.com)"
     }
