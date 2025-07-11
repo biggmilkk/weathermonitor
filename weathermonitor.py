@@ -84,16 +84,20 @@ st.markdown("---")
 # --- Tile Buttons ---
 col1, col2 = st.columns(2)
 
+# --- Button: NWS Alerts ---
+nws_label = f"NWS Alerts ({len(nws_alerts)} total / {max(0, len(nws_alerts) - st.session_state['nws_seen_count'])} new)"
 with col1:
-    if st.button("NWS Alerts", key="btn_nws", use_container_width=True):
+    if st.button(nws_label, key="btn_nws", use_container_width=True):
         st.session_state["nws_seen_count"] = len(nws_alerts)
         if st.session_state["active_feed"] == "nws":
             st.session_state["active_feed"] = None
         else:
             st.session_state["active_feed"] = "nws"
 
+# --- Button: EC Alerts ---
+ec_label = f"Environment Canada ({len(ec_alerts)} total / {max(0, len(ec_alerts) - st.session_state['ec_seen_count'])} new)"
 with col2:
-    if st.button("Environment Canada", key="btn_ec", use_container_width=True):
+    if st.button(ec_label, key="btn_ec", use_container_width=True):
         st.session_state["ec_seen_count"] = len(ec_alerts)
         if st.session_state["active_feed"] == "ec":
             st.session_state["active_feed"] = None
