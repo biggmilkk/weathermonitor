@@ -99,7 +99,13 @@ if active:
         st.markdown(f"**{alert.get('title', '')}**")
         if "region" in alert:
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
-        st.markdown(alert.get("summary", "")[:300] or "_No summary available._")
+        summary = alert.get("summary", "")
+        if summary:
+            for line in summary.split("\n"):
+                st.markdown(f"- {line}")
+        else:
+            st.markdown("_No summary available._")
+
         if alert.get("link"):
             st.markdown(f"[Read more]({alert['link']})")
         if alert.get("published"):
