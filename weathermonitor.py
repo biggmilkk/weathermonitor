@@ -104,18 +104,19 @@ if active:
             if active == "meteoalarm":
                 for line in summary.split("\n"):
                     color = "gray"
-                    if line.startswith("[Orange]"):
+                    if "[Orange]" in line:
                         color = "#FFA500"
-                    elif line.startswith("[Red]"):
+                    elif "[Red]" in line:
                         color = "#FF0000"
 
-                    text = line.replace("[Orange]", "").replace("[Red]", "").strip()
                     st.markdown(
-                        f"<span style='color:{color};font-size:18px'>&#9679;</span> {text}",
+                        f"<span style='color:{color};font-size:18px'>&#9679;</span> {line}",
                         unsafe_allow_html=True
                     )
             else:
                 st.markdown(summary)
+        else:
+            st.markdown("_No summary available._")
 
         if alert.get("link"):
             st.markdown(f"[Read more]({alert['link']})")
