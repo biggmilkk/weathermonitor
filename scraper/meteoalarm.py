@@ -107,7 +107,7 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
 
         save_cache(new_cache)
 
-        logging.warning(f"[METEOALARM DEBUG] Found {len(entries)} updated country alerts with orange/red levels")
+        logging.warning(f"[METEOALARM DEBUG] Found {len(entries)} updated country alerts with yellow/orange/red levels")
         return {
             "entries": entries,
             "source": url
