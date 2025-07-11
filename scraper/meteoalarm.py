@@ -38,15 +38,27 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
             rows = soup.find_all("tr")
 
             alert_blocks = []
+            
             for row in rows:
                 cells = row.find_all("td")
                 if len(cells) != 2:
                     continue
 
+                level = None
+                awt = None
+
+                # Try reading data-* attributes
                 cell = cells[0]
-                print("DEBUG RAW CELL:", cell)
-                print("data-awareness-level:", cell.get("data-awareness-level"))
-                print("data-awareness-type:", cell.get("data-awareness-type"))
+                level = cell.get("data-awareness-level")
+                awt = cell.get("data-awareness-type")
+
+                # Fallback to regex if attributes not found
+                if not level or not awt:
+                    match = re.search(r"awt:(\d+)\s+level:(\d+)", cell.get_text(strip=True))
+                    if match:
+                        awt, level = match.groups()
+
+                # Only proceed if level is orange or red
                 if level in AWARENESS_LEVELS:
                     level_name = AWARENESS_LEVELS[level]
                     type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
