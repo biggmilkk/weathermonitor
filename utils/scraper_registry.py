@@ -1,8 +1,8 @@
 import json
 import asyncio
-from scraper.environment_canada import scrape_async
-from scraper.meteoalarm import scrape as scrape_meteoalarm
-from scraper.nws_active_alerts import scrape as scrape_nws
+from scraper.environment_canada import scrape_ec
+from scraper.meteoalarm import scrape_meteoalarm
+from scraper.nws_active_alerts import scrape_nws
 
 SCRAPER_REGISTRY = {
     "json": lambda conf: scrape_nws(conf["url"]),
