@@ -4,11 +4,8 @@ import sys
 import json
 import time
 import logging
-import asyncio
-from datetime import datetime
 from feeds import get_feed_definitions
-from utils.domain_router import get_scraper
-from scraper.environment_canada import scrape_async
+from utils.scraper_registry import SCRAPER_REGISTRY
 from streamlit_autorefresh import st_autorefresh
 
 # Extend import path
@@ -28,32 +25,22 @@ FEED_CONFIG = get_feed_definitions()
 
 # --- Session State Defaults ---
 for key in FEED_CONFIG.keys():
-    if f"{key}_seen_count" not in st.session_state:
-        st.session_state[f"{key}_seen_count"] = 0
-    if f"{key}_data" not in st.session_state:
-        st.session_state[f"{key}_data"] = []
-    if f"{key}_last_fetch" not in st.session_state:
-        st.session_state[f"{key}_last_fetch"] = 0
+    st.session_state.setdefault(f"{key}_seen_count", 0)
+    st.session_state.setdefault(f"{key}_data", [])
+    st.session_state.setdefault(f"{key}_last_fetch", 0)
 
-if "last_refreshed" not in st.session_state:
-    st.session_state["last_refreshed"] = now
-if "active_feed" not in st.session_state:
-    st.session_state["active_feed"] = None
+st.session_state.setdefault("last_refreshed", now)
+st.session_state.setdefault("active_feed", None)
 
 # --- Fetch Feed Data ---
 for key, conf in FEED_CONFIG.items():
     last_fetch = st.session_state[f"{key}_last_fetch"]
     if now - last_fetch > REFRESH_INTERVAL:
         try:
-            if conf["type"] == "json":
-                scraper = get_scraper("api.weather.gov")
-                data = scraper(conf["url"])
-            elif conf["type"] == "ec_async":
-                with open(conf["source_file"]) as f:
-                    sources = json.load(f)
-                data = asyncio.run(scrape_async(sources))
-            else:
-                data = {"entries": [], "error": "Unsupported type"}
+            scraper_func = SCRAPER_REGISTRY.get(conf["type"])
+            if not scraper_func:
+                raise ValueError(f"No scraper registered for type '{conf['type']}'")
+            data = scraper_func(conf)
             st.session_state[f"{key}_data"] = data.get("entries", [])
             st.session_state[f"{key}_last_fetch"] = now
             st.session_state["last_refreshed"] = now
@@ -77,7 +64,6 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 st.session_state[f"{key}_seen_count"] = len(st.session_state[f"{key}_data"])
                 st.session_state["active_feed"] = None
             else:
-                # Clear previous feed's count
                 prev = st.session_state["active_feed"]
                 if prev:
                     st.session_state[f"{prev}_seen_count"] = len(st.session_state[f"{prev}_data"])
@@ -93,19 +79,13 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         st.markdown(f"**{conf['label']}:** {total} total / {new} new")
 
 # --- Feed Display ---
-def parse_published(alert):
-    try:
-        return datetime.fromisoformat(alert.get("published", "").replace("Z", "+00:00"))
-    except Exception:
-        return datetime.min
-
 active = st.session_state["active_feed"]
 if active:
     st.markdown("---")
     st.subheader(f"{FEED_CONFIG[active]['label']} Feed")
     alerts = sorted(
         st.session_state[f"{active}_data"],
-        key=parse_published,
+        key=lambda x: x.get("published", ""),
         reverse=True
     )
     seen_count = st.session_state[f"{active}_seen_count"]
