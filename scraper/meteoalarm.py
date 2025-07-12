@@ -38,21 +38,20 @@ def scrape_meteoalarm(conf):
 
             soup = BeautifulSoup(description_html, "html.parser")
             rows = soup.find_all("tr")
-
-            structured_alerts = {"today": [], "tomorrow": []}
             summary_lines = []
-
-            current_section = "today"
+            current_section = None
+            has_alerts = False
 
             for row in rows:
                 header = row.find("th")
                 if header:
                     text = header.get_text(strip=True).lower()
                     if "tomorrow" in text:
-                        current_section = "tomorrow"
+                        current_section = "Tomorrow"
+                        summary_lines.append("Tomorrow")
                     elif "today" in text:
-                        current_section = "today"
-                    summary_lines.append(text.capitalize())
+                        current_section = "Today"
+                        summary_lines.append("Today")
                     continue
 
                 cells = row.find_all("td")
@@ -79,25 +78,16 @@ def scrape_meteoalarm(conf):
                 from_time = from_match.group(1) if from_match else "?"
                 until_time = until_match.group(1) if until_match else "?"
 
-                # Add to summary
                 line = f"[{level_name}] {type_name} - From: {from_time} Until: {until_time}"
                 summary_lines.append(line)
+                has_alerts = True
 
-                # Add to structured data
-                structured_alerts[current_section].append({
-                    "level": level_name,
-                    "type": type_name,
-                    "from": from_time,
-                    "until": until_time
-                })
-
-            if summary_lines:
+            if has_alerts:
                 summary_text = "\n".join(summary_lines)
 
                 entries.append({
                     "title": f"{country} Alerts",
                     "summary": summary_text,
-                    "alerts": structured_alerts,
                     "link": link,
                     "published": pub_date,
                     "region": country,
