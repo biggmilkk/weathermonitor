@@ -1,8 +1,6 @@
 import feedparser
 import logging
 import re
-import json
-import os
 from bs4 import BeautifulSoup
 
 AWARENESS_LEVELS = {
@@ -26,30 +24,14 @@ AWARENESS_TYPES = {
     "13": "Rain/Flood",
 }
 
-CACHE_PATH = os.path.join("data", "meteoalarm_cache.json")
-
-def load_cache():
-    if os.path.exists(CACHE_PATH):
-        try:
-            with open(CACHE_PATH, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            logging.warning(f"[METEOALARM CACHE] Failed to load cache: {e}")
-    return {}
-
-def save_cache(cache):
+def scrape_meteoalarm(conf):
     try:
-        with open(CACHE_PATH, "w") as f:
-            json.dump(cache, f, indent=2)
-    except Exception as e:
-        logging.warning(f"[METEOALARM CACHE] Failed to save cache: {e}")
+        url = conf.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe")
+        old_cache = conf.get("cache", {})  # passed in from weathermonitor.py
 
-def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"):
-    try:
         feed = feedparser.parse(url)
         entries = []
-        old_cache = load_cache()
-        new_cache = {}
+        new_fingerprints = {}
 
         for entry in feed.entries:
             country = entry.get("title", "").replace("MeteoAlarm ", "").strip()
@@ -61,7 +43,7 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
             rows = soup.find_all("tr")
             summary_today = []
             summary_tomorrow = []
-            fingerprint_blocks = []
+            fingerprints = []
 
             current_section = "Today"
 
@@ -96,7 +78,7 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
                 time_info = cells[1].get_text(" ", strip=True)
 
                 fingerprint = f"{level}:{awt}:{time_info}"
-                fingerprint_blocks.append(fingerprint)
+                fingerprints.append(fingerprint)
 
                 prev_fps = old_cache.get(country, [])
                 prefix = "[NEW] " if fingerprint not in prev_fps else ""
@@ -108,13 +90,13 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
                     summary_today.append(line)
 
             if summary_today or summary_tomorrow:
-                new_cache[country] = fingerprint_blocks
+                new_fingerprints[country] = fingerprints
                 summary_parts = []
                 if summary_today:
                     summary_parts.append("**Today**")
                     summary_parts.extend(summary_today)
                 if summary_tomorrow:
-                    summary_parts.append("\n**Tomorrow**")
+                    summary_parts.append("**Tomorrow**")
                     summary_parts.extend(summary_tomorrow)
 
                 entries.append({
@@ -126,12 +108,12 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
                     "province": "Europe"
                 })
 
-        save_cache(new_cache)
-
         logging.warning(f"[METEOALARM DEBUG] Found {len(entries)} country alerts with yellow/orange/red levels")
+
         return {
             "entries": entries,
-            "source": url
+            "source": url,
+            "fingerprints": new_fingerprints  # returned for external caching
         }
 
     except Exception as e:
@@ -139,5 +121,6 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
         return {
             "entries": [],
             "error": str(e),
-            "source": url
+            "source": conf.get("url"),
+            "fingerprints": {}
         }
