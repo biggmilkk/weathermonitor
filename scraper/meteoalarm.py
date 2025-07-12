@@ -3,28 +3,39 @@ import logging
 import re
 from bs4 import BeautifulSoup
 
-AWARENESS_LEVELS = {
+# Alert severity levels mapped from MeteoAlarm codes\AWARENESS_LEVELS = {
     "2": "Yellow",
     "3": "Orange",
     "4": "Red",
 }
 
-AWARENESS_TYPES = {
+# Alert types mapped from MeteoAlarm codes\AWARENESS_TYPES = {
     "1": "Wind",
     "2": "Snow/Ice",
     "3": "Thunderstorms",
     "4": "Fog",
-    # ... (other awareness types)
+    "5": "Extreme high temperature",
+    "6": "Extreme low temperature",
+    "7": "Coastal event",
+    "8": "Forest fire",
+    "9": "Avalanche",
+    "10": "Rain",
+    "12": "Flood",
+    "13": "Rain/Flood",
 }
 
-
-def fetch_meteoalarm_feed(conf):
-    url = conf.get("url")
-    entries = []
+def scrape_meteoalarm(conf):
+    """
+    Fetch and parse the MeteoAlarm RSS feed for European countries.
+    Returns a dict with 'entries' (list of alert dicts) and 'source' URL.
+    """
+    url = conf.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe")
     try:
         feed = feedparser.parse(url)
+        entries = []
+
         for entry in feed.entries:
-            country = entry.get("title", "").replace("MeteoAlarm ", "")
+            country = entry.get("title", "").replace("MeteoAlarm", "").strip()
             pub_date = entry.get("published", "")
             description_html = entry.get("description", "")
             link = entry.get("link", "")
@@ -41,16 +52,26 @@ def fetch_meteoalarm_feed(conf):
                     text = header.get_text(strip=True).lower()
                     if "tomorrow" in text:
                         current_section = "tomorrow"
+                    elif "today" in text:
+                        current_section = "today"
                     continue
 
                 cells = row.find_all("td")
-                if len(cells) < 2:
+                if len(cells) != 2:
                     continue
 
-                level_match = re.search(r"awareness-level=\"(\d+)\"", cells[0].get("data-awareness-level", ""))
-                awt = cells[0].get("data-awareness-type", "")
-                level = level_match.group(1) if level_match else ""
-                level_name = AWARENESS_LEVELS.get(level, f"Level {level}")
+                level = cells[0].get("data-awareness-level")
+                awt = cells[0].get("data-awareness-type")
+
+                if not level or not awt:
+                    match = re.search(r"awt:(\d+)\s+level:(\d+)", cells[0].get_text(strip=True))
+                    if match:
+                        awt, level = match.groups()
+
+                if level not in AWARENESS_LEVELS:
+                    continue
+
+                level_name = AWARENESS_LEVELS[level]
                 type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
 
                 from_match = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
@@ -65,17 +86,13 @@ def fetch_meteoalarm_feed(conf):
                     "until": until_time,
                 })
 
-            # skip countries with no yellow-or-above alerts
+            # Skip any country with no yellow-or-above alerts
             if not alert_data["today"] and not alert_data["tomorrow"]:
                 continue
 
-            summary_fallback = ""
-            if not alert_data["today"] and not alert_data["tomorrow"]:
-                summary_fallback = "No alerts available."
-
             entries.append({
                 "title": f"{country} Alerts",
-                "summary": summary_fallback,
+                "summary": "",  # structured alerts have no text summary
                 "alerts": alert_data,
                 "link": link,
                 "published": pub_date,
@@ -94,5 +111,5 @@ def fetch_meteoalarm_feed(conf):
         return {
             "entries": [],
             "error": str(e),
-            "source": conf.get("url")
+            "source": url
         }
