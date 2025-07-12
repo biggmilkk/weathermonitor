@@ -27,19 +27,8 @@ AWARENESS_TYPES = {
 def scrape_meteoalarm(conf):
     try:
         url = conf.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe")
-        old_cache = conf.get("cache", {})
-
-        # Convert old cache (from list) to dict if needed
-        if isinstance(old_cache, list):
-            converted = {}
-            for fp in old_cache:
-                # Assign to generic key since we don’t know country
-                converted.setdefault("global", []).append(fp)
-            old_cache = converted
-
         feed = feedparser.parse(url)
         entries = []
-        new_fingerprints = {}
 
         for entry in feed.entries:
             country = entry.get("title", "").replace("MeteoAlarm ", "").strip()
@@ -51,7 +40,6 @@ def scrape_meteoalarm(conf):
             rows = soup.find_all("tr")
             summary_today = []
             summary_tomorrow = []
-            fingerprints = []
 
             current_section = "Today"
 
@@ -84,32 +72,23 @@ def scrape_meteoalarm(conf):
                 type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
                 time_info = cells[1].get_text(" ", strip=True)
 
-                fingerprint = f"{level}:{awt}:{time_info}"
-                fingerprints.append(fingerprint)
-
-                prev_fps = old_cache.get(country, [])
-                is_new = fingerprint not in prev_fps
-                prefix = "[NEW] " if is_new else ""
-                alert_line = f"{prefix}[{level_name}] {type_name} - {time_info}"
+                alert_line = f"[{level_name}] {type_name} - {time_info}"
 
                 if current_section == "Tomorrow":
                     summary_tomorrow.append(alert_line)
                 else:
                     summary_today.append(alert_line)
 
-            if summary_today or summary_tomorrow:
-                new_fingerprints[country] = fingerprints
+            summary_lines = []
+            if summary_today:
+                summary_lines.append("Today")
+                summary_lines.extend(summary_today)
+                summary_lines.append("")  # spacing
+            if summary_tomorrow:
+                summary_lines.append("Tomorrow")
+                summary_lines.extend(summary_tomorrow)
 
-                summary_lines = []
-                if summary_today:
-                    summary_lines.append("Today")
-                    summary_lines.extend(summary_today)
-                    summary_lines.append("")  # extra spacing
-
-                if summary_tomorrow:
-                    summary_lines.append("Tomorrow")
-                    summary_lines.extend(summary_tomorrow)
-
+            if summary_lines:
                 entries.append({
                     "title": f"{country} Alerts",
                     "summary": "\n".join(summary_lines),
@@ -119,11 +98,10 @@ def scrape_meteoalarm(conf):
                     "province": "Europe"
                 })
 
-        logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} alert blocks")
+        logging.warning(f"[METEOALARM DEBUG] Found {len(entries)} alert entries")
         return {
             "entries": entries,
-            "source": url,
-            "fingerprints": new_fingerprints  # to be stored in session on click
+            "source": url
         }
 
     except Exception as e:
@@ -131,6 +109,5 @@ def scrape_meteoalarm(conf):
         return {
             "entries": [],
             "error": str(e),
-            "source": conf.get("url"),
-            "fingerprints": {}
+            "source": conf.get("url")
         }
