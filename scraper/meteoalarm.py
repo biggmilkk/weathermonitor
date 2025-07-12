@@ -29,14 +29,13 @@ def scrape_meteoalarm(conf):
         url = conf.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe")
         old_cache = conf.get("cache", {})
 
-        # Convert old_cache list (if present) into dict format
+        # Convert old cache (from list) to dict if needed
         if isinstance(old_cache, list):
-            temp_cache = {}
+            converted = {}
             for fp in old_cache:
-                match = re.search(r"\[(Yellow|Orange|Red)\]\s+(\w+)", fp)
-                country = match.group(2) if match else "Unknown"
-                temp_cache.setdefault(country, []).append(fp)
-            old_cache = temp_cache
+                # Assign to generic key since we don’t know country
+                converted.setdefault("global", []).append(fp)
+            old_cache = converted
 
         feed = feedparser.parse(url)
         entries = []
@@ -89,7 +88,8 @@ def scrape_meteoalarm(conf):
                 fingerprints.append(fingerprint)
 
                 prev_fps = old_cache.get(country, [])
-                prefix = "[NEW] " if fingerprint not in prev_fps else ""
+                is_new = fingerprint not in prev_fps
+                prefix = "[NEW] " if is_new else ""
                 alert_line = f"{prefix}[{level_name}] {type_name} - {time_info}"
 
                 if current_section == "Tomorrow":
@@ -99,12 +99,12 @@ def scrape_meteoalarm(conf):
 
             if summary_today or summary_tomorrow:
                 new_fingerprints[country] = fingerprints
-                summary_lines = []
 
+                summary_lines = []
                 if summary_today:
                     summary_lines.append("Today")
                     summary_lines.extend(summary_today)
-                    summary_lines.append("")  # spacing
+                    summary_lines.append("")  # extra spacing
 
                 if summary_tomorrow:
                     summary_lines.append("Tomorrow")
@@ -119,12 +119,11 @@ def scrape_meteoalarm(conf):
                     "province": "Europe"
                 })
 
-        logging.warning(f"[METEOALARM DEBUG] Found {len(entries)} country alerts with yellow/orange/red levels")
-
+        logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} alert blocks")
         return {
             "entries": entries,
             "source": url,
-            "fingerprints": new_fingerprints
+            "fingerprints": new_fingerprints  # to be stored in session on click
         }
 
     except Exception as e:
