@@ -55,13 +55,20 @@ st.caption(
 )
 st.markdown("---")
 
-# --- Handle Button Clicks ---
+# --- Handle Button Clicks (Native with NEW icon) ---
 cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     with cols[i]:
-        if st.button(conf["label"], key=f"btn_{key}", use_container_width=True):
+        data = st.session_state[f"{key}_data"]
+        total = len(data)
+        new = max(0, total - st.session_state[f"{key}_seen_count"])
+        label = conf["label"]
+        if new > 0:
+            label = f"🆕 {label}"  # or use 🔴 or 🟠
+
+        if st.button(label, key=f"btn_{key}", use_container_width=True):
             if st.session_state["active_feed"] == key:
-                st.session_state[f"{key}_seen_count"] = len(st.session_state[f"{key}_data"])
+                st.session_state[f"{key}_seen_count"] = len(data)
                 st.session_state["active_feed"] = None
             else:
                 prev = st.session_state["active_feed"]
