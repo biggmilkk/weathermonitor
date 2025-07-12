@@ -54,10 +54,10 @@ def scrape_meteoalarm(conf):
             for row in rows:
                 header = row.find("th")
                 if header:
-                    text = header.get_text(strip=True).lower()
-                    if "tomorrow" in text:
+                    txt = header.get_text(strip=True).lower()
+                    if "tomorrow" in txt:
                         current_section = "tomorrow"
-                    elif "today" in text:
+                    elif "today" in txt:
                         current_section = "today"
                     continue
 
@@ -79,10 +79,10 @@ def scrape_meteoalarm(conf):
                 level_name = AWARENESS_LEVELS[level]
                 type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
 
-                from_match = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
-                until_match = re.search(r"Until:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
-                from_time = from_match.group(1) if from_match else "?"
-                until_time = until_match.group(1) if until_match else "?"
+                from_m = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
+                until_m = re.search(r"Until:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
+                from_time = from_m.group(1) if from_m else "?"
+                until_time = until_m.group(1) if until_m else "?"
 
                 alert_data[current_section].append({
                     "level": level_name,
