@@ -121,7 +121,7 @@ if active:
             )
 
         st.markdown(f"**{alert.get('title', '')}**")
-        if "region" in alert:
+        if FEED_CONFIG[active]["type"] != "rss_meteoalarm" and "region" in alert:
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
 
         # --- Meteoalarm structured ---
