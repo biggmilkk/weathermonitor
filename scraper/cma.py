@@ -18,8 +18,9 @@ def scrape_cma(conf):
         for entry in feed.entries:
             # Skip lifted bulletins by checking the RSS <title>
             raw_title = entry.get('title', '')
-            if 'lifted' in raw_title.lower():
-                continue
+	    raw_lower = raw_title.lower()
+            if 'lift' in raw_lower or 'remove' in raw_lower or 'resolve' in raw_lower:
+    		continue
 
             # Skip expired alerts based on cap:expires
             expires = entry.get('cap_expires')
