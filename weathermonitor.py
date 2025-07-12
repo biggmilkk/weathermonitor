@@ -135,24 +135,28 @@ if active:
         summary = alert.get("summary", "")
         if summary:
             if active == "rss_meteoalarm":
-                for line in summary.splitlines():
+                for line in summary.split("\n"):
                     line = line.strip()
                     if not line:
                         continue
 
-                    if line.lower() in {"today", "tomorrow"}:
-                        st.markdown(f"### {line}")
+                    # Treat section headers like "Today" or "Tomorrow"
+                    if line.lower().startswith("today"):
+                        st.markdown("Today")
+                        continue
+                    elif line.lower().startswith("tomorrow"):
+                        st.markdown("Tomorrow")
                         continue
 
-                    color = None
-                    if "[Yellow]" in line:
-                        color = "#FFD700"
-                    elif "[Orange]" in line:
-                        color = "#FFA500"
-                    elif "[Red]" in line:
-                        color = "#FF4500"
-
-                    if color:
+                    # Bullet for alert lines
+                    if line.startswith("["):
+                        color = "gray"
+                        if "[Yellow]" in line:
+                            color = "#FFD700"
+                        elif "[Orange]" in line:
+                            color = "#FFA500"
+                        elif "[Red]" in line:
+                            color = "#FF4500"
                         st.markdown(
                             f"<span style='color:{color};font-size:16px'>&#9679;</span> {line}",
                             unsafe_allow_html=True
@@ -161,6 +165,7 @@ if active:
                         st.markdown(line)
             else:
                 st.markdown(summary)
+
         else:
             st.markdown("_No summary available._")
 
