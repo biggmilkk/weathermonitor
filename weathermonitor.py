@@ -214,5 +214,18 @@ if active:
             st.markdown("---")
 
     # Update last seen
-    pending = f"{active}_pending_seen_time"
-    if pending in st.session_state: ...
+    pending_key = f"{active}_pending_seen_time"
+    if pending_key in st.session_state:
+        if conf["type"] == "rss_meteoalarm":
+            # Snapshot all current MeteoAlarm alert IDs
+            snapshot = set()
+            for country in st.session_state[f"{active}_data"]:
+                for alerts_list in country.get("alerts", {}).values():
+                    for e in alerts_list:
+                        snapshot.add(alert_id(e))
+            st.session_state[f"{active}_last_seen_alerts"] = snapshot
+        else:
+            # For other feeds, use timestamp
+            st.session_state[f"{active}_last_seen_time"] = st.session_state[pending_key]
+        # Remove pending flag in all cases
+        st.session_state.pop(pending_key, None)
