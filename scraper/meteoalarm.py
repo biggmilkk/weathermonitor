@@ -27,7 +27,7 @@ AWARENESS_TYPES = {
 def scrape_meteoalarm(conf):
     try:
         url = conf.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe")
-        old_cache = conf.get("cache", {})  # passed in from weathermonitor.py
+        old_cache = conf.get("cache", {})  # expected to be dict from weathermonitor.py
 
         feed = feedparser.parse(url)
         entries = []
@@ -61,12 +61,11 @@ def scrape_meteoalarm(conf):
                 if len(cells) != 2:
                     continue
 
-                cell = cells[0]
-                level = cell.get("data-awareness-level")
-                awt = cell.get("data-awareness-type")
+                level = cells[0].get("data-awareness-level")
+                awt = cells[0].get("data-awareness-type")
 
                 if not level or not awt:
-                    match = re.search(r"awt:(\d+)\s+level:(\d+)", cell.get_text(strip=True))
+                    match = re.search(r"awt:(\d+)\s+level:(\d+)", cells[0].get_text(strip=True))
                     if match:
                         awt, level = match.groups()
 
@@ -82,26 +81,29 @@ def scrape_meteoalarm(conf):
 
                 prev_fps = old_cache.get(country, [])
                 prefix = "[NEW] " if fingerprint not in prev_fps else ""
-                line = f"{prefix}[{level_name}] {type_name} - {time_info}"
+                alert_line = f"{prefix}[{level_name}] {type_name} - {time_info}"
 
                 if current_section == "Tomorrow":
-                    summary_tomorrow.append(line)
+                    summary_tomorrow.append(alert_line)
                 else:
-                    summary_today.append(line)
+                    summary_today.append(alert_line)
 
             if summary_today or summary_tomorrow:
                 new_fingerprints[country] = fingerprints
-                summary_parts = []
+                summary_lines = []
+
                 if summary_today:
-                    summary_parts.append("**Today**")
-                    summary_parts.extend(summary_today)
+                    summary_lines.append("Today")
+                    summary_lines.extend(summary_today)
+                    summary_lines.append("")  # extra line between sections
+
                 if summary_tomorrow:
-                    summary_parts.append("**Tomorrow**")
-                    summary_parts.extend(summary_tomorrow)
+                    summary_lines.append("Tomorrow")
+                    summary_lines.extend(summary_tomorrow)
 
                 entries.append({
                     "title": f"{country} Alerts",
-                    "summary": "\n".join(summary_parts),
+                    "summary": "\n".join(summary_lines),
                     "link": link,
                     "published": pub_date,
                     "region": country,
@@ -113,7 +115,7 @@ def scrape_meteoalarm(conf):
         return {
             "entries": entries,
             "source": url,
-            "fingerprints": new_fingerprints  # returned for external caching
+            "fingerprints": new_fingerprints
         }
 
     except Exception as e:
