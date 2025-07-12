@@ -7,7 +7,7 @@ from datetime import datetime
 def scrape_cma(conf):
     """
     Fetch and parse the CMA CAP RSS feed synchronously using feedparser.
-    Skips expired alerts based on cap:expires.
+    Skips expired and lifted alerts.
     Returns dict with 'entries' and 'source'.
     """
     url = conf.get('url')
@@ -16,7 +16,12 @@ def scrape_cma(conf):
         entries = []
 
         for entry in feed.entries:
-            # Check expiration
+            # Skip lifted bulletins by checking the RSS <title>
+            raw_title = entry.get('title', '')
+            if 'lifted' in raw_title.lower():
+                continue
+
+            # Skip expired alerts based on cap:expires
             expires = entry.get('cap_expires')
             if expires:
                 try:
@@ -26,11 +31,10 @@ def scrape_cma(conf):
                 except Exception:
                     pass
 
-            # Title: prefer CAP event, fallback to <title>
-            title = entry.get('cap_event', entry.get('title', '')).strip()
-	    # skip any “lifted” bulletins
-            if 'lifted' in title.lower():
-            	continue
+            # Determine alert title: prefer CAP event, fallback to RSS title
+            title = entry.get('cap_event', raw_title).strip()
+            if not title:
+                continue
 
             # Summary/description
             summary = entry.get('summary', '').strip()
