@@ -7,22 +7,18 @@ from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from streamlit_autorefresh import st_autorefresh
 
-# Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Page setup
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
 
-# Auto-refresh every 60 seconds
 st_autorefresh(interval=60 * 1000, key="autorefresh")
 
 now = time.time()
-REFRESH_INTERVAL = 60  # seconds
+REFRESH_INTERVAL = 60
 
 FEED_CONFIG = get_feed_definitions()
 
-# --- Session State Defaults ---
 for key in FEED_CONFIG.keys():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
@@ -32,7 +28,6 @@ for key in FEED_CONFIG.keys():
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
 
-# --- Fetch Feed Data ---
 for key, conf in FEED_CONFIG.items():
     last_fetch = st.session_state.get(f"{key}_last_fetch") or 0
     if now - last_fetch > REFRESH_INTERVAL:
@@ -48,14 +43,10 @@ for key, conf in FEED_CONFIG.items():
             st.session_state[f"{key}_data"] = []
             logging.warning(f"[{key.upper()} FETCH ERROR] {e}")
 
-# --- UI Header ---
 st.title("Global Weather Monitor")
-st.caption(
-    f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
-)
+st.caption(f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
 st.markdown("---")
 
-# --- Handle Button Clicks ---
 cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     with cols[i]:
@@ -66,7 +57,6 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 st.session_state["active_feed"] = key
                 st.session_state[f"{key}_pending_seen_time"] = time.time()
 
-# --- Counters ---
 count_cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
@@ -99,7 +89,6 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 </div>
             """, unsafe_allow_html=True)
 
-# --- Feed Display ---
 active = st.session_state["active_feed"]
 if active:
     st.markdown("---")
@@ -135,43 +124,28 @@ if active:
         if "region" in alert:
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
 
-        summary = alert.get("summary", "")
-        if summary:
-            if active == "rss_meteoalarm":
-                for line in summary.split("\n"):
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    if line.lower() in {"today", "tomorrow"}:
-                        st.markdown(f"<h4 style='margin-top:16px'>{line}</h4>", unsafe_allow_html=True)
-                        continue
-
-                    color = "#888"
-                    level_text = ""
-                    if line.startswith("[Yellow]"):
-                        color = "#FFD700"
-                        level_text = "[Yellow]"
-                    elif line.startswith("[Orange]"):
-                        color = "#FFA500"
-                        level_text = "[Orange]"
-                    elif line.startswith("[Red]"):
-                        color = "#FF4500"
-                        level_text = "[Red]"
-
-                    text_only = line.replace(level_text, "").strip()
-
-                    st.markdown(
-                        f"<div style='margin-bottom:6px;'>"
-                        f"<span style='color:{color};font-size:16px;'>&#9679;</span> {text_only}"
-                        f"</div>",
-                        unsafe_allow_html=True
-                    )
-
-            else:
-                st.markdown(summary)
+        # --- Meteoalarm structured ---
+        if active == "rss_meteoalarm" and isinstance(alert.get("alerts"), dict):
+            for day in ["today", "tomorrow"]:
+                entries = alert["alerts"].get(day, [])
+                if entries:
+                    st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>", unsafe_allow_html=True)
+                    for e in entries:
+                        color = {
+                            "yellow": "#FFD700",
+                            "orange": "#FFA500",
+                            "red": "#FF4500"
+                        }.get(e["level"].lower(), "#888")
+                        label = f"[{e['level']}] {e['type']} - From: {e['from']} Until: {e['until']}"
+                        st.markdown(
+                            f"<div style='margin-bottom:6px;'>"
+                            f"<span style='color:{color};font-size:16px;'>&#9679;</span> {label}"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
         else:
-            st.markdown("_No summary available._")
+            summary = alert.get("summary", "")
+            st.markdown(summary if summary else "_No summary available._")
 
         if alert.get("link"):
             st.markdown(f"[Read more]({alert['link']})")
@@ -179,7 +153,6 @@ if active:
             st.caption(f"Published: {alert['published']}")
         st.markdown("---")
 
-    # Apply pending seen time AFTER rendering
     pending_key = f"{active}_pending_seen_time"
     if pending_key in st.session_state:
         st.session_state[f"{active}_last_seen_time"] = st.session_state.pop(pending_key)
