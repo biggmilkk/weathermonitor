@@ -8,6 +8,7 @@ def scrape_cma(conf):
     """
     Fetch and parse the CMA CAP RSS feed synchronously using feedparser.
     Skips expired and lifted/removed/resolve bulletins (in title or description).
+    Uses the RSS <title> as the alert title and cap:areaDesc for region.
     Returns dict with 'entries' and 'source'.
     """
     url = conf.get('url')
@@ -16,18 +17,20 @@ def scrape_cma(conf):
         entries = []
 
         for entry in feed.entries:
+            # Extract raw title and description
             raw_title = entry.get('title', '') or ''
             summary = entry.get('summary', '') or ''
             raw_lower = raw_title.lower()
             sum_lower = summary.lower()
+
             # Skip bulletins indicating lifting or resolution
             if any(keyword in raw_lower for keyword in ('lift', 'remove', 'resolve')):
                 continue
             if any(keyword in sum_lower for keyword in ('lift', 'remove', 'resolve')):
                 continue
 
-            # Skip expired alerts based on cap:expires
-            expires = entry.get('cap_expires')
+            # Skip expired alerts based on cap:expires or expires
+            expires = entry.get('cap_expires') or entry.get('expires')
             if expires:
                 try:
                     exp_dt = dateparser.parse(expires)
@@ -36,8 +39,8 @@ def scrape_cma(conf):
                 except Exception:
                     pass
 
-            # Determine alert title: prefer CAP event, fallback to RSS title
-            title = entry.get('cap_event', raw_title).strip()
+            # Use the RSS title directly for alerts (preserves proper casing)
+            title = raw_title.strip()
             if not title:
                 continue
 
@@ -47,8 +50,11 @@ def scrape_cma(conf):
             # Published time: cap:effective or pubDate
             published = entry.get('cap_effective') or entry.get('published', '')
 
-            # Area/region
-            region = entry.get('cap_areaDesc', 'China').strip()
+            # Area/region: try CAP areaDesc or its variants
+            region = (
+                entry.get('cap_areaDesc') or entry.get('cap_areadesc') or
+                entry.get('areaDesc') or entry.get('areadesc') or 'China'
+            ).strip()
 
             entries.append({
                 'title': title,
