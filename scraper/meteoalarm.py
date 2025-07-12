@@ -31,16 +31,16 @@ def scrape_meteoalarm(conf):
         entries = []
 
         for entry in feed.entries:
-            country = entry.get("title", "").replace("MeteoAlarm ", "").strip()
+            country = entry.get("title", "").replace("MeteoAlarm", "").strip()
             pub_date = entry.get("published", "")
             description_html = entry.get("description", "")
             link = entry.get("link", "")
 
             soup = BeautifulSoup(description_html, "html.parser")
             rows = soup.find_all("tr")
-            alerts = {"today": [], "tomorrow": []}
 
             current_section = "today"
+            alert_data = {"today": [], "tomorrow": []}
 
             for row in rows:
                 header = row.find("th")
@@ -72,21 +72,24 @@ def scrape_meteoalarm(conf):
 
                 from_match = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
                 until_match = re.search(r"Until:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
-
                 from_time = from_match.group(1) if from_match else "?"
                 until_time = until_match.group(1) if until_match else "?"
 
-                alerts[current_section].append({
+                alert_data[current_section].append({
                     "level": level_name,
                     "type": type_name,
                     "from": from_time,
-                    "until": until_time
+                    "until": until_time,
                 })
+
+            summary_fallback = ""
+            if not alert_data["today"] and not alert_data["tomorrow"]:
+                summary_fallback = "No alerts available."
 
             entries.append({
                 "title": f"{country} Alerts",
-                "summary": "",  # Left blank since frontend uses structured data
-                "alerts": alerts,
+                "summary": summary_fallback,
+                "alerts": alert_data,
                 "link": link,
                 "published": pub_date,
                 "region": country,
