@@ -87,12 +87,13 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
     if conf["type"] == "rss_meteoalarm":
         seen_alerts = st.session_state.get(f"{key}_last_seen_alerts", set())
-        flat = []
-        for country in entries:
-            for alerts in country.get("alerts", {}).values():
-                for e in alerts:
-                    if e["level"] in ["Orange", "Red"]:
-                        flat.append(e)
+        flat = [
+            e
+            for country in entries
+            for alerts in country.get("alerts", {}).values()
+            for e in alerts
+            if e["level"] in ["Orange", "Red"]
+        ]
         total = len(flat)
         new_count = sum(1 for e in flat if alert_id(e) not in seen_alerts)
     else:
@@ -164,7 +165,7 @@ if active:
                     unsafe_allow_html=True,
                 )
 
-        st.markdown(f"**{country.get('title', '')}**")
+        st.markdown(f"<h3 style='margin-bottom:4px'>{country.get('title', '')}</h3>", unsafe_allow_html=True)
         if conf["type"] != "rss_meteoalarm" and "region" in country:
             st.caption(f"Region: {country.get('region', '')}, {country.get('province', '')}")
 
@@ -176,8 +177,7 @@ if active:
                 ]
                 if day_alerts:
                     st.markdown(
-                        f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>",
-                        unsafe_allow_html=True,
+                        f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>", unsafe_allow_html=True
                     )
                     for e in day_alerts:
                         # Format times
@@ -224,5 +224,4 @@ if active:
                             snapshot.add(alert_id(e))
             st.session_state[f"{active}_last_seen_alerts"] = snapshot
         else:
-            st.session_state[f"{active}_last_seen_time"] = st.session_state[pending_key]
-        st.session_state.pop(pending_key)
+            st.session_state[f"{active}_last_seen_time"] = st.session_state.pop(pending_key)
