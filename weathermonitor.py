@@ -143,6 +143,10 @@ if active:
                     if not line:
                         continue
 
+                    if line.lower() in {"today", "tomorrow"}:
+                        st.markdown(f"### {line}")
+                        continue
+
                     if line.startswith("["):
                         color = "gray"
                         if "[Yellow]" in line:
