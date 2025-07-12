@@ -3,6 +3,34 @@ from dateutil import parser as dateparser
 
 # Rendering functions for different feed types
 
+def render_json(item, conf):
+    """
+    Render a generic JSON-based alert (e.g., NWS).
+    """
+    # Title or headline
+    title = item.get('title') or item.get('headline') or '(no title)'
+    st.markdown(f"**{title}**")
+    # Region/province if available
+    region = item.get('region', '')
+    province = item.get('province', '')
+    if region or province:
+        parts = [p for p in (region, province) if p]
+        st.caption(f"Region: {', '.join(parts)}")
+    # Summary or description
+    body = item.get('summary') or item.get('description') or ''
+    if body:
+        st.markdown(body)
+    # Link
+    link = item.get('link')
+    if link:
+        st.markdown(f"[Read more]({link})")
+    # Published timestamp
+    published = item.get('published')
+    if published:
+        st.caption(f"Published: {published}")
+    st.markdown("---")
+
+
 def render_ec(item, conf):
     """
     Render an Environment Canada alert.
@@ -93,7 +121,8 @@ def render_meteoalarm(item, conf):
 
 # Registry mapping feed types to renderer functions
 RENDERERS = {
-    'ec_async':        render_ec,
-    'rss_cma':         render_cma,
-    'rss_meteoalarm':  render_meteoalarm,
+    'json':             render_json,
+    'ec_async':         render_ec,
+    'rss_cma':          render_cma,
+    'rss_meteoalarm':   render_meteoalarm,
 }
