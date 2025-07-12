@@ -3,6 +3,7 @@ import asyncio
 import xml.etree.ElementTree as ET
 import logging
 import re
+from datetime import datetime
 
 async def fetch_and_parse(session, region):
     url = region.get("ATOM URL")
@@ -28,7 +29,7 @@ async def fetch_and_parse(session, region):
                 # Skip ended alerts
                 if "ENDED" in title.upper():
                     continue
-                
+
                 # Skip "No alert" entries
                 if title.strip().upper().startswith("NO ALERT"):
                     continue
@@ -36,12 +37,20 @@ async def fetch_and_parse(session, region):
                 alert_type = re.split(r",\s*", title)[0].strip().upper()
                 if "WARNING" not in alert_type and alert_type != "SEVERE THUNDERSTORM WATCH":
                     continue
-                
+
+                # Ensure ISO 8601 format for consistency
+                raw_pub = published_elem.text if published_elem is not None else ""
+                try:
+                    pub_dt = datetime.strptime(raw_pub, "%Y-%m-%dT%H:%M:%SZ")
+                    pub_iso = pub_dt.isoformat()
+                except Exception:
+                    pub_iso = raw_pub  # fallback if format is unexpected
+
                 entries.append({
                     "title": alert_type,
                     "summary": summary_elem.text[:500] if summary_elem is not None else "",
                     "link": link_elem.attrib.get("href", "") if link_elem is not None else "",
-                    "published": published_elem.text if published_elem is not None else "",
+                    "published": pub_iso,
                     "region": region.get("Region Name", ""),
                     "province": region.get("Province-Territory", "")
                 })
@@ -49,6 +58,7 @@ async def fetch_and_parse(session, region):
             return entries
 
     except Exception as e:
+        logging.warning(f"[EC FETCH ERROR] {url} - {e}")
         return []
 
 async def scrape_ec(sources):
