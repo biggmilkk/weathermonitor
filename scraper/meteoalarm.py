@@ -95,15 +95,17 @@ def scrape_meteoalarm(conf):
                 if summary_today:
                     summary_lines.append("Today")
                     summary_lines.extend(summary_today)
-                    summary_lines.append("")  # extra line between sections
+                    summary_lines.append("")  # space between sections
 
                 if summary_tomorrow:
                     summary_lines.append("Tomorrow")
                     summary_lines.extend(summary_tomorrow)
 
+                summary_text = "\n".join(summary_lines).strip()
+
                 entries.append({
                     "title": f"{country} Alerts",
-                    "summary": "\n".join(summary_lines),
+                    "summary": summary_text,
                     "link": link,
                     "published": pub_date,
                     "region": country,
@@ -123,6 +125,6 @@ def scrape_meteoalarm(conf):
         return {
             "entries": [],
             "error": str(e),
-            "source": conf.get("url"),
+            "source": conf.get("url", ""),
             "fingerprints": {}
         }
