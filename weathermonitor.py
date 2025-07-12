@@ -34,7 +34,7 @@ st.session_state.setdefault("active_feed", None)
 
 # --- Fetch Feed Data ---
 for key, conf in FEED_CONFIG.items():
-    last_fetch = st.session_state[f"{key}_last_fetch"]
+    last_fetch = st.session_state.get(f"{key}_last_fetch") or 0
     if now - last_fetch > REFRESH_INTERVAL:
         try:
             scraper_func = SCRAPER_REGISTRY.get(conf["type"])
