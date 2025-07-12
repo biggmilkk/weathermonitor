@@ -1,8 +1,10 @@
 import streamlit as st
 import os
 import sys
+import json
 import time
 import logging
+from dateutil import parser
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from streamlit_autorefresh import st_autorefresh
@@ -10,27 +12,31 @@ from streamlit_autorefresh import st_autorefresh
 # Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Setup
+# Page setup
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
+
+# Auto-refresh every 60 seconds
 st_autorefresh(interval=60 * 1000, key="autorefresh")
 
 now = time.time()
 REFRESH_INTERVAL = 60  # seconds
+
 FEED_CONFIG = get_feed_definitions()
 
-# --- Session Defaults ---
-st.session_state.setdefault("last_refreshed", now)
-st.session_state.setdefault("active_feed", None)
-
-for key, conf in FEED_CONFIG.items():
+# --- Session State Defaults ---
+for key in FEED_CONFIG.keys():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
     st.session_state.setdefault(f"{key}_last_seen_time", 0.0)
 
-# --- Fetch Data ---
+st.session_state.setdefault("last_refreshed", now)
+st.session_state.setdefault("active_feed", None)
+
+# --- Fetch Feed Data ---
 for key, conf in FEED_CONFIG.items():
-    if now - st.session_state[f"{key}_last_fetch"] > REFRESH_INTERVAL:
+    last_fetch = st.session_state[f"{key}_last_fetch"]
+    if now - last_fetch > REFRESH_INTERVAL:
         try:
             scraper_func = SCRAPER_REGISTRY.get(conf["type"])
             if not scraper_func:
@@ -43,12 +49,14 @@ for key, conf in FEED_CONFIG.items():
             st.session_state[f"{key}_data"] = []
             logging.warning(f"[{key.upper()} FETCH ERROR] {e}")
 
-# --- Header ---
+# --- UI Header ---
 st.title("Global Weather Monitor")
-st.caption(f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
+st.caption(
+    f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
+)
 st.markdown("---")
 
-# --- Feed Buttons ---
+# --- Handle Button Clicks ---
 cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     with cols[i]:
@@ -59,14 +67,14 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 st.session_state["active_feed"] = key
                 st.session_state[f"{key}_last_seen_time"] = time.time()
 
-# --- New Alert Counters ---
+# --- Counters ---
 count_cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
     last_seen = st.session_state[f"{key}_last_seen_time"]
     new_count = sum(
         1 for alert in entries
-        if alert.get("published") and time.mktime(time.strptime(alert["published"], "%Y-%m-%dT%H:%M:%S%z")) > last_seen
+        if alert.get("published") and parser.parse(alert["published"]).timestamp() > last_seen
     )
     total = len(entries)
 
@@ -94,16 +102,19 @@ if active:
         key=lambda x: x.get("published", ""),
         reverse=True
     )
-    last_seen = st.session_state[f"{active}_last_seen_time"]
+
+    last_seen_time = st.session_state[f"{active}_last_seen_time"]
 
     for alert in alerts:
-        pub_time = alert.get("published", "")
         is_new = False
-        try:
-            if pub_time:
-                is_new = time.mktime(time.strptime(pub_time, "%Y-%m-%dT%H:%M:%S%z")) > last_seen
-        except Exception:
-            pass
+        published = alert.get("published")
+        if published:
+            try:
+                published_ts = parser.parse(published).timestamp()
+                if published_ts > last_seen_time:
+                    is_new = True
+            except Exception:
+                pass
 
         if is_new:
             st.markdown(
@@ -112,7 +123,8 @@ if active:
             )
 
         st.markdown(f"**{alert.get('title', '')}**")
-        if "region" in alert and active != "rss_meteoalarm":
+
+        if "region" in alert:
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
 
         summary = alert.get("summary", "")
@@ -123,7 +135,7 @@ if active:
                     if not line:
                         continue
 
-                    if line.startswith("[") or line.startswith("[NEW] ["):
+                    if line.startswith("["):
                         color = "gray"
                         if "[Yellow]" in line:
                             color = "#FFFF00"
@@ -144,6 +156,6 @@ if active:
 
         if alert.get("link"):
             st.markdown(f"[Read more]({alert['link']})")
-        if pub_time:
-            st.caption(f"Published: {pub_time}")
+        if published:
+            st.caption(f"Published: {published}")
         st.markdown("---")
