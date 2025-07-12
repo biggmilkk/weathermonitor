@@ -65,6 +65,9 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 st.session_state["active_feed"] = None
             else:
                 prev = st.session_state["active_feed"]
+                if prev:
+                    st.session_state[f"{prev}_seen_count"] = len(st.session_state[f"{prev}_data"])
+                st.session_state["active_feed"] = key
 
 # --- Counters ---
 count_cols = st.columns(len(FEED_CONFIG))
