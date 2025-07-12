@@ -108,7 +108,7 @@ if active:
                 unsafe_allow_html=True
             )
         st.markdown(f"**{alert.get('title', '')}**")
-        if "region" in alert:
+        if "region" in alert and active != "meteoalarm":
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
 
         summary = alert.get("summary", "")
