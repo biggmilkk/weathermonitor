@@ -1,6 +1,5 @@
 import feedparser
 import logging
-import re
 from dateutil import parser as dateparser
 from datetime import datetime
 
@@ -9,7 +8,8 @@ def scrape_cma(conf):
     """
     Fetch and parse the CMA CAP RSS feed synchronously using feedparser.
     Skips expired and lifted/removed/resolve bulletins (in title or description).
-    Parses the Chinese warning level from the title and returns it in each entry.
+    Determines alert severity by looking for 'orange' or 'red' in the title,
+    and skips all others (including blue and yellow).
     Uses the RSS <title> as the alert title and cap:areaDesc for region.
     Returns dict with 'entries' and 'source'.
     """
@@ -40,14 +40,19 @@ def scrape_cma(conf):
                 except Exception:
                     pass
 
+            # Determine alert level by color keyword in title
+            if 'orange' in raw_lower:
+                level = 'Orange'
+            elif 'red' in raw_lower:
+                level = 'Red'
+            else:
+                # skip blue and yellow and any unknown
+                continue
+
             # Use the RSS title directly for alerts (preserves proper casing)
             title = raw_title.strip()
             if not title:
                 continue
-
-            # Extract warning level from title (Chinese CAP bracket [Level X])
-            level_match = re.search(r"\[\s*Level\s*(I|II|III|IV)\b", title)
-            level = level_match.group(1) if level_match else None
 
             # Link to full alert
             link = entry.get('link', '').strip()
@@ -55,10 +60,9 @@ def scrape_cma(conf):
             # Published time: cap:effective or pubDate
             published = entry.get('cap_effective') or entry.get('published', '')
 
-            # Area/region: try CAP areaDesc or its variants
+            # Area/region: try CAP areaDesc or fallback to generic
             region = (
-                entry.get('cap_areaDesc') or entry.get('cap_areadesc') or
-                entry.get('areaDesc') or entry.get('areadesc') or 'China'
+                entry.get('cap_areaDesc') or entry.get('areaDesc') or 'China'
             ).strip()
 
             entries.append({
