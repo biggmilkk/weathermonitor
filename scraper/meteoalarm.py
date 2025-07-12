@@ -2,7 +2,6 @@ import feedparser
 import logging
 import re
 from bs4 import BeautifulSoup
-from email.utils import parsedate_to_datetime
 
 AWARENESS_LEVELS = {
     "2": "Yellow",
@@ -25,7 +24,6 @@ AWARENESS_TYPES = {
     "13": "Rain/Flood",
 }
 
-
 def scrape_meteoalarm(conf):
     try:
         url = conf.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe")
@@ -34,13 +32,7 @@ def scrape_meteoalarm(conf):
 
         for entry in feed.entries:
             country = entry.get("title", "").replace("MeteoAlarm ", "").strip()
-
-            pub_raw = entry.get("published", "")
-            try:
-                pub_date = parsedate_to_datetime(pub_raw).isoformat()
-            except Exception:
-                pub_date = ""
-
+            pub_date = entry.get("published", "")
             description_html = entry.get("description", "")
             link = entry.get("link", "")
 
@@ -80,7 +72,7 @@ def scrape_meteoalarm(conf):
                 type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
                 time_info = cells[1].get_text(" ", strip=True)
 
-                line = f"[{level_name}] {type_name} - {time_info}"
+                line = f"[{level_name}] {type_name} - From: {time_info}"
                 if current_section == "Tomorrow":
                     summary_tomorrow.append(line)
                 else:
@@ -92,15 +84,18 @@ def scrape_meteoalarm(conf):
                 if summary_today:
                     summary_lines.append("Today")
                     summary_lines.extend(summary_today)
-                    summary_lines.append("")  # spacing
+                    summary_lines.append("")
 
                 if summary_tomorrow:
                     summary_lines.append("Tomorrow")
                     summary_lines.extend(summary_tomorrow)
 
+                # Join lines with explicit newlines for Streamlit to detect per-line formatting
+                summary_text = "\n".join(summary_lines)
+
                 entries.append({
                     "title": f"{country} Alerts",
-                    "summary": "\n".join(summary_lines),
+                    "summary": summary_text,
                     "link": link,
                     "published": pub_date,
                     "region": country,
