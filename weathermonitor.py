@@ -14,37 +14,26 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Page setup
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
+
+# Auto-refresh every 60 seconds
 st_autorefresh(interval=60 * 1000, key="autorefresh")
 
 now = time.time()
 REFRESH_INTERVAL = 60  # seconds
+
 FEED_CONFIG = get_feed_definitions()
-
-# Cache loader/saver (generic per-feed)
-def load_feed_cache(feed_key):
-    path = os.path.join("data", f"{feed_key}_cache.json")
-    if os.path.exists(path):
-        try:
-            with open(path, "r") as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
-
-def save_feed_cache(feed_key, data):
-    path = os.path.join("data", f"{feed_key}_cache.json")
-    try:
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        logging.warning(f"[CACHE ERROR:{feed_key}] {e}")
 
 # --- Session State Defaults ---
 for key in FEED_CONFIG.keys():
-    st.session_state.setdefault(f"{key}_seen_count", 0)
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
-    st.session_state.setdefault(f"{key}_fingerprints", {})  # for cache support
+
+    # Seen tracking
+    feed_type = FEED_CONFIG[key]["type"]
+    if feed_type == "rss_meteoalarm":
+        st.session_state.setdefault(f"{key}_seen_fingerprints", [])
+    else:
+        st.session_state.setdefault(f"{key}_seen_ids", set())
 
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
@@ -57,20 +46,10 @@ for key, conf in FEED_CONFIG.items():
             scraper_func = SCRAPER_REGISTRY.get(conf["type"])
             if not scraper_func:
                 raise ValueError(f"No scraper registered for type '{conf['type']}'")
-            
-            # Load cache and pass to scraper (if supported)
-            cache = load_feed_cache(key)
-            conf["cache"] = cache
-            
             data = scraper_func(conf)
             st.session_state[f"{key}_data"] = data.get("entries", [])
             st.session_state[f"{key}_last_fetch"] = now
             st.session_state["last_refreshed"] = now
-
-            # Store fingerprints for possible caching
-            if "fingerprints" in data:
-                st.session_state[f"{key}_fingerprints"] = data["fingerprints"]
-
         except Exception as e:
             st.session_state[f"{key}_data"] = []
             logging.warning(f"[{key.upper()} FETCH ERROR] {e}")
@@ -88,25 +67,63 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     with cols[i]:
         if st.button(conf["label"], key=f"btn_{key}", use_container_width=True):
             if st.session_state["active_feed"] == key:
-                st.session_state[f"{key}_seen_count"] = len(st.session_state[f"{key}_data"])
                 st.session_state["active_feed"] = None
             else:
-                prev = st.session_state["active_feed"]
-                if prev:
-                    st.session_state[f"{prev}_seen_count"] = len(st.session_state[f"{prev}_data"])
-                    
-                    # Save cache if fingerprints available
-                    if st.session_state.get(f"{prev}_fingerprints"):
-                        save_feed_cache(prev, st.session_state[f"{prev}_fingerprints"])
-
                 st.session_state["active_feed"] = key
+
+                # Mark all alerts in this feed as seen
+                entries = st.session_state[f"{key}_data"]
+                feed_type = FEED_CONFIG[key]["type"]
+
+                if feed_type == "rss_meteoalarm":
+                    fingerprints = []
+                    for alert in entries:
+                        for line in alert.get("summary", "").split("\n"):
+                            match = (
+                                line.replace("[NEW] ", "").strip()
+                                if line.startswith("[NEW] ")
+                                else line.strip()
+                            )
+                            if match.startswith("["):
+                                fingerprints.append(match)
+                    st.session_state[f"{key}_seen_fingerprints"] = fingerprints
+                else:
+                    ids = {
+                        alert.get("id")
+                        or alert.get("guid")
+                        or alert.get("link")
+                        or alert.get("title")
+                        for alert in entries
+                    }
+                    st.session_state[f"{key}_seen_ids"] = ids
 
 # --- Counters (HTML highlight when new) ---
 count_cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
-    data = st.session_state[f"{key}_data"]
-    total = len(data)
-    new = max(0, total - st.session_state[f"{key}_seen_count"])
+    entries = st.session_state[f"{key}_data"]
+    total = len(entries)
+
+    feed_type = conf["type"]
+    if feed_type == "rss_meteoalarm":
+        seen = set(st.session_state[f"{key}_seen_fingerprints"])
+        all_fps = set()
+        for alert in entries:
+            for line in alert.get("summary", "").split("\n"):
+                line = line.strip().replace("[NEW] ", "")
+                if line.startswith("["):
+                    all_fps.add(line)
+        new = len(all_fps - seen)
+    else:
+        seen_ids = st.session_state[f"{key}_seen_ids"]
+        current_ids = {
+            alert.get("id")
+            or alert.get("guid")
+            or alert.get("link")
+            or alert.get("title")
+            for alert in entries
+        }
+        new = len(current_ids - seen_ids)
+
     with count_cols[i]:
         if new > 0:
             st.markdown(f"""
@@ -131,25 +148,52 @@ if active:
         key=lambda x: x.get("published", ""),
         reverse=True
     )
-    seen_count = st.session_state[f"{active}_seen_count"]
-    for i, alert in enumerate(alerts):
-        is_new = i < (len(alerts) - seen_count)
+
+    feed_type = FEED_CONFIG[active]["type"]
+    seen_set = (
+        set(st.session_state[f"{active}_seen_fingerprints"])
+        if feed_type == "rss_meteoalarm"
+        else st.session_state[f"{active}_seen_ids"]
+    )
+
+    for alert in alerts:
+        is_new = False
+
+        if feed_type == "rss_meteoalarm":
+            lines = alert.get("summary", "").split("\n")
+            for line in lines:
+                line_clean = line.replace("[NEW] ", "").strip()
+                if line_clean.startswith("[") and line_clean not in seen_set:
+                    is_new = True
+                    break
+        else:
+            alert_id = (
+                alert.get("id")
+                or alert.get("guid")
+                or alert.get("link")
+                or alert.get("title")
+            )
+            if alert_id not in seen_set:
+                is_new = True
+
         if is_new:
             st.markdown(
                 "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>",
                 unsafe_allow_html=True
             )
+
         st.markdown(f"**{alert.get('title', '')}**")
-        if "region" in alert and active != "meteoalarm":
+        if "region" in alert and active != "rss_meteoalarm":
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
 
         summary = alert.get("summary", "")
         if summary:
-            if active == "meteoalarm":
+            if active == "rss_meteoalarm":
                 for line in summary.split("\n"):
                     line = line.strip()
                     if not line:
                         continue
+
                     if line.startswith("[") or line.startswith("[NEW] ["):
                         color = "gray"
                         if "[Yellow]" in line:
