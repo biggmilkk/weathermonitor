@@ -60,6 +60,11 @@ cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     with cols[i]:
         if st.button(conf["label"], key=f"btn_{key}", use_container_width=True):
+            if st.session_state["active_feed"] == key:
+                st.session_state[f"{key}_seen_count"] = len(st.session_state[f"{key}_data"])
+                st.session_state["active_feed"] = None
+            else:
+                prev = st.session_state["active_feed"]
 
 # --- Counters ---
 count_cols = st.columns(len(FEED_CONFIG))
