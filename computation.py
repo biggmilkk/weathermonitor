@@ -35,11 +35,13 @@ def compute_counts(entries, conf, last_seen, alert_id_fn=None):
         new_count = sum(1 for e in flat if alert_id_fn and alert_id_fn(e) not in last_seen)
     else:
         total = len(entries)
+        # Ensure last_seen is numeric
+        safe_last = last_seen if isinstance(last_seen, (int, float)) else 0.0
         # Count those published after last_seen timestamp
         new_count = sum(
             1
             for e in entries
-            if e.get('published') and parse_timestamp(e['published']) > last_seen
+            if e.get('published') and parse_timestamp(e['published']) > safe_last
         )
     return total, new_count
 
@@ -65,6 +67,7 @@ def advance_seen(conf, entries, last_seen, now, alert_id_fn=None):
             return set(alert_id_fn(e) for e in flat)
     else:
         # If no entries are newer than last_seen, advance timestamp
-        if not any(parse_timestamp(e.get('published', '')) > last_seen for e in entries):
+        safe_last = last_seen if isinstance(last_seen, (int, float)) else 0.0
+        if not any(parse_timestamp(e.get('published', '')) > safe_last for e in entries):
             return now
     return None
