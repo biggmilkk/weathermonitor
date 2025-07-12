@@ -1,10 +1,8 @@
+import time
 import streamlit as st
 import os
 import sys
-import json
-import time
 import logging
-from dateutil import parser
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from streamlit_autorefresh import st_autorefresh
@@ -29,6 +27,7 @@ for key in FEED_CONFIG.keys():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
     st.session_state.setdefault(f"{key}_last_seen_time", 0.0)
+    st.session_state.setdefault(f"{key}_pending_seen_time", None)
 
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
@@ -65,16 +64,24 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 st.session_state["active_feed"] = None
             else:
                 st.session_state["active_feed"] = key
-                st.session_state[f"{key}_last_seen_time"] = time.time()
+                st.session_state[f"{key}_pending_seen_time"] = time.time()
 
 # --- Counters ---
 count_cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
     last_seen = st.session_state[f"{key}_last_seen_time"]
+
+    def parse_timestamp(ts):
+        try:
+            from dateutil import parser
+            return parser.parse(ts).timestamp()
+        except Exception:
+            return 0
+
     new_count = sum(
         1 for alert in entries
-        if alert.get("published") and parser.parse(alert["published"]).timestamp() > last_seen
+        if alert.get("published") and parse_timestamp(alert["published"]) > last_seen
     )
     total = len(entries)
 
@@ -103,18 +110,20 @@ if active:
         reverse=True
     )
 
-    last_seen_time = st.session_state[f"{active}_last_seen_time"]
+    last_seen = st.session_state[f"{active}_last_seen_time"]
+
+    def parse_timestamp(ts):
+        try:
+            from dateutil import parser
+            return parser.parse(ts).timestamp()
+        except Exception:
+            return 0
 
     for alert in alerts:
         is_new = False
-        published = alert.get("published")
-        if published:
-            try:
-                published_ts = parser.parse(published).timestamp()
-                if published_ts > last_seen_time:
-                    is_new = True
-            except Exception:
-                pass
+        pub_time = parse_timestamp(alert.get("published", ""))
+        if pub_time > last_seen:
+            is_new = True
 
         if is_new:
             st.markdown(
@@ -123,7 +132,6 @@ if active:
             )
 
         st.markdown(f"**{alert.get('title', '')}**")
-
         if "region" in alert:
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
 
@@ -156,6 +164,11 @@ if active:
 
         if alert.get("link"):
             st.markdown(f"[Read more]({alert['link']})")
-        if published:
-            st.caption(f"Published: {published}")
+        if alert.get("published"):
+            st.caption(f"Published: {alert['published']}")
         st.markdown("---")
+
+    # Apply pending seen time AFTER rendering
+    pending_key = f"{active}_pending_seen_time"
+    if pending_key in st.session_state:
+        st.session_state[f"{active}_last_seen_time"] = st.session_state.pop(pending_key)
