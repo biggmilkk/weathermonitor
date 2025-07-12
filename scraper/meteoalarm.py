@@ -38,19 +38,18 @@ def scrape_meteoalarm(conf):
 
             soup = BeautifulSoup(description_html, "html.parser")
             rows = soup.find_all("tr")
-            summary_today = []
-            summary_tomorrow = []
 
-            current_section = "Today"
+            alerts = {"today": [], "tomorrow": []}
+            current_section = "today"
 
             for row in rows:
                 header = row.find("th")
                 if header:
                     text = header.get_text(strip=True).lower()
                     if "tomorrow" in text:
-                        current_section = "Tomorrow"
+                        current_section = "tomorrow"
                     elif "today" in text:
-                        current_section = "Today"
+                        current_section = "today"
                     continue
 
                 cells = row.find_all("td")
@@ -71,45 +70,29 @@ def scrape_meteoalarm(conf):
                 level_name = AWARENESS_LEVELS[level]
                 type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
 
-                # Extract 'From' and 'Until' times
                 from_match = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
                 until_match = re.search(r"Until:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
 
                 from_time = from_match.group(1) if from_match else "?"
                 until_time = until_match.group(1) if until_match else "?"
 
-                line = f"[{level_name}] {type_name} - From: {from_time} Until: {until_time}"
-
-                if current_section == "Tomorrow":
-                    summary_tomorrow.append(line)
-                else:
-                    summary_today.append(line)
-
-            if summary_today or summary_tomorrow:
-                summary_lines = []
-
-                if summary_today:
-                    summary_lines.append("Today")
-                    summary_lines.extend(summary_today)
-
-                if summary_tomorrow:
-                    if summary_today:
-                        summary_lines.append("")  # blank line between Today and Tomorrow
-                    summary_lines.append("Tomorrow")
-                    summary_lines.extend(summary_tomorrow)
-
-                summary_text = "\n".join(summary_lines).strip()
-
-                entries.append({
-                    "title": f"{country} Alerts",
-                    "summary": summary_text,
-                    "link": link,
-                    "published": pub_date,
-                    "region": country,
-                    "province": "Europe"
+                alerts[current_section].append({
+                    "level": level_name,
+                    "type": type_name,
+                    "from": from_time,
+                    "until": until_time
                 })
 
-        logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} alert summaries")
+            entries.append({
+                "title": f"{country} Alerts",
+                "alerts": alerts,
+                "link": link,
+                "published": pub_date,
+                "region": country,
+                "province": "Europe"
+            })
+
+        logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} structured entries")
         return {
             "entries": entries,
             "source": url
