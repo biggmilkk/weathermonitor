@@ -24,6 +24,7 @@ AWARENESS_TYPES = {
     "13": "Rain/Flood",
 }
 
+
 def scrape_meteoalarm(conf):
     try:
         url = conf.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe")
@@ -70,7 +71,7 @@ def scrape_meteoalarm(conf):
 
                 level_name = AWARENESS_LEVELS[level]
                 type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
-                time_info = cells[1].get_text(" ", strip=True)
+                time_info = cells[1].get_text(" ", strip=True).strip()
 
                 line = f"[{level_name}] {type_name} - {time_info}"
                 if current_section == "Tomorrow":
@@ -84,7 +85,7 @@ def scrape_meteoalarm(conf):
                 if summary_today:
                     summary_lines.append("Today")
                     summary_lines.extend(summary_today)
-                    summary_lines.append("")  # Spacer
+                    summary_lines.append("")
 
                 if summary_tomorrow:
                     summary_lines.append("Tomorrow")
