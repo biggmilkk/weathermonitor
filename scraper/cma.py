@@ -1,5 +1,6 @@
 import feedparser
 import logging
+import re
 from dateutil import parser as dateparser
 from datetime import datetime
 
@@ -8,6 +9,7 @@ def scrape_cma(conf):
     """
     Fetch and parse the CMA CAP RSS feed synchronously using feedparser.
     Skips expired and lifted/removed/resolve bulletins (in title or description).
+    Parses the Chinese warning level from the title and returns it in each entry.
     Uses the RSS <title> as the alert title and cap:areaDesc for region.
     Returns dict with 'entries' and 'source'.
     """
@@ -17,7 +19,6 @@ def scrape_cma(conf):
         entries = []
 
         for entry in feed.entries:
-            # Extract raw title and description
             raw_title = entry.get('title', '') or ''
             summary = entry.get('summary', '') or ''
             raw_lower = raw_title.lower()
@@ -44,6 +45,10 @@ def scrape_cma(conf):
             if not title:
                 continue
 
+            # Extract warning level from title (Chinese CAP bracket [Level X])
+            level_match = re.search(r"\[\s*Level\s*(I|II|III|IV)\b", title)
+            level = level_match.group(1) if level_match else None
+
             # Link to full alert
             link = entry.get('link', '').strip()
 
@@ -58,6 +63,7 @@ def scrape_cma(conf):
 
             entries.append({
                 'title': title,
+                'level': level,
                 'summary': summary.strip(),
                 'link': link,
                 'published': published,
