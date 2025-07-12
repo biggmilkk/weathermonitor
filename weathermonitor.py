@@ -7,22 +7,17 @@ from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from streamlit_autorefresh import st_autorefresh
 
-# Extend import path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Page setup
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
-
-# Auto-refresh every 60 seconds
 st_autorefresh(interval=60 * 1000, key="autorefresh")
 
 now = time.time()
-REFRESH_INTERVAL = 60  # seconds
+REFRESH_INTERVAL = 60
 
 FEED_CONFIG = get_feed_definitions()
 
-# --- Session State Defaults ---
 for key in FEED_CONFIG.keys():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
@@ -32,7 +27,7 @@ for key in FEED_CONFIG.keys():
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
 
-# --- Fetch Feed Data ---
+# --- Fetch ---
 for key, conf in FEED_CONFIG.items():
     last_fetch = st.session_state.get(f"{key}_last_fetch") or 0
     if now - last_fetch > REFRESH_INTERVAL:
@@ -48,14 +43,12 @@ for key, conf in FEED_CONFIG.items():
             st.session_state[f"{key}_data"] = []
             logging.warning(f"[{key.upper()} FETCH ERROR] {e}")
 
-# --- UI Header ---
+# --- Header ---
 st.title("Global Weather Monitor")
-st.caption(
-    f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
-)
+st.caption(f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
 st.markdown("---")
 
-# --- Handle Button Clicks ---
+# --- Buttons ---
 cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     with cols[i]:
@@ -120,7 +113,10 @@ if active:
             return 0
 
     for alert in alerts:
-        is_new = parse_timestamp(alert.get("published", "")) > last_seen
+        is_new = False
+        pub_time = parse_timestamp(alert.get("published", ""))
+        if pub_time > last_seen:
+            is_new = True
 
         if is_new:
             st.markdown(
@@ -135,22 +131,21 @@ if active:
         summary = alert.get("summary", "")
         if summary:
             if active == "rss_meteoalarm":
-                for line in summary.split("\n"):
+                lines = summary.split("\n")
+                for line in lines:
                     line = line.strip()
                     if not line:
                         continue
 
-                    # Treat section headers like "Today" or "Tomorrow"
                     if line.lower().startswith("today"):
-                        st.markdown("Today")
+                        st.markdown("#### 🟢 Today")
                         continue
                     elif line.lower().startswith("tomorrow"):
-                        st.markdown("Tomorrow")
+                        st.markdown("#### 🔵 Tomorrow")
                         continue
 
-                    # Bullet for alert lines
                     if line.startswith("["):
-                        color = "gray"
+                        color = "#888888"
                         if "[Yellow]" in line:
                             color = "#FFD700"
                         elif "[Orange]" in line:
@@ -158,14 +153,15 @@ if active:
                         elif "[Red]" in line:
                             color = "#FF4500"
                         st.markdown(
-                            f"<span style='color:{color};font-size:16px'>&#9679;</span> {line}",
+                            f"<div style='margin-bottom:4px;'>"
+                            f"<span style='color:{color};font-size:16px'>&#9679;</span> {line}"
+                            f"</div>",
                             unsafe_allow_html=True
                         )
                     else:
                         st.markdown(line)
             else:
                 st.markdown(summary)
-
         else:
             st.markdown("_No summary available._")
 
@@ -175,7 +171,6 @@ if active:
             st.caption(f"Published: {alert['published']}")
         st.markdown("---")
 
-    # Apply pending seen time AFTER rendering
     pending_key = f"{active}_pending_seen_time"
     if pending_key in st.session_state:
         st.session_state[f"{active}_last_seen_time"] = st.session_state.pop(pending_key)
