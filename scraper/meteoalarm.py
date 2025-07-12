@@ -27,7 +27,16 @@ AWARENESS_TYPES = {
 def scrape_meteoalarm(conf):
     try:
         url = conf.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe")
-        old_cache = conf.get("cache", {})  # expected to be dict from weathermonitor.py
+        old_cache = conf.get("cache", {})
+
+        # Convert old_cache list (if present) into dict format
+        if isinstance(old_cache, list):
+            temp_cache = {}
+            for fp in old_cache:
+                match = re.search(r"\[(Yellow|Orange|Red)\]\s+(\w+)", fp)
+                country = match.group(2) if match else "Unknown"
+                temp_cache.setdefault(country, []).append(fp)
+            old_cache = temp_cache
 
         feed = feedparser.parse(url)
         entries = []
@@ -95,17 +104,15 @@ def scrape_meteoalarm(conf):
                 if summary_today:
                     summary_lines.append("Today")
                     summary_lines.extend(summary_today)
-                    summary_lines.append("")  # space between sections
+                    summary_lines.append("")  # spacing
 
                 if summary_tomorrow:
                     summary_lines.append("Tomorrow")
                     summary_lines.extend(summary_tomorrow)
 
-                summary_text = "\n".join(summary_lines).strip()
-
                 entries.append({
                     "title": f"{country} Alerts",
-                    "summary": summary_text,
+                    "summary": "\n".join(summary_lines),
                     "link": link,
                     "published": pub_date,
                     "region": country,
@@ -125,6 +132,6 @@ def scrape_meteoalarm(conf):
         return {
             "entries": [],
             "error": str(e),
-            "source": conf.get("url", ""),
+            "source": conf.get("url"),
             "fingerprints": {}
         }
