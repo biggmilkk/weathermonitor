@@ -144,10 +144,8 @@ if active:
 
     # CMA color map
     cma_color_map = {
-        'I':   '#E60026',  # Red
-        'II':  '#FF7F00',  # Orange
-        'III': '#FFF200',  # Yellow
-        'IV':  '#0000FF',  # Blue
+        'Red':    '#E60026',  # Red
+        'Orange': '#FF7F00',  # Orange
     }
 
     for item in data_list:
@@ -190,8 +188,8 @@ if active:
                             f"<span style='color:{color};font-size:16px;'>&#9679;</span> {prefix}[{e['level']}] {e['type']} - {fmt_from} - {fmt_until}"
                             f"</div>", unsafe_allow_html=True
                         )
-        elif conf["type"] == "rss_cma":
-            level = item.get('level') or 'III'
+        elif conf["type"] == "rss_cма":
+            level = item.get('level') or 'Orange'
             color = cma_color_map.get(level, '#888')
             st.markdown(
                 f"<div style='margin-bottom:8px;'>"
@@ -216,8 +214,7 @@ if active:
     # Update last seen
     pending_key = f"{active}_pending_seen_time"
     if pending_key in st.session_state:
-        if conf["type"] == "rss_meteoalarm":
-            # Snapshot all current MeteoAlarm alert IDs
+        if conf['type'] == 'rss_meteoalarm':
             snapshot = set()
             for country in st.session_state[f"{active}_data"]:
                 for alerts_list in country.get("alerts", {}).values():
@@ -225,7 +222,5 @@ if active:
                         snapshot.add(alert_id(e))
             st.session_state[f"{active}_last_seen_alerts"] = snapshot
         else:
-            # For other feeds, use timestamp
             st.session_state[f"{active}_last_seen_time"] = st.session_state[pending_key]
-        # Remove pending flag in all cases
         st.session_state.pop(pending_key, None)
