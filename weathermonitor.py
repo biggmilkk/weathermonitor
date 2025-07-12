@@ -159,7 +159,7 @@ if active:
                             unsafe_allow_html=True
                         )
                     else:
-                        st.markdown(line)
+                        st.markdown(f"<div style='margin-bottom:4px;'>{line}</div>", unsafe_allow_html=True)
             else:
                 st.markdown(summary)
         else:
