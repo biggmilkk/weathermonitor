@@ -143,10 +143,7 @@ if active:
         last_seen_time = st.session_state.get(f"{active}_last_seen_time") or 0.0
 
     # CMA color map
-    cma_color_map = {
-        'Red':    '#E60026',  # Red
-        'Orange': '#FF7F00',  # Orange
-    }
+    cma_color_map = { 'Orange': '#FF7F00', 'Red': '#E60026' }
 
     for item in data_list:
         # New indicator
@@ -155,21 +152,19 @@ if active:
             country_alerts = [e for alerts in item.get("alerts", {}).values() for e in alerts]
             if any(alert_id(e) not in seen_alerts for e in country_alerts):
                 st.markdown(
-                    "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>",
-                    unsafe_allow_html=True,
+                    "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>", unsafe_allow_html=True
                 )
         else:
             if pub_ts > last_seen_time:
                 st.markdown(
-                    "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>",
-                    unsafe_allow_html=True,
+                    "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>", unsafe_allow_html=True
                 )
 
         # Rendering per feed
         if conf["type"] == "rss_meteoalarm":
-            st.markdown(f"<h3 style='margin-bottom:4px'>{item.get('title', '')}</h3>", unsafe_allow_html=True)
+            st.markdown(f"<h3 style='margin-bottom:4px'>{item.get('title','')}</h3>", unsafe_allow_html=True)
             for day in ['today','tomorrow']:
-                entries_day = item['alerts'].get(day, [])
+                entries_day = item['alerts'].get(day,[])
                 if entries_day:
                     st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>", unsafe_allow_html=True)
                     for e in entries_day:
@@ -179,25 +174,25 @@ if active:
                             fmt_from = dt_from.strftime("%H:%M UTC %B %d")
                             fmt_until = dt_until.strftime("%H:%M UTC %B %d")
                         except:
-                            fmt_from, fmt_until = e['from'], e['until']
+                            fmt_from,fmt_until=e['```']
                         is_new = alert_id(e) not in seen_alerts
                         prefix = '[NEW] ' if is_new else ''
-                        color = {'orange':'#FF7F00','red':'#E60026'}.get(e['level'].lower(),'#888')
+                        color = {'Orange':'#FF7F00','Red':'#E60026'}.get(e['level'], '#888')
                         st.markdown(
                             f"<div style='margin-bottom:6px;'>"
-                            f"<span style='color:{color};font-size:16px;'>&#9679;</span> {prefix}[{e['level']}] {e['type']} - {fmt_from} - {fmt_until}"
+                            f"<span style='color:{color};font-size:16px;'>&#9679;</span> {prefix}[{e['level']}] {e['type']} – {fmt_from} – {fmt_until}"
                             f"</div>", unsafe_allow_html=True
                         )
         elif conf["type"] == "rss_cma":
-            level = item.get('level') or 'Orange'
-            color = cma_color_map.get(level, '#888')
+            level = item.get('level','Orange')
+            color = cma_color_map.get(level,'#888')
             st.markdown(
                 f"<div style='margin-bottom:8px;'>"
                 f"<span style='color:{color};font-size:18px;'>&#9679;</span> **{item['title']}**"
                 f"</div>", unsafe_allow_html=True
             )
-            st.caption(f"Region: {item['region']}")
-            st.markdown(item['summary'])
+            st.caption(f"Region: {item.get('region','')}" )
+            st.markdown(item.get('summary',''))
             if item.get('link'):
                 st.markdown(f"[Read more]({item['link']})")
             if item.get('published'):
@@ -214,13 +209,13 @@ if active:
     # Update last seen
     pending_key = f"{active}_pending_seen_time"
     if pending_key in st.session_state:
-        if conf['type'] == 'rss_meteoalarm':
-            snapshot = set()
+        if conf['type']=="rss_meteoalarm":
+            snapshot=set()
             for country in st.session_state[f"{active}_data"]:
-                for alerts_list in country.get("alerts", {}).values():
+                for alerts_list in country.get("alerts",{}).values():
                     for e in alerts_list:
                         snapshot.add(alert_id(e))
-            st.session_state[f"{active}_last_seen_alerts"] = snapshot
+            st.session_state[f"{active}_last_seen_alerts"]=snapshot
         else:
-            st.session_state[f"{active}_last_seen_time"] = st.session_state[pending_key]
-        st.session_state.pop(pending_key, None)
+            st.session_state[f"{active}_last_seen_time"]=st.session_state[pending_key]
+        st.session_state.pop(pending_key,None)
