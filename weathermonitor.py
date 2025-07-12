@@ -21,7 +21,8 @@ st_autorefresh(interval=60 * 1000, key="autorefresh")
 now = time.time()
 REFRESH_INTERVAL = 60  # seconds
 
-# Load feed definitions\ nFEED_CONFIG = get_feed_definitions()
+# Load feed definitions
+FEED_CONFIG = get_feed_definitions()
 
 # Initialize session state for feeds
 for key, conf in FEED_CONFIG.items():
