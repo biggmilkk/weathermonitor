@@ -60,9 +60,9 @@ def scrape_cma(conf):
             # Published time: cap:effective or pubDate
             published = entry.get('cap_effective') or entry.get('published', '')
 
-            # Area/region: try CAP areaDesc or fallback to generic
+            # Area/region: prefer normalized CAP areaDesc, fallback to other variants
             region = (
-                entry.get('cap_areaDesc') or entry.get('areaDesc') or 'China'
+                entry.get('cap_areadesc') or entry.get('cap_areaDesc') or entry.get('areaDesc') or 'China'
             ).strip()
 
             entries.append({
