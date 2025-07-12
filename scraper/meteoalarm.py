@@ -59,10 +59,22 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
 
             soup = BeautifulSoup(description_html, "html.parser")
             rows = soup.find_all("tr")
-            summary_lines = []
+            summary_today = []
+            summary_tomorrow = []
             fingerprint_blocks = []
 
+            current_section = "Today"
+
             for row in rows:
+                header = row.find("th")
+                if header:
+                    text = header.get_text(strip=True).lower()
+                    if "tomorrow" in text:
+                        current_section = "Tomorrow"
+                    elif "today" in text:
+                        current_section = "Today"
+                    continue
+
                 cells = row.find_all("td")
                 if len(cells) != 2:
                     continue
@@ -88,13 +100,26 @@ def scrape_meteoalarm(url="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-
 
                 prev_fps = old_cache.get(country, [])
                 prefix = "[NEW] " if fingerprint not in prev_fps else ""
-                summary_lines.append(f"{prefix}[{level_name}] {type_name} - {time_info}")
+                line = f"{prefix}[{level_name}] {type_name} - {time_info}"
 
-            if summary_lines:
+                if current_section == "Tomorrow":
+                    summary_tomorrow.append(line)
+                else:
+                    summary_today.append(line)
+
+            if summary_today or summary_tomorrow:
                 new_cache[country] = fingerprint_blocks
+                summary_parts = []
+                if summary_today:
+                    summary_parts.append("**Today**")
+                    summary_parts.extend(summary_today)
+                if summary_tomorrow:
+                    summary_parts.append("\n**Tomorrow**")
+                    summary_parts.extend(summary_tomorrow)
+
                 entries.append({
                     "title": f"{country} Alerts",
-                    "summary": "\n".join(summary_lines),
+                    "summary": "\n".join(summary_parts),
                     "link": link,
                     "published": pub_date,
                     "region": country,
