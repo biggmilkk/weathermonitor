@@ -24,7 +24,6 @@ AWARENESS_TYPES = {
     "13": "Rain/Flood",
 }
 
-
 def scrape_meteoalarm(conf):
     try:
         url = conf.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe")
@@ -71,9 +70,16 @@ def scrape_meteoalarm(conf):
 
                 level_name = AWARENESS_LEVELS[level]
                 type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
-                time_info = cells[1].get_text(" ", strip=True).strip()
 
-                line = f"[{level_name}] {type_name} - {time_info}"
+                # Extract 'From' and 'Until' times
+                from_match = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
+                until_match = re.search(r"Until:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
+
+                from_time = from_match.group(1) if from_match else "?"
+                until_time = until_match.group(1) if until_match else "?"
+
+                line = f"[{level_name}] {type_name} - From: {from_time} Until: {until_time}"
+
                 if current_section == "Tomorrow":
                     summary_tomorrow.append(line)
                 else:
@@ -85,13 +91,12 @@ def scrape_meteoalarm(conf):
                 if summary_today:
                     summary_lines.append("Today")
                     summary_lines.extend(summary_today)
-                    summary_lines.append("")
 
                 if summary_tomorrow:
                     summary_lines.append("Tomorrow")
                     summary_lines.extend(summary_tomorrow)
 
-                summary_text = "\n".join(summary_lines)
+                summary_text = "\n".join(summary_lines)  # Ensure each alert is on its own line
 
                 entries.append({
                     "title": f"{country} Alerts",
