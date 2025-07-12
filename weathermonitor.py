@@ -20,7 +20,6 @@ st_autorefresh(interval=60 * 1000, key="autorefresh")
 
 now = time.time()
 REFRESH_INTERVAL = 60  # seconds
-
 FEED_CONFIG = get_feed_definitions()
 
 # --- Session State Defaults ---
@@ -30,7 +29,7 @@ for key in FEED_CONFIG.keys():
 
     feed_type = FEED_CONFIG[key]["type"]
     if feed_type == "rss_meteoalarm":
-        st.session_state.setdefault(f"{key}_seen_fingerprints", [])
+        st.session_state.setdefault(f"{key}_seen_fingerprints", {})
     else:
         st.session_state.setdefault(f"{key}_seen_ids", set())
 
@@ -42,17 +41,19 @@ for key, conf in FEED_CONFIG.items():
     last_fetch = st.session_state[f"{key}_last_fetch"]
     if now - last_fetch > REFRESH_INTERVAL:
         try:
-            scraper_func = SCRAPER_REGISTRY.get(conf["type"])
+            feed_type = conf["type"]
+            if feed_type == "rss_meteoalarm":
+                conf = dict(conf)  # avoid modifying original
+                conf["cache"] = st.session_state[f"{key}_seen_fingerprints"]
+            scraper_func = SCRAPER_REGISTRY.get(feed_type)
             if not scraper_func:
-                raise ValueError(f"No scraper registered for type '{conf['type']}'")
-
-            if conf["type"] == "rss_meteoalarm":
-                conf["cache"] = {k: v for k, v in st.session_state.get(f"{key}_seen_fingerprints", {}).items()}
-
+                raise ValueError(f"No scraper registered for type '{feed_type}'")
             data = scraper_func(conf)
             st.session_state[f"{key}_data"] = data.get("entries", [])
             st.session_state[f"{key}_last_fetch"] = now
             st.session_state["last_refreshed"] = now
+            if feed_type == "rss_meteoalarm":
+                st.session_state[f"{key}_fingerprints_latest"] = data.get("fingerprints", {})
         except Exception as e:
             st.session_state[f"{key}_data"] = []
             logging.warning(f"[{key.upper()} FETCH ERROR] {e}")
@@ -73,18 +74,13 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 st.session_state["active_feed"] = None
             else:
                 st.session_state["active_feed"] = key
-
                 entries = st.session_state[f"{key}_data"]
-                feed_type = FEED_CONFIG[key]["type"]
+                feed_type = conf["type"]
 
                 if feed_type == "rss_meteoalarm":
-                    fingerprints = []
-                    for alert in entries:
-                        for line in alert.get("summary", "").split("\n"):
-                            line = line.replace("[NEW] ", "").strip()
-                            if line.startswith("["):
-                                fingerprints.append(line)
-                    st.session_state[f"{key}_seen_fingerprints"] = fingerprints
+                    # Store latest fingerprints as seen
+                    latest_fps = st.session_state.get(f"{key}_fingerprints_latest", {})
+                    st.session_state[f"{key}_seen_fingerprints"] = latest_fps
                 else:
                     ids = {
                         alert.get("id")
@@ -100,17 +96,24 @@ count_cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
     total = len(entries)
-
     feed_type = conf["type"]
+    new = 0
+
     if feed_type == "rss_meteoalarm":
-        seen = set(st.session_state[f"{key}_seen_fingerprints"])
-        all_fps = set()
+        seen = st.session_state[f"{key}_seen_fingerprints"]
+        all_fps = {}
         for alert in entries:
-            for line in alert.get("summary", "").split("\n"):
-                line = line.strip().replace("[NEW] ", "")
+            country = alert.get("region", "Unknown")
+            lines = alert.get("summary", "").split("\n")
+            fps = []
+            for line in lines:
+                line = line.replace("[NEW] ", "").strip()
                 if line.startswith("["):
-                    all_fps.add(line)
-        new = len(all_fps - seen)
+                    fps.append(line)
+            all_fps[country] = fps
+        for country, fps_list in all_fps.items():
+            seen_fps = set(seen.get(country, []))
+            new += len(set(fps_list) - seen_fps)
     else:
         seen_ids = st.session_state[f"{key}_seen_ids"]
         current_ids = {
@@ -149,7 +152,7 @@ if active:
 
     feed_type = FEED_CONFIG[active]["type"]
     seen_set = (
-        set(st.session_state[f"{active}_seen_fingerprints"])
+        st.session_state[f"{active}_seen_fingerprints"]
         if feed_type == "rss_meteoalarm"
         else st.session_state[f"{active}_seen_ids"]
     )
@@ -158,9 +161,11 @@ if active:
         is_new = False
 
         if feed_type == "rss_meteoalarm":
+            country = alert.get("region", "Unknown")
+            seen_country_fps = set(seen_set.get(country, []))
             for line in alert.get("summary", "").split("\n"):
                 line_clean = line.replace("[NEW] ", "").strip()
-                if line_clean.startswith("[") and line_clean not in seen_set:
+                if line_clean.startswith("[") and line_clean not in seen_country_fps:
                     is_new = True
                     break
         else:
@@ -180,21 +185,16 @@ if active:
             )
 
         st.markdown(f"**{alert.get('title', '')}**")
-        if "region" in alert and active != "rss_meteoalarm":
+        if "region" in alert and feed_type != "rss_meteoalarm":
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
 
         summary = alert.get("summary", "")
         if summary:
-            if active == "rss_meteoalarm":
+            if feed_type == "rss_meteoalarm":
                 for line in summary.split("\n"):
                     line = line.strip()
                     if not line:
                         continue
-
-                    if line in ("Today", "Tomorrow"):
-                        st.markdown(f"**{line}**")
-                        continue
-
                     if line.startswith("[") or line.startswith("[NEW] ["):
                         color = "gray"
                         if "[Yellow]" in line:
