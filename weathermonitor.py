@@ -194,6 +194,12 @@ if active:
                     if not line:
                         continue
 
+                    # Section headers
+                    if line in ("Today", "Tomorrow"):
+                        st.markdown(f"**{line}**")
+                        continue
+
+                    # Alert lines with color bullets
                     if line.startswith("[") or line.startswith("[NEW] ["):
                         color = "gray"
                         if "[Yellow]" in line:
