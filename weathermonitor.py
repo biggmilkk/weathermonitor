@@ -115,17 +115,24 @@ if active:
         if summary:
             if active == "meteoalarm":
                 for line in summary.split("\n"):
-                    color = "gray"
-                    if "[Yellow]" in line:
-                        color = "#FFFF00"
-                    elif "[Orange]" in line:
-                        color = "#FF8C00"
-                    elif "[Red]" in line:
-                        color = "#FF0000"
-                    st.markdown(
-                        f"<span style='color:{color};font-size:18px'>&#9679;</span> {line}",
-                        unsafe_allow_html=True
-                    )
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    if line.startswith("[") or line.startswith("[NEW] ["):
+                        color = "gray"
+                        if "[Yellow]" in line:
+                            color = "#FFFF00"
+                        elif "[Orange]" in line:
+                            color = "#FF8C00"
+                        elif "[Red]" in line:
+                            color = "#FF0000"
+                        st.markdown(
+                            f"<span style='color:{color};font-size:18px'>&#9679;</span> {line}",
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        st.markdown(f"**{line}**")
             else:
                 max_len = 500
                 is_truncated = len(summary) > max_len
