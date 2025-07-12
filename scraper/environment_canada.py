@@ -22,7 +22,15 @@ async def fetch_and_parse(session, region):
                 published_elem = entry.find("{http://www.w3.org/2005/Atom}published")
 
                 title = title_elem.text if title_elem is not None else ""
-                if not title or title.strip().upper().startswith("NO ALERT"):
+                if not title:
+                    continue
+
+                # Skip ended alerts
+                if "ENDED" in title.upper():
+                    continue
+                
+                # Skip "No alert" entries
+                if title.strip().upper().startswith("NO ALERT"):
                     continue
 
                 alert_type = re.split(r",\s*", title)[0].strip().upper()
