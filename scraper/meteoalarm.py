@@ -72,7 +72,7 @@ def scrape_meteoalarm(conf):
                 type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
                 time_info = cells[1].get_text(" ", strip=True)
 
-                line = f"[{level_name}] {type_name} - From: {time_info}"
+                line = f"[{level_name}] {type_name} - {time_info}"
                 if current_section == "Tomorrow":
                     summary_tomorrow.append(line)
                 else:
