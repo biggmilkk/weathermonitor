@@ -79,14 +79,12 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         if new > 0:
             st.markdown(f"""
                 <div style="padding:8px;border-radius:6px;background-color:#ffeecc;">
-                    <strong>{conf['label']} 🔔</strong><br />
-                    {total} total / <strong>{new} new</strong>
+                    🔔 {total} total / <strong>{new} new</strong>
                 </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
                 <div style="padding:8px;border-radius:6px;">
-                    <strong>{conf['label']}</strong><br />
                     {total} total / {new} new
                 </div>
             """, unsafe_allow_html=True)
