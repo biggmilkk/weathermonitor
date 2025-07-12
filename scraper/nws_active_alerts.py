@@ -3,14 +3,10 @@ import logging
 
 ALLOWED_EVENTS = {
     "Severe Thunderstorm Warning",
-    "Evacuation Immediate",
+    "Flash Flood Warning",
+    "Tornado Warning",
     "Flood Warning",
     "Extreme Heat Warning",
-    "Heat Advisory",
-    "Flood Advisory",
-    "Dense Fog Advisory",
-    "Flood Watch",
-    "Extreme Heat Watch",
     "Air Quality Alert"
 }
 
