@@ -26,7 +26,7 @@ FEED_CONFIG = get_feed_definitions()
 for key in FEED_CONFIG.keys():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
-    st.session_state.setdefault(f"{key}_last_opened", 0)
+    st.session_state.setdefault(f"{key}_last_opened", 0)  # For tracking new alerts
 
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
@@ -59,35 +59,39 @@ cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     with cols[i]:
         if st.button(conf["label"], key=f"btn_{key}", use_container_width=True):
+            now = time.time()
             if st.session_state["active_feed"] == key:
                 st.session_state["active_feed"] = None
             else:
                 st.session_state["active_feed"] = key
-                st.session_state[f"{key}_last_opened"] = time.time()
+                st.session_state[f"{key}_last_opened"] = now  # ✅ Mark feed as viewed
 
 # --- Counters ---
 count_cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
     total = len(entries)
-    last_opened = st.session_state.get(f"{key}_last_opened", 0)
-
+    last_opened = st.session_state[f"{key}_last_opened"]
     new = 0
-    for e in entries:
-        published_str = e.get("published")
-        if published_str:
+
+    for alert in entries:
+        published = alert.get("published", "")
+        try:
+            published_ts = time.mktime(time.strptime(published, "%Y-%m-%dT%H:%M:%S%z"))
+        except Exception:
             try:
-                published_time = time.mktime(time.strptime(published_str, "%Y-%m-%dT%H:%M:%S%z"))
-                if published_time > last_opened:
-                    new += 1
+                published_ts = time.mktime(time.strptime(published, "%a, %d %b %y %H:%M:%S %z"))
             except Exception:
-                new += 1  # Consider it new if parsing fails
+                published_ts = 0
+
+        if published_ts > last_opened:
+            new += 1
 
     with count_cols[i]:
         if new > 0:
             st.markdown(f"""
                 <div style="padding:8px;border-radius:6px;background-color:#ffeecc;">
-                    ⚠️ {total} total / <strong>{new} new</strong>
+                    ❗ {total} total / <strong>{new} new</strong>
                 </div>
             """, unsafe_allow_html=True)
         else:
@@ -107,17 +111,21 @@ if active:
         key=lambda x: x.get("published", ""),
         reverse=True
     )
-    last_opened = st.session_state.get(f"{active}_last_opened", 0)
+    last_opened = st.session_state[f"{active}_last_opened"]
 
     for alert in alerts:
         is_new = False
-        published_str = alert.get("published")
-        if published_str:
+        published = alert.get("published", "")
+        try:
+            published_ts = time.mktime(time.strptime(published, "%Y-%m-%dT%H:%M:%S%z"))
+        except Exception:
             try:
-                published_time = time.mktime(time.strptime(published_str, "%Y-%m-%dT%H:%M:%S%z"))
-                is_new = published_time > last_opened
+                published_ts = time.mktime(time.strptime(published, "%a, %d %b %y %H:%M:%S %z"))
             except Exception:
-                is_new = True
+                published_ts = 0
+
+        if published_ts > last_opened:
+            is_new = True
 
         if is_new:
             st.markdown(
@@ -126,12 +134,34 @@ if active:
             )
 
         st.markdown(f"**{alert.get('title', '')}**")
-        if "region" in alert:
+
+        if "region" in alert and active != "rss_meteoalarm":
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
 
         summary = alert.get("summary", "")
         if summary:
-            st.markdown(summary)
+            if active == "rss_meteoalarm":
+                for line in summary.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    if line.startswith("[") or line.startswith("[NEW] ["):
+                        color = "gray"
+                        if "[Yellow]" in line:
+                            color = "#FFFF00"
+                        elif "[Orange]" in line:
+                            color = "#FF8C00"
+                        elif "[Red]" in line:
+                            color = "#FF0000"
+                        st.markdown(
+                            f"<span style='color:{color};font-size:18px'>&#9679;</span> {line}",
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        st.markdown(f"**{line}**")
+            else:
+                st.markdown(summary)
         else:
             st.markdown("_No summary available._")
 
