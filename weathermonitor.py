@@ -137,12 +137,12 @@ if active:
                         try:
                             dt_from = dateparser.parse(e["from"])
                             dt_until = dateparser.parse(e["until"])
-                            formatted_from = dt_from.strftime("%H:%M:%S UTC %B %d, %Y")
-                            formatted_until = dt_until.strftime("%H:%M:%S UTC %B %d, %Y")
+                            formatted_from = dt_from.strftime("%H:%M UTC %B %d")
+                            formatted_until = dt_until.strftime("%H:%M UTC %B %d")
                         except Exception:
                             formatted_from = e["from"]
                             formatted_until = e["until"]
-                        label = f"[{e['level']}] {e['type']} - From: {formatted_from} Until: {formatted_until}"
+                        label = f"[{e['level']}] {e['type']} - {formatted_from} - {formatted_until}"
                         st.markdown(
                             f"<div style='margin-bottom:6px;'>"
                             f"<span style='color:{color};font-size:16px;'>&#9679;</span> {label}"
