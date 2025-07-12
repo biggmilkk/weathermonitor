@@ -148,19 +148,26 @@ if active:
                         continue
 
                     color = "#888"
-                    if "[Yellow]" in line:
+                    level_text = ""
+                    if line.startswith("[Yellow]"):
                         color = "#FFD700"
-                    elif "[Orange]" in line:
+                        level_text = "[Yellow]"
+                    elif line.startswith("[Orange]"):
                         color = "#FFA500"
-                    elif "[Red]" in line:
+                        level_text = "[Orange]"
+                    elif line.startswith("[Red]"):
                         color = "#FF4500"
+                        level_text = "[Red]"
+
+                    text_only = line.replace(level_text, "").strip()
 
                     st.markdown(
                         f"<div style='margin-bottom:6px;'>"
-                        f"<span style='color:{color};font-size:16px;'>&#9679;</span> {line}"
+                        f"<span style='color:{color};font-size:16px;'>&#9679;</span> {text_only}"
                         f"</div>",
                         unsafe_allow_html=True
                     )
+
             else:
                 st.markdown(summary)
         else:
