@@ -81,7 +81,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 st.session_state["active_feed"] = key
                 st.session_state[f"{key}_pending_seen_time"] = time.time()
 
-# New/total counts per alert or country
+# New/total counts per feed
 tabs = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
@@ -96,13 +96,6 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         ]
         total = len(flat)
         new_count = sum(1 for e in flat if alert_id(e) not in seen_alerts)
-    elif conf["type"] == "rss_cma":
-        # CMA per-alert count
-        alert_list = entries
-        total = len(alert_list)
-        # New if title not seen or published after last_seen_time
-        last_seen = st.session_state.get(f"{key}_last_seen_time") or 0.0
-        new_count = sum(1 for alert in alert_list if parse_timestamp(alert.get("published", "")) > last_seen)
     else:
         last_seen = st.session_state.get(f"{key}_last_seen_time") or 0.0
         total = len(entries)
@@ -139,11 +132,11 @@ if active:
     conf = FEED_CONFIG[active]
     st.subheader(f"{conf['label']} Feed")
 
-    data_list = st.session_state[f"{active}_data"]
-    # Sorting by published
-    data_list = sorted(data_list, key=lambda x: x.get("published", ""), reverse=True)
+    data_list = sorted(
+        st.session_state[f"{active}_data"], key=lambda x: x.get("published", ""), reverse=True
+    )
 
-    # New-seen tracking setup
+    # Prepare seen tracking
     if conf["type"] == "rss_meteoalarm":
         seen_alerts = st.session_state.get(f"{active}_last_seen_alerts", set())
     else:
@@ -158,7 +151,8 @@ if active:
     }
 
     for item in data_list:
-        # Country-level new indicator for meteoalarm
+        # New indicator
+        pub_ts = parse_timestamp(item.get("published", ""))
         if conf["type"] == "rss_meteoalarm":
             country_alerts = [e for alerts in item.get("alerts", {}).values() for e in alerts]
             if any(alert_id(e) not in seen_alerts for e in country_alerts):
@@ -166,38 +160,28 @@ if active:
                     "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>",
                     unsafe_allow_html=True,
                 )
-        # CMA new indicator per-alert
-        elif conf["type"] == "rss_cma":
-            pub_ts = parse_timestamp(item.get("published", ""))
-            if pub_ts > last_seen_time:
-                st.markdown(
-                    "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>",
-                    unsafe_allow_html=True,
-                )
         else:
-            pub_ts = parse_timestamp(item.get("published", ""))
             if pub_ts > last_seen_time:
                 st.markdown(
                     "<div style='height:4px;background:red;margin:10px 0;border-radius:2px;'></div>",
                     unsafe_allow_html=True,
                 )
 
-        # Rendering per feed type
+        # Rendering per feed
         if conf["type"] == "rss_meteoalarm":
-            # MeteoAlarm countries
             st.markdown(f"<h3 style='margin-bottom:4px'>{item.get('title', '')}</h3>", unsafe_allow_html=True)
             for day in ['today','tomorrow']:
-                entries = item['alerts'].get(day, [])
-                if entries:
+                entries_day = item['alerts'].get(day, [])
+                if entries_day:
                     st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>", unsafe_allow_html=True)
-                    for e in entries:
+                    for e in entries_day:
                         try:
                             dt_from = dateparser.parse(e['from'])
                             dt_until = dateparser.parse(e['until'])
                             fmt_from = dt_from.strftime("%H:%M UTC %B %d")
                             fmt_until = dt_until.strftime("%H:%M UTC %B %d")
                         except:
-                            fmt_from,fmt_until = e['from'],e['until']
+                            fmt_from, fmt_until = e['from'], e['until']
                         is_new = alert_id(e) not in seen_alerts
                         prefix = '[NEW] ' if is_new else ''
                         color = {'orange':'#FF7F00','red':'#E60026'}.get(e['level'].lower(),'#888')
@@ -207,7 +191,7 @@ if active:
                             f"</div>", unsafe_allow_html=True
                         )
         elif conf["type"] == "rss_cma":
-            # CMA alerts\ n            level = item.get('level') or 'III'
+            level = item.get('level') or 'III'
             color = cma_color_map.get(level, '#888')
             st.markdown(
                 f"<div style='margin-bottom:8px;'>"
@@ -222,7 +206,6 @@ if active:
                 st.caption(f"Published: {item['published']}")
             st.markdown("---")
         else:
-            # Other feed summaries
             st.markdown(item.get('summary','_No summary available._'))
             if item.get('link'):
                 st.markdown(f"[Read more]({item['link']})")
@@ -232,13 +215,4 @@ if active:
 
     # Update last seen
     pending = f"{active}_pending_seen_time"
-    if pending in st.session_state:
-        if conf['type'] == 'rss_meteoalarm':
-            snapshot = set()
-            for country in st.session_state[f"{active}_data"]:
-                for alerts in country.get("alerts", {}).values():
-                    for e in alerts:
-                        snapshot.add(alert_id(e))
-            st.session_state[f"{active}_last_seen_alerts"] = snapshot
-        else:
-            st.session_state[f"{active}_last_seen_time"] = st.session_state.pop(pending)
+    if pending in st.session_state: ...
