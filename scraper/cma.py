@@ -28,8 +28,9 @@ def scrape_cma(conf):
 
             # Title: prefer CAP event, fallback to <title>
             title = entry.get('cap_event', entry.get('title', '')).strip()
-            if not title:
-                continue
+	    # skip any “lifted” bulletins
+            if 'lifted' in title.lower():
+            	continue
 
             # Summary/description
             summary = entry.get('summary', '').strip()
