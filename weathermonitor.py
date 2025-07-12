@@ -70,7 +70,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
 count_cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
-    last_seen = st.session_state[f"{key}_last_seen_time"]
+    last_seen = st.session_state.get(f"{key}_last_seen_time") or 0.0
 
     def parse_timestamp(ts):
         try:
@@ -110,7 +110,7 @@ if active:
         reverse=True
     )
 
-    last_seen = st.session_state[f"{active}_last_seen_time"]
+    last_seen = st.session_state.get(f"{active}_last_seen_time") or 0.0
 
     def parse_timestamp(ts):
         try:
