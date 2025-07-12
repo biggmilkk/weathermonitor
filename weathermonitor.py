@@ -150,17 +150,17 @@ if active:
                     if line.startswith("["):
                         color = "gray"
                         if "[Yellow]" in line:
-                            color = "#FFFF00"
+                            color = "#FFD700"
                         elif "[Orange]" in line:
-                            color = "#FF8C00"
+                            color = "#FFA500"
                         elif "[Red]" in line:
-                            color = "#FF0000"
+                            color = "#FF4500"
                         st.markdown(
                             f"<span style='color:{color};font-size:18px'>&#9679;</span> {line}",
                             unsafe_allow_html=True
                         )
                     else:
-                        st.markdown(f"**{line}**")
+                        st.markdown(line)
             else:
                 st.markdown(summary)
         else:
