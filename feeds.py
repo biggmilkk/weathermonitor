@@ -14,5 +14,10 @@ def get_feed_definitions():
             "label": "Meteoalarm Europe",
             "type": "rss_meteoalarm",
             "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"
-        }
+        },
+        "cma_china": {
+            "label": "China Alerts",
+            "type": "rss_cma",
+            "url": "https://severeweather.wmo.int/v2/cap-alerts/cn-cma-xx/rss.xml"
+        },
     }
