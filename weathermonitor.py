@@ -28,7 +28,6 @@ for key in FEED_CONFIG.keys():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
 
-    # Seen tracking
     feed_type = FEED_CONFIG[key]["type"]
     if feed_type == "rss_meteoalarm":
         st.session_state.setdefault(f"{key}_seen_fingerprints", [])
@@ -46,6 +45,10 @@ for key, conf in FEED_CONFIG.items():
             scraper_func = SCRAPER_REGISTRY.get(conf["type"])
             if not scraper_func:
                 raise ValueError(f"No scraper registered for type '{conf['type']}'")
+
+            if conf["type"] == "rss_meteoalarm":
+                conf["cache"] = {k: v for k, v in st.session_state.get(f"{key}_seen_fingerprints", {}).items()}
+
             data = scraper_func(conf)
             st.session_state[f"{key}_data"] = data.get("entries", [])
             st.session_state[f"{key}_last_fetch"] = now
@@ -71,7 +74,6 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
             else:
                 st.session_state["active_feed"] = key
 
-                # Mark all alerts in this feed as seen
                 entries = st.session_state[f"{key}_data"]
                 feed_type = FEED_CONFIG[key]["type"]
 
@@ -79,13 +81,9 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                     fingerprints = []
                     for alert in entries:
                         for line in alert.get("summary", "").split("\n"):
-                            match = (
-                                line.replace("[NEW] ", "").strip()
-                                if line.startswith("[NEW] ")
-                                else line.strip()
-                            )
-                            if match.startswith("["):
-                                fingerprints.append(match)
+                            line = line.replace("[NEW] ", "").strip()
+                            if line.startswith("["):
+                                fingerprints.append(line)
                     st.session_state[f"{key}_seen_fingerprints"] = fingerprints
                 else:
                     ids = {
@@ -97,7 +95,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                     }
                     st.session_state[f"{key}_seen_ids"] = ids
 
-# --- Counters (HTML highlight when new) ---
+# --- Counters ---
 count_cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
@@ -160,8 +158,7 @@ if active:
         is_new = False
 
         if feed_type == "rss_meteoalarm":
-            lines = alert.get("summary", "").split("\n")
-            for line in lines:
+            for line in alert.get("summary", "").split("\n"):
                 line_clean = line.replace("[NEW] ", "").strip()
                 if line_clean.startswith("[") and line_clean not in seen_set:
                     is_new = True
@@ -194,12 +191,10 @@ if active:
                     if not line:
                         continue
 
-                    # Section headers
                     if line in ("Today", "Tomorrow"):
                         st.markdown(f"**{line}**")
                         continue
 
-                    # Alert lines with color bullets
                     if line.startswith("[") or line.startswith("[NEW] ["):
                         color = "gray"
                         if "[Yellow]" in line:
