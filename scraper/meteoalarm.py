@@ -3,13 +3,15 @@ import logging
 import re
 from bs4 import BeautifulSoup
 
-# Alert severity levels mapped from MeteoAlarm codes\AWARENESS_LEVELS = {
+# Alert severity levels mapped from MeteoAlarm codes
+AWARENESS_LEVELS = {
     "2": "Yellow",
     "3": "Orange",
     "4": "Red",
 }
 
-# Alert types mapped from MeteoAlarm codes\AWARENESS_TYPES = {
+# Alert types mapped from MeteoAlarm codes
+AWARENESS_TYPES = {
     "1": "Wind",
     "2": "Snow/Ice",
     "3": "Thunderstorms",
@@ -24,12 +26,15 @@ from bs4 import BeautifulSoup
     "13": "Rain/Flood",
 }
 
+
 def scrape_meteoalarm(conf):
     """
     Fetch and parse the MeteoAlarm RSS feed for European countries.
     Returns a dict with 'entries' (list of alert dicts) and 'source' URL.
     """
-    url = conf.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe")
+    url = conf.get(
+        "url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"
+    )
     try:
         feed = feedparser.parse(url)
         entries = []
@@ -97,19 +102,12 @@ def scrape_meteoalarm(conf):
                 "link": link,
                 "published": pub_date,
                 "region": country,
-                "province": "Europe"
+                "province": "Europe",
             })
 
         logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} alert summaries")
-        return {
-            "entries": entries,
-            "source": url
-        }
+        return {"entries": entries, "source": url}
 
     except Exception as e:
         logging.warning(f"[METEOALARM ERROR] Failed to fetch feed: {e}")
-        return {
-            "entries": [],
-            "error": str(e),
-            "source": url
-        }
+        return {"entries": [], "error": str(e), "source": url}
