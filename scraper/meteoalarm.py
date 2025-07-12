@@ -72,7 +72,7 @@ def scrape_meteoalarm(conf):
                 type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
                 time_info = cells[1].get_text(" ", strip=True)
 
-                line = f"[{level_name}] {type_name} - From: {time_info}"
+                line = f"[{level_name}] {type_name} - {time_info}"
                 if current_section == "Tomorrow":
                     summary_tomorrow.append(line)
                 else:
@@ -83,12 +83,12 @@ def scrape_meteoalarm(conf):
 
                 if summary_today:
                     summary_lines.append("Today")
-                    summary_lines.append("\n".join(summary_today))
-                    summary_lines.append("")
+                    summary_lines.extend(summary_today)
+                    summary_lines.append("")  # Spacer
 
                 if summary_tomorrow:
                     summary_lines.append("Tomorrow")
-                    summary_lines.append("\n".join(summary_tomorrow))
+                    summary_lines.extend(summary_tomorrow)
 
                 summary_text = "\n".join(summary_lines)
 
