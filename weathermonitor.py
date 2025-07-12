@@ -6,8 +6,8 @@ import logging
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from streamlit_autorefresh import st_autorefresh
-from computations import compute_counts, advance_seen
-from renderers import RENDERERS
+from computation import compute_counts, advance_seen
+from renderer import RENDERERS
 
 # Ensure scrapers are on path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -15,7 +15,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
 
-# Auto-refresh every minute\st_autorefresh(interval=60 * 1000, key="autorefresh")
+# Auto-refresh every minute
+st_autorefresh(interval=60 * 1000, key="autorefresh")
 
 # Timing constants
 now = time.time()
@@ -92,8 +93,12 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
             if st.session_state["active_feed"] == key:
                 # Closing feed: mark all as seen
                 if conf["type"] == "rss_meteoalarm":
-                    # snapshot current IDs
-                    flat = [e for country in st.session_state[f"{key}_data"] for alerts in country.get('alerts', {}).values() for e in alerts]
+                    flat = [
+                        e
+                        for country in st.session_state[f"{key}_data"]
+                        for alerts in country.get("alerts", {}).values()
+                        for e in alerts
+                    ]
                     st.session_state[f"{key}_last_seen_alerts"] = set(alert_id(e) for e in flat)
                 else:
                     st.session_state[f"{key}_last_seen_time"] = time.time()
@@ -153,13 +158,18 @@ if active:
 
     # Render each item via registry
     for item in entries:
-        RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
+        RENDERERS.get(conf["type"], lambda item, conf: None)(item, conf)
 
     # Snapshot last seen after rendering
     pending_key = f"{active}_pending_seen_time"
     if pending_key in st.session_state:
         if conf["type"] == "rss_meteoalarm":
-            flat = [e for country in entries for alerts in country.get('alerts', {}).values() for e in alerts]
+            flat = [
+                e
+                for country in entries
+                for alerts in country.get("alerts", {}).values()
+                for e in alerts
+            ]
             st.session_state[f"{active}_last_seen_alerts"] = set(alert_id(e) for e in flat)
         else:
             st.session_state[f"{active}_last_seen_time"] = st.session_state[pending_key]
