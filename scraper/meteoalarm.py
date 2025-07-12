@@ -30,6 +30,7 @@ AWARENESS_TYPES = {
 def scrape_meteoalarm(conf):
     """
     Fetch and parse the MeteoAlarm RSS feed for European countries.
+    Only Orange and Red alerts are retained; countries without any are skipped.
     Returns a dict with 'entries' (list of alert dicts) and 'source' URL.
     """
     url = conf.get(
@@ -54,10 +55,10 @@ def scrape_meteoalarm(conf):
             for row in rows:
                 header = row.find("th")
                 if header:
-                    txt = header.get_text(strip=True).lower()
-                    if "tomorrow" in txt:
+                    text = header.get_text(strip=True).lower()
+                    if "tomorrow" in text:
                         current_section = "tomorrow"
-                    elif "today" in txt:
+                    elif "today" in text:
                         current_section = "today"
                     continue
 
@@ -67,22 +68,25 @@ def scrape_meteoalarm(conf):
 
                 level = cells[0].get("data-awareness-level")
                 awt = cells[0].get("data-awareness-type")
-
                 if not level or not awt:
                     match = re.search(r"awt:(\d+)\s+level:(\d+)", cells[0].get_text(strip=True))
                     if match:
                         awt, level = match.groups()
 
+                # Only keep recognized severity levels
                 if level not in AWARENESS_LEVELS:
                     continue
-
                 level_name = AWARENESS_LEVELS[level]
+                # Filter: only Orange and Red
+                if level_name not in ["Orange", "Red"]:
+                    continue
+
                 type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
 
-                from_m = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
-                until_m = re.search(r"Until:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
-                from_time = from_m.group(1) if from_m else "?"
-                until_time = until_m.group(1) if until_m else "?"
+                from_match = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
+                until_match = re.search(r"Until:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
+                from_time = from_match.group(1) if from_match else "?"
+                until_time = until_match.group(1) if until_match else "?"
 
                 alert_data[current_section].append({
                     "level": level_name,
@@ -91,13 +95,13 @@ def scrape_meteoalarm(conf):
                     "until": until_time,
                 })
 
-            # Skip any country with no yellow-or-above alerts
+            # Skip country if no Orange/Red alerts present
             if not alert_data["today"] and not alert_data["tomorrow"]:
                 continue
 
             entries.append({
                 "title": f"{country} Alerts",
-                "summary": "",  # structured alerts have no text summary
+                "summary": "",  # structured alerts
                 "alerts": alert_data,
                 "link": link,
                 "published": pub_date,
@@ -105,7 +109,7 @@ def scrape_meteoalarm(conf):
                 "province": "Europe",
             })
 
-        logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} alert summaries")
+        logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} alert summaries (Orange/Red only)")
         return {"entries": entries, "source": url}
 
     except Exception as e:
