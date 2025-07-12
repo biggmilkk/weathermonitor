@@ -2,6 +2,7 @@ import feedparser
 import logging
 import re
 from bs4 import BeautifulSoup
+from email.utils import parsedate_to_datetime
 
 AWARENESS_LEVELS = {
     "2": "Yellow",
@@ -33,7 +34,13 @@ def scrape_meteoalarm(conf):
 
         for entry in feed.entries:
             country = entry.get("title", "").replace("MeteoAlarm ", "").strip()
-            pub_date = entry.get("published", "")
+
+            pub_raw = entry.get("published", "")
+            try:
+                pub_date = parsedate_to_datetime(pub_raw).isoformat()
+            except Exception:
+                pub_date = ""
+
             description_html = entry.get("description", "")
             link = entry.get("link", "")
 
@@ -85,7 +92,7 @@ def scrape_meteoalarm(conf):
                 if summary_today:
                     summary_lines.append("Today")
                     summary_lines.extend(summary_today)
-                    summary_lines.append("")
+                    summary_lines.append("")  # spacing
 
                 if summary_tomorrow:
                     summary_lines.append("Tomorrow")
