@@ -24,6 +24,7 @@ AWARENESS_TYPES = {
     "13": "Rain/Flood",
 }
 
+
 def scrape_meteoalarm(conf):
     try:
         url = conf.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe")
@@ -72,23 +73,24 @@ def scrape_meteoalarm(conf):
                 type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
                 time_info = cells[1].get_text(" ", strip=True)
 
-                alert_line = f"[{level_name}] {type_name} - {time_info}"
-
+                line = f"[{level_name}] {type_name} - {time_info}"
                 if current_section == "Tomorrow":
-                    summary_tomorrow.append(alert_line)
+                    summary_tomorrow.append(line)
                 else:
-                    summary_today.append(alert_line)
+                    summary_today.append(line)
 
-            summary_lines = []
-            if summary_today:
-                summary_lines.append("Today")
-                summary_lines.extend(summary_today)
-                summary_lines.append("")  # spacing
-            if summary_tomorrow:
-                summary_lines.append("Tomorrow")
-                summary_lines.extend(summary_tomorrow)
+            if summary_today or summary_tomorrow:
+                summary_lines = []
 
-            if summary_lines:
+                if summary_today:
+                    summary_lines.append("Today")
+                    summary_lines.extend(summary_today)
+                    summary_lines.append("")
+
+                if summary_tomorrow:
+                    summary_lines.append("Tomorrow")
+                    summary_lines.extend(summary_tomorrow)
+
                 entries.append({
                     "title": f"{country} Alerts",
                     "summary": "\n".join(summary_lines),
@@ -98,7 +100,7 @@ def scrape_meteoalarm(conf):
                     "province": "Europe"
                 })
 
-        logging.warning(f"[METEOALARM DEBUG] Found {len(entries)} alert entries")
+        logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} alert summaries")
         return {
             "entries": entries,
             "source": url
