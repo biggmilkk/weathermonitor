@@ -3,7 +3,6 @@ import streamlit as st
 import os
 import sys
 import logging
-import re
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from streamlit_autorefresh import st_autorefresh
@@ -121,10 +120,7 @@ if active:
             return 0
 
     for alert in alerts:
-        is_new = False
-        pub_time = parse_timestamp(alert.get("published", ""))
-        if pub_time > last_seen:
-            is_new = True
+        is_new = parse_timestamp(alert.get("published", "")) > last_seen
 
         if is_new:
             st.markdown(
@@ -137,30 +133,36 @@ if active:
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
 
         summary = alert.get("summary", "")
-        if summary and active == "rss_meteoalarm":
-            for line in summary.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
+        if summary:
+            if active == "rss_meteoalarm":
+                for line in summary.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
 
-                if line.lower() in {"today", "tomorrow"}:
-                    st.markdown(f"<h4 style='margin-bottom:0.2rem'>{line}</h4>", unsafe_allow_html=True)
-                    continue
+                    if line.lower() in {"today", "tomorrow"}:
+                        st.markdown(f"### {line}")
+                        continue
 
-                match = re.match(r"\[(Yellow|Orange|Red)\]", line)
-                if match:
-                    level = match.group(1)
-                    color_map = {
-                        "Yellow": "#FFD700",
-                        "Orange": "#FF8C00",
-                        "Red": "#FF0000"
-                    }
-                    bullet = f"<span style='color:{color_map[level]};font-size:18px'>&#9679;</span>"
-                    st.markdown(f"{bullet} {line}", unsafe_allow_html=True)
-                else:
-                    st.markdown(f"• {line}")
+                    color = None
+                    if "[Yellow]" in line:
+                        color = "#FFD700"
+                    elif "[Orange]" in line:
+                        color = "#FFA500"
+                    elif "[Red]" in line:
+                        color = "#FF4500"
+
+                    if color:
+                        st.markdown(
+                            f"<span style='color:{color};font-size:16px'>&#9679;</span> {line}",
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        st.markdown(line)
+            else:
+                st.markdown(summary)
         else:
-            st.markdown(summary if summary else "_No summary available._")
+            st.markdown("_No summary available._")
 
         if alert.get("link"):
             st.markdown(f"[Read more]({alert['link']})")
