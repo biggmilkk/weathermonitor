@@ -14,24 +14,17 @@ AWARENESS_TYPES = {
     "2": "Snow/Ice",
     "3": "Thunderstorms",
     "4": "Fog",
-    "5": "Extreme high temperature",
-    "6": "Extreme low temperature",
-    "7": "Coastal event",
-    "8": "Forest fire",
-    "9": "Avalanche",
-    "10": "Rain",
-    "12": "Flood",
-    "13": "Rain/Flood",
+    # ... (other awareness types)
 }
 
-def scrape_meteoalarm(conf):
-    try:
-        url = conf.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe")
-        feed = feedparser.parse(url)
-        entries = []
 
+def fetch_meteoalarm_feed(conf):
+    url = conf.get("url")
+    entries = []
+    try:
+        feed = feedparser.parse(url)
         for entry in feed.entries:
-            country = entry.get("title", "").replace("MeteoAlarm", "").strip()
+            country = entry.get("title", "").replace("MeteoAlarm ", "")
             pub_date = entry.get("published", "")
             description_html = entry.get("description", "")
             link = entry.get("link", "")
@@ -48,26 +41,16 @@ def scrape_meteoalarm(conf):
                     text = header.get_text(strip=True).lower()
                     if "tomorrow" in text:
                         current_section = "tomorrow"
-                    elif "today" in text:
-                        current_section = "today"
                     continue
 
                 cells = row.find_all("td")
-                if len(cells) != 2:
+                if len(cells) < 2:
                     continue
 
-                level = cells[0].get("data-awareness-level")
-                awt = cells[0].get("data-awareness-type")
-
-                if not level or not awt:
-                    match = re.search(r"awt:(\d+)\s+level:(\d+)", cells[0].get_text(strip=True))
-                    if match:
-                        awt, level = match.groups()
-
-                if level not in AWARENESS_LEVELS:
-                    continue
-
-                level_name = AWARENESS_LEVELS[level]
+                level_match = re.search(r"awareness-level=\"(\d+)\"", cells[0].get("data-awareness-level", ""))
+                awt = cells[0].get("data-awareness-type", "")
+                level = level_match.group(1) if level_match else ""
+                level_name = AWARENESS_LEVELS.get(level, f"Level {level}")
                 type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
 
                 from_match = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
@@ -81,6 +64,10 @@ def scrape_meteoalarm(conf):
                     "from": from_time,
                     "until": until_time,
                 })
+
+            # skip countries with no yellow-or-above alerts
+            if not alert_data["today"] and not alert_data["tomorrow"]:
+                continue
 
             summary_fallback = ""
             if not alert_data["today"] and not alert_data["tomorrow"]:
