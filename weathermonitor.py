@@ -125,7 +125,7 @@ if active:
             st.caption(f"Region: {alert.get('region', '')}, {alert.get('province', '')}")
 
         # --- Meteoalarm structured ---
-        if active == "rss_meteoalarm" and isinstance(alert.get("alerts"), dict):
++        if FEED_CONFIG[active]["type"] == "rss_meteoalarm" and isinstance(alert.get("alerts"), dict):
             for day in ["today", "tomorrow"]:
                 entries = alert["alerts"].get(day, [])
                 if entries:
