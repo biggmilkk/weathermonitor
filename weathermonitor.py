@@ -132,9 +132,9 @@ if active:
                     st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>", unsafe_allow_html=True)
                     for e in entries:
                         color = {
-                            "yellow": "#FFD700",
-                            "orange": "#FFA500",
-                            "red": "#FF4500"
+                            "yellow": "#FFF200",
+                            "orange": "#FF7F00",
+                            "red": "#E60026"
                         }.get(e["level"].lower(), "#888")
                         label = f"[{e['level']}] {e['type']} - From: {e['from']} Until: {e['until']}"
                         st.markdown(
