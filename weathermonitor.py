@@ -69,14 +69,27 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                     st.session_state[f"{prev}_seen_count"] = len(st.session_state[f"{prev}_data"])
                 st.session_state["active_feed"] = key
 
-# --- Counters ---
+# --- Counters (HTML highlight when new) ---
 count_cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     data = st.session_state[f"{key}_data"]
     total = len(data)
     new = max(0, total - st.session_state[f"{key}_seen_count"])
     with count_cols[i]:
-        st.markdown(f"**{conf['label']}:** {total} total / {new} new")
+        if new > 0:
+            st.markdown(f"""
+                <div style="padding:8px;border-radius:6px;background-color:#ffeecc;">
+                    <strong>{conf['label']} 🔔</strong><br />
+                    {total} total / <strong>{new} new</strong>
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+                <div style="padding:8px;border-radius:6px;">
+                    <strong>{conf['label']}</strong><br />
+                    {total} total / {new} new
+                </div>
+            """, unsafe_allow_html=True)
 
 # --- Feed Display ---
 active = st.session_state["active_feed"]
