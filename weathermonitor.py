@@ -79,7 +79,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         if new > 0:
             st.markdown(f"""
                 <div style="padding:8px;border-radius:6px;background-color:#ffeecc;">
-                    🔔 {total} total / <strong>{new} new</strong>
+                    ❗ {total} total / <strong>{new} new</strong>
                 </div>
             """, unsafe_allow_html=True)
         else:
