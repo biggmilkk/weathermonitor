@@ -188,7 +188,7 @@ if active:
                             f"<span style='color:{color};font-size:16px;'>&#9679;</span> {prefix}[{e['level']}] {e['type']} - {fmt_from} - {fmt_until}"
                             f"</div>", unsafe_allow_html=True
                         )
-        elif conf["type"] == "rss_cма":
+        elif conf["type"] == "rss_cma":
             level = item.get('level') or 'Orange'
             color = cma_color_map.get(level, '#888')
             st.markdown(
