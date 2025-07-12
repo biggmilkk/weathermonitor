@@ -38,20 +38,18 @@ def scrape_meteoalarm(conf):
 
             soup = BeautifulSoup(description_html, "html.parser")
             rows = soup.find_all("tr")
-            summary_lines = []
-            current_section = None
-            has_alerts = False
+            alerts = {"today": [], "tomorrow": []}
+
+            current_section = "today"
 
             for row in rows:
                 header = row.find("th")
                 if header:
                     text = header.get_text(strip=True).lower()
                     if "tomorrow" in text:
-                        current_section = "Tomorrow"
-                        summary_lines.append("Tomorrow")
+                        current_section = "tomorrow"
                     elif "today" in text:
-                        current_section = "Today"
-                        summary_lines.append("Today")
+                        current_section = "today"
                     continue
 
                 cells = row.find_all("td")
@@ -78,21 +76,22 @@ def scrape_meteoalarm(conf):
                 from_time = from_match.group(1) if from_match else "?"
                 until_time = until_match.group(1) if until_match else "?"
 
-                line = f"[{level_name}] {type_name} - From: {from_time} Until: {until_time}"
-                summary_lines.append(line)
-                has_alerts = True
-
-            if has_alerts:
-                summary_text = "\n".join(summary_lines)
-
-                entries.append({
-                    "title": f"{country} Alerts",
-                    "summary": summary_text,
-                    "link": link,
-                    "published": pub_date,
-                    "region": country,
-                    "province": "Europe"
+                alerts[current_section].append({
+                    "level": level_name,
+                    "type": type_name,
+                    "from": from_time,
+                    "until": until_time
                 })
+
+            entries.append({
+                "title": f"{country} Alerts",
+                "summary": "",  # Left blank since frontend uses structured data
+                "alerts": alerts,
+                "link": link,
+                "published": pub_date,
+                "region": country,
+                "province": "Europe"
+            })
 
         logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} alert summaries")
         return {
