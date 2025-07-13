@@ -69,7 +69,7 @@ for key, conf in FEED_CONFIG.items():
             st.session_state[f"{key}_data"] = []
 
 # UI Header
-st.title("Global Weather Monitor")("Global Weather Monitor")
+st.title("Global Weather Monitor")
 st.caption(
     f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
 )
