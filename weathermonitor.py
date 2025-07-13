@@ -68,8 +68,7 @@ for key, conf in FEED_CONFIG.items():
             logging.warning(f"[{key.upper()} FETCH ERROR] {e}")
             st.session_state[f"{key}_data"] = []
 
-# UI Header
-st.title("Global Weather Monitor")
+# UI Header\st.title("Global Weather Monitor")
 st.caption(
     f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
 )
@@ -104,8 +103,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 st.session_state['active_feed']=key
                 st.session_state[f"{key}_pending_seen_time"] = time.time()
 
-# Display feed
-active = st.session_state['active_feed']
+# Display feed\active = st.session_state['active_feed']
 if active:
     st.markdown("---")
     conf = FEED_CONFIG[active]
