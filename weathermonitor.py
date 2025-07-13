@@ -13,7 +13,7 @@ from renderer import RENDERERS
 # Ensure scrapers are on path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Page config
+# Page configuration
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
 
@@ -39,13 +39,13 @@ for key, conf in FEED_CONFIG.items():
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
 
-# Unique ID for MeteoAlarm entries
+# Unique identifier for MeteoAlarm entries
 def alert_id(entry):
     return f"{entry['level']}|{entry['type']}|{entry['from']}|{entry['until']}"
 
-# Fetch data and advance seen markers
+# Fetch fresh data and advance seen markers
 for key, conf in FEED_CONFIG.items():
-    last_fetch = st.session_state[f"{key}_last_fetch"]
+    last_fetch = st.session_state[f"{key}_last_fetch"] or 0
     if now - last_fetch > REFRESH_INTERVAL:
         try:
             scraper = SCRAPER_REGISTRY[conf["type"]]
@@ -53,90 +53,126 @@ for key, conf in FEED_CONFIG.items():
             st.session_state[f"{key}_data"] = entries
             st.session_state[f"{key}_last_fetch"] = now
             st.session_state["last_refreshed"] = now
-            # Advance seen on idle refresh if open
+
+            # Advance seen on idle refresh if open and no new alerts
             if st.session_state.get("active_feed") == key:
-                last_seen = (st.session_state[f"{key}_last_seen_alerts"]
-                             if conf['type']=='rss_meteoalarm'
-                             else st.session_state[f"{key}_last_seen_time"])
-                marker = advance_seen(conf, entries, last_seen, now, alert_id)
-                if marker is not None:
-                    if conf['type']=='rss_meteoalarm':
-                        st.session_state[f"{key}_last_seen_alerts"] = marker
+                if conf["type"] == "rss_meteoalarm":
+                    last_seen = st.session_state[f"{key}_last_seen_alerts"]
+                else:
+                    last_seen = st.session_state[f"{key}_last_seen_time"]
+                total, new_count = compute_counts(entries, conf, last_seen, alert_id_fn=alert_id)
+                if new_count == 0:
+                    # safe to advance
+                    if conf["type"] == "rss_meteoalarm":
+                        all_ids = {
+                            alert_id(e)
+                            for country in entries
+                            for alerts in country.get("alerts", {}).values()
+                            for e in alerts
+                        }
+                        st.session_state[f"{key}_last_seen_alerts"] = all_ids
                     else:
-                        st.session_state[f"{key}_last_seen_time"] = marker
+                        st.session_state[f"{key}_last_seen_time"] = now
         except Exception as e:
             logging.warning(f"[{key.upper()} FETCH ERROR] {e}")
             st.session_state[f"{key}_data"] = []
 
-# UI Header\st.title("Global Weather Monitor")
+# UI Header
+st.title("Global Weather Monitor")
 st.caption(
     f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
 )
 st.markdown("---")
 
-# Feed buttons and counters
+# Feed selection buttons with separate badge
 cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
-    seen = (st.session_state[f"{key}_last_seen_alerts"]
-            if conf['type']=='rss_meteoalarm'
-            else st.session_state[f"{key}_last_seen_time"])
-    total, new_cnt = compute_counts(entries, conf, seen, alert_id)
-    badge = f"❗ {total} total / {new_cnt} new" if new_cnt else f"{total} total / {new_cnt} new"
-    style = "background-color:#ffeecc;" if new_cnt else ""
+    seen = (
+        st.session_state[f"{key}_last_seen_alerts"]
+        if conf["type"] == "rss_meteoalarm"
+        else st.session_state[f"{key}_last_seen_time"]
+    )
+    total, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
+
     with cols[i]:
-        if st.button(badge if new_cnt else conf['label'], key=f"btn_{key}", use_container_width=True):
-            # Toggle
-            if st.session_state['active_feed']==key:
-                # closing
-                if conf['type']=='rss_meteoalarm':
-                    snap = {alert_id(e)
-                            for country in entries
-                            for alerts in country['alerts'].values()
-                            for e in alerts}
+        clicked = st.button(conf["label"], key=f"btn_{key}", use_container_width=True)
+
+        if new_count > 0:
+            st.markdown(
+                f"<span style='margin-left:8px;padding:2px 6px;border-radius:4px;"
+                f"background:#ffeecc;font-size:0.9em;'>❗ {new_count} New</span>",
+                unsafe_allow_html=True,
+            )
+
+        if clicked:
+            # Toggle open/close
+            if st.session_state["active_feed"] == key:
+                # Closing: snapshot seen
+                if conf["type"] == "rss_meteoalarm":
+                    snap = {
+                        alert_id(e)
+                        for country in entries
+                        for alerts in country.get("alerts", {}).values()
+                        for e in alerts
+                    }
                     st.session_state[f"{key}_last_seen_alerts"] = snap
                 else:
                     st.session_state[f"{key}_last_seen_time"] = time.time()
-                st.session_state['active_feed']=None
+                st.session_state["active_feed"] = None
             else:
-                # opening
-                st.session_state['active_feed']=key
+                # Opening: defer snapshot
+                st.session_state["active_feed"] = key
                 st.session_state[f"{key}_pending_seen_time"] = time.time()
 
-# Display feed\active = st.session_state['active_feed']
+# Display selected feed details
+active = st.session_state["active_feed"]
 if active:
     st.markdown("---")
     conf = FEED_CONFIG[active]
-    data_list = sorted(st.session_state[f"{active}_data"],
-                       key=lambda x: x.get('published',''), reverse=True)
-    seen = (st.session_state[f"{active}_last_seen_alerts"]
-            if conf['type']=='rss_meteoalarm'
-            else st.session_state[f"{active}_last_seen_time"])
+    entries = st.session_state[f"{active}_data"]
+
+    # Sort newest-first
+    data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
+
+    # Determine seen
+    seen = (
+        st.session_state[f"{active}_last_seen_alerts"]
+        if conf["type"] == "rss_meteoalarm"
+        else st.session_state[f"{active}_last_seen_time"]
+    )
+
     for item in data_list:
-        if conf['type']=='rss_meteoalarm':
-            ca = [e for alerts in item['alerts'].values() for e in alerts]
-            if any(alert_id(e) not in seen for e in ca):
+        # New alert bar
+        if conf["type"] == "rss_meteoalarm":
+            alerts = [e for alerts in item["alerts"].values() for e in alerts]
+            if any(alert_id(e) not in seen for e in alerts):
                 st.markdown("<div style='height:4px;background:red;margin:8px 0;'></div>", unsafe_allow_html=True)
         else:
-            pub = item.get('published')
+            pub = item.get("published")
             if pub:
                 try:
                     ts = dateparser.parse(pub).timestamp()
                 except Exception:
                     ts = 0.0
-                seen_ts = seen if isinstance(seen,(int,float)) else 0.0
+                seen_ts = seen if isinstance(seen, (int, float)) else 0.0
                 if ts > seen_ts:
                     st.markdown("<div style='height:4px;background:red;margin:8px 0;'></div>", unsafe_allow_html=True)
-        RENDERERS.get(conf['type'], lambda i,c: None)(item, conf)
-    # snapshot
+
+        # Render item
+        RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
+
+    # Snapshot last seen after render
     pkey = f"{active}_pending_seen_time"
     if pkey in st.session_state:
-        if conf['type']=='rss_meteoalarm':
-            snap = {alert_id(e)
-                    for country in data_list
-                    for alerts in country.get('alerts',{}).values()
-                    for e in alerts}
+        if conf["type"] == "rss_meteoalarm":
+            snap = {
+                alert_id(e)
+                for country in data_list
+                for alerts in country.get("alerts", {}).values()
+                for e in alerts
+            }
             st.session_state[f"{active}_last_seen_alerts"] = snap
         else:
             st.session_state[f"{active}_last_seen_time"] = st.session_state.pop(pkey)
-        st.session_state.pop(pkey,None)
+        st.session_state.pop(pkey, None)
