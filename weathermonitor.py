@@ -77,33 +77,38 @@ st.caption(
 )
 st.markdown('---')
 
-# Feed selection buttons with separate badge
+# Feed selection buttons with inline new-alert count
 cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
-    seen = (st.session_state[f"{key}_last_seen_alerts"] if conf['type']=='rss_meteoalarm' else st.session_state[f"{key}_last_seen_time"])
+    # Determine seen and compute counts
+    seen = (
+        st.session_state[f"{key}_last_seen_alerts"]
+        if conf['type']=='rss_meteoalarm'
+        else st.session_state[f"{key}_last_seen_time"]
+    )
     total, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
-    with cols[i]:
-        clicked = st.button(conf['label'], key=f"btn_{key}", use_container_width=True)
-        if new_count > 0:
-            st.markdown(
-                f"<span style='margin-left:8px;padding:2px 6px;border-radius:4px;background:#ffeecc;font-size:0.9em;'>❗ {new_count}</span>",
-                unsafe_allow_html=True,
-            )
-        if clicked:
-            # Toggle open/close
-            if st.session_state['active_feed'] == key:
-                # closing: snapshot seen
-                if conf['type'] == 'rss_meteoalarm':
-                    snap = {alert_id(e) for country in entries for alerts in country.get('alerts', {}).values() for e in alerts}
-                    st.session_state[f"{key}_last_seen_alerts"] = snap
-                else:
-                    st.session_state[f"{key}_last_seen_time"] = time.time()
-                st.session_state['active_feed'] = None
+    # Build button label with new-alert badge
+    label = conf['label']
+    if new_count > 0:
+        label = f"{label} ❗ {new_count} New"
+    # Render button
+    clicked = st.button(label, key=f"btn_{key}", use_container_width=True)
+
+    if clicked:
+        # Toggle open/close
+        if st.session_state['active_feed'] == key:
+            # Closing: snapshot seen
+            if conf['type'] == 'rss_meteoalarm':
+                snap = {alert_id(e) for country in entries for alerts in country.get('alerts', {}).values() for e in alerts}
+                st.session_state[f"{key}_last_seen_alerts"] = snap
             else:
-                # opening: defer snapshot
-                st.session_state['active_feed'] = key
-                st.session_state[f"{key}_pending_seen_time"] = time.time()
+                st.session_state[f"{key}_last_seen_time"] = time.time()
+            st.session_state['active_feed'] = None
+        else:
+            # Opening: defer snapshot
+            st.session_state['active_feed'] = key
+            st.session_state[f"{key}_pending_seen_time"] = time.time()
 
 # Display selected feed details
 active = st.session_state['active_feed']
