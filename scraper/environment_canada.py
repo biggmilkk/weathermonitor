@@ -6,7 +6,8 @@ import logging
 import re
 from datetime import datetime
 
-async def fetch_and_parse(session, region):
+# Internal async fetch for a single region
+async def _fetch_and_parse(session, region):
     url = region.get("ATOM URL")
     if not url:
         return []
@@ -27,25 +28,21 @@ async def fetch_and_parse(session, region):
                 if not title:
                     continue
 
-                # Skip ended alerts
-                if "ENDED" in title.upper():
-                    continue
-
-                # Skip "No alert" entries
-                if title.strip().upper().startswith("NO ALERT"):
+                # Skip ended alerts and 'no alert' entries
+                up = title.upper()
+                if 'ENDED' in up or up.startswith('NO ALERT'):
                     continue
 
                 alert_type = re.split(r",\s*", title)[0].strip().upper()
-                if "WARNING" not in alert_type and alert_type != "SEVERE THUNDERSTORM WATCH":
+                if 'WARNING' not in alert_type and alert_type != 'SEVERE THUNDERSTORM WATCH':
                     continue
 
-                # Ensure ISO 8601 format for consistency
                 raw_pub = published_elem.text if published_elem is not None else ""
                 try:
                     pub_dt = datetime.strptime(raw_pub, "%Y-%m-%dT%H:%M:%SZ")
                     pub_iso = pub_dt.isoformat()
                 except Exception:
-                    pub_iso = raw_pub  # fallback if format is unexpected
+                    pub_iso = raw_pub
 
                 entries.append({
                     "title": alert_type,
@@ -57,21 +54,32 @@ async def fetch_and_parse(session, region):
                 })
 
             return entries
-
     except Exception as e:
         logging.warning(f"[EC FETCH ERROR] {url} - {e}")
         return []
 
+# Cached entry point for Streamlit
 @st.cache_data(ttl=60)
-async def scrape_ec(sources):
+def scrape_ec(sources):
+    """
+    Fetch and parse Environment Canada Atom feeds for multiple regions.
+    Cached for 60 seconds to minimize repeated network and XML parsing.
+    Returns a dict with 'entries' (list) and 'source' identifier.
+    """
+    try:
+        all_entries = asyncio.run(_scrape_ec_async(sources))
+        return {"entries": all_entries, "source": "Environment Canada"}
+    except Exception as e:
+        logging.warning(f"[EC SCRAPER ERROR] {e}")
+        return {"entries": [], "error": str(e), "source": "Environment Canada"}
+
+# Helper async runner
+async def _scrape_ec_async(sources):
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch_and_parse(session, region) for region in sources if region.get("ATOM URL")]
+        tasks = [_fetch_and_parse(session, region) for region in sources if region.get("ATOM URL")]
         results = await asyncio.gather(*tasks)
         all_entries = []
         for result in results:
             all_entries.extend(result)
         logging.warning(f"[EC DEBUG] Successfully fetched {len(all_entries)} alerts")
-        return {
-            "entries": all_entries,
-            "source": "Environment Canada"
-        }
+        return all_entries
