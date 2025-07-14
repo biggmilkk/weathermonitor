@@ -1,15 +1,19 @@
+import streamlit as st
 import requests
 import logging
 
+# Only include these event types
 ALLOWED_EVENTS = {
     "Severe Thunderstorm Warning",
     "Flash Flood Warning",
     "Tornado Warning",
     "Flood Warning",
     "Extreme Heat Warning",
-    "Air Quality Alert"
+    "Air Quality Alert",
 }
 
+# Cache this scraper for 60 seconds to reduce repeated parsing and memory churn
+@st.cache_data(ttl=60)
 def scrape_nws(url="https://api.weather.gov/alerts/active"):
     headers = {
         "User-Agent": "WeatherMonitorApp (your@email.com)"
