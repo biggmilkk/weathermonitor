@@ -1,9 +1,11 @@
+import streamlit as st
 import feedparser
 import logging
 from dateutil import parser as dateparser
 from datetime import datetime
 
-# Synchronous scraper for WMO CMA CAP RSS feed (China)
+# Cache this scraper for 60 seconds to reduce repeated parsing and memory churn
+@st.cache_data(ttl=60)
 def scrape_cma(conf):
     """
     Fetch and parse the CMA CAP RSS feed synchronously using feedparser.
