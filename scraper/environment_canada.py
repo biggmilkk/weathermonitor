@@ -6,7 +6,6 @@ import logging
 import re
 from datetime import datetime
 
-# Async helper: fetch one region's Atom feed
 async def _fetch_and_parse(session, region):
     url = region.get("ATOM URL")
     if not url:
@@ -29,9 +28,7 @@ async def _fetch_and_parse(session, region):
         title = title_elem.text if title_elem is not None else ""
         if not title:
             continue
-
-        up = title.upper()
-        if 'ENDED' in up or up.startswith('NO ALERT'):
+        if 'ENDED' in title.upper() or title.strip().upper().startswith('NO ALERT'):
             continue
 
         alert_type = re.split(r",\s*", title)[0].strip().upper()
@@ -55,25 +52,24 @@ async def _fetch_and_parse(session, region):
         })
     return entries
 
-# Async runner to gather all regions in parallel
 async def _scrape_ec_async(sources):
     async with aiohttp.ClientSession() as session:
         tasks = [_fetch_and_parse(session, region) for region in sources if region.get("ATOM URL")]
         results = await asyncio.gather(*tasks)
-        # flatten
         all_entries = [e for sub in results for e in sub]
-        logging.warning(f"[EC DEBUG] Fetched {len(all_entries)} alerts")
+        logging.warning(f"[EC DEBUG] Successfully fetched {len(all_entries)} alerts")
         return all_entries
 
-# Main entry point: synchronous wrapper
+@st.cache_data(ttl=60)
 def scrape_ec(sources):
     """
-    Fetch and parse Environment Canada Atom feeds in parallel via asyncio.
-    Returns {'entries': [...], 'source': 'Environment Canada'}
+    Fetch and parse Environment Canada Atom feeds for multiple regions.
+    Cached for 60 seconds to minimize repeated network and XML parsing.
+    Returns a dict with 'entries' and 'source'.
     """
-    entries = []
     try:
-        entries = asyncio.run(_scrape_ec_async(sources))
+        all_entries = asyncio.run(_scrape_ec_async(sources))
+        return {"entries": all_entries, "source": "Environment Canada"}
     except Exception as e:
         logging.warning(f"[EC SCRAPER ERROR] {e}")
-    return {"entries": entries, "source": "Environment Canada"}
+        return {"entries": [], "error": str(e), "source": "Environment Canada"}
