@@ -51,18 +51,12 @@ def scrape_cma(conf):
                 # skip blue and yellow and any unknown
                 continue
 
-            # Use the RSS title directly for alerts (preserves proper casing)
             title = raw_title.strip()
             if not title:
                 continue
 
-            # Link to full alert
             link = entry.get('link', '').strip()
-
-            # Published time: cap:effective or pubDate
             published = entry.get('cap_effective') or entry.get('published', '')
-
-            # Area/region: prefer normalized CAP areaDesc, fallback to other variants
             region = (
                 entry.get('cap_areadesc') or entry.get('cap_areaDesc') or entry.get('areaDesc') or 'China'
             ).strip()
