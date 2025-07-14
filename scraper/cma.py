@@ -71,7 +71,7 @@ def scrape_cma(conf):
                 'province': ''
             })
 
-        logging.warning(f"[CMA DEBUG] Successfully parsed {len(entries)} alerts")
+        logging.warning(f"[CMA DEBUG] Successfully parsed {len(entries)} alerts (Orange/Red only)")
         return {'entries': entries, 'source': url}
 
     except Exception as e:
