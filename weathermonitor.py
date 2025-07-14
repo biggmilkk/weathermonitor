@@ -4,6 +4,7 @@ import os
 import sys
 import logging
 import gc
+import asyncio
 from dateutil import parser as dateparser
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
@@ -53,12 +54,12 @@ for key, conf in FEED_CONFIG.items():
     if now - last_fetch > REFRESH_INTERVAL:
         try:
             scraper = SCRAPER_REGISTRY[conf['type']]
-            # Pass correct argument to EC scraper
+            # Handle async Environment Canada scraper
             if conf['type'] == 'ec_async':
-                feed_data = scraper(conf['sources'])
+                feed_data = asyncio.run(scraper(conf.get('sources', [])))
             else:
                 feed_data = scraper(conf)
-            entries = feed_data.get('entries', [])
+            entries = feed_data.get('entries', []) if isinstance(feed_data, dict) else []
 
             st.session_state[f"{key}_data"] = entries
             st.session_state[f"{key}_last_fetch"] = now
