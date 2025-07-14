@@ -9,11 +9,13 @@ from datetime import datetime
 # Atom namespace and timestamp format
 en = {"atom": "http://www.w3.org/2005/Atom"}
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+# Regex to extract province code from URL, e.g. /battleboard/nl3_e.xml
+PROVINCE_FROM_URL = re.compile(r"/battleboard/([a-z]{2})\d+_e\.xml", re.IGNORECASE)
 
 async def fetch_feed(session, region):
     """
     Fetch one Atom feed and return list of warning-level alerts.
-    Each entry dict has keys: title, region, published, link.
+    Each entry dict has keys: title, region, province, published, link.
     """
     url = region.get("ATOM URL")
     if not isinstance(url, str) or not url:
@@ -30,6 +32,14 @@ async def fetch_feed(session, region):
     except ET.ParseError as e:
         logging.warning(f"[EC PARSE ERROR] {url} - {e}")
         return []
+
+    # Determine province: prefer explicit, else derive from URL
+    explicit = region.get("Province-Territory") or region.get("province")
+    if isinstance(explicit, str) and explicit:
+        province = explicit
+    else:
+        m = PROVINCE_FROM_URL.search(url)
+        province = m.group(1).upper() if m else ""
 
     entries = []
     for elem in root.findall("atom:entry", en):
@@ -58,10 +68,11 @@ async def fetch_feed(session, region):
             published = time_text
         # Extract read-more link
         link_elem = elem.find("atom:link", en)
-        link = link_elem.attrib.get("href", "") if link_elem is not None else region.get("ATOM URL", "")
+        link = link_elem.attrib.get("href", "") if link_elem is not None else url
         entries.append({
             "title": alert_type,
             "region": area,
+            "province": province,
             "published": published,
             "link": link
         })
@@ -90,7 +101,7 @@ def scrape_ec(conf):
     """
     Wrapper for Streamlit: accepts either a list of region dicts or a dict with 'sources'.
     Returns {'entries': [...], 'source': 'Environment Canada'}.
-    Each entry has: title, region, published, link.
+    Each entry has: title, region, province, published, link.
     """
     if isinstance(conf, dict):
         sources = conf.get("sources", [])
