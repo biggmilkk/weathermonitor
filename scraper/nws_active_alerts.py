@@ -22,7 +22,7 @@ def scrape_nws(url="https://api.weather.gov/alerts/active"):
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         feed = response.json()
-        logging.warning(f"[NWS DEBUG] Successfully fetched {len(feed.get('features', []))} alerts")
+        logging.warning(f"[NWS DEBUG] Successfully parsed {len(feed.get('features', []))} alerts")
     except Exception as e:
         logging.warning(f"[NWS SCRAPER ERROR] Fetch failed: {e}")
         return {"entries": [], "error": str(e), "source": url}
