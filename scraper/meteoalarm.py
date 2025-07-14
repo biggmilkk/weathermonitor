@@ -1,3 +1,4 @@
+import streamlit as st
 import feedparser
 import logging
 import re
@@ -26,7 +27,8 @@ AWARENESS_TYPES = {
     "13": "Rain/Flood",
 }
 
-
+# Cache this scraper for 60 seconds to reduce repeated parsing and memory churn
+@st.cache_data(ttl=60)
 def scrape_meteoalarm(conf):
     """
     Fetch and parse the MeteoAlarm RSS feed for European countries.
