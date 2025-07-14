@@ -61,15 +61,17 @@ async def _scrape_ec_async(sources):
         return all_entries
 
 @st.cache_data(ttl=60)
-def scrape_ec(sources):
+def scrape_ec(conf):
     """
     Fetch and parse Environment Canada Atom feeds for multiple regions.
+    Expects `conf` dict with key 'sources' providing a list of region dicts.
     Cached for 60 seconds to minimize repeated network and XML parsing.
     Returns a dict with 'entries' and 'source'.
     """
+    sources = conf.get("sources", [])
     try:
         all_entries = asyncio.run(_scrape_ec_async(sources))
-        return {"entries": all_entries, "source": "Environment Canada"}
+        return {"entries": all_entries, "source": conf.get("label", "Environment Canada")}
     except Exception as e:
         logging.warning(f"[EC SCRAPER ERROR] {e}")
-        return {"entries": [], "error": str(e), "source": "Environment Canada"}
+        return {"entries": [], "error": str(e), "source": conf.get("label", "Environment Canada")}
