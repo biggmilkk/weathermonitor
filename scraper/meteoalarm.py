@@ -111,7 +111,7 @@ def scrape_meteoalarm(conf):
                 "province": "Europe",
             })
 
-        logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} alert summaries (Orange/Red only)")
+        logging.warning(f"[METEOALARM DEBUG] Successfully parsed {len(entries)} alerts (Orange/Red only)")
         return {"entries": entries, "source": url}
 
     except Exception as e:
