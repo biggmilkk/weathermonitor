@@ -7,6 +7,10 @@ import re
 from datetime import datetime
 
 async def _fetch_and_parse(session, region):
+    # region should be a dict with keys including "ATOM URL"
+    if not isinstance(region, dict):
+        logging.warning(f"[EC FETCH ERROR] Invalid region config: {region}")
+        return []
     url = region.get("ATOM URL")
     if not url:
         return []
@@ -54,7 +58,12 @@ async def _fetch_and_parse(session, region):
 
 async def _scrape_ec_async(sources):
     async with aiohttp.ClientSession() as session:
-        tasks = [_fetch_and_parse(session, region) for region in sources if region.get("ATOM URL")]
+        # filter out invalid configs
+        tasks = [
+            _fetch_and_parse(session, region)
+            for region in sources
+            if isinstance(region, dict)
+        ]
         results = await asyncio.gather(*tasks)
         all_entries = [e for sub in results for e in sub]
         logging.warning(f"[EC DEBUG] Successfully fetched {len(all_entries)} alerts")
@@ -64,14 +73,26 @@ async def _scrape_ec_async(sources):
 def scrape_ec(conf):
     """
     Fetch and parse Environment Canada Atom feeds for multiple regions.
-    Expects `conf` dict with key 'sources' providing a list of region dicts.
-    Cached for 60 seconds to minimize repeated network and XML parsing.
+    Accepts either:
+      - conf as a dict with key 'sources': a list of region dicts
+      - conf directly as a list of region dicts
+    Cached for 60 seconds to minimize network and XML parsing.
     Returns a dict with 'entries' and 'source'.
     """
-    sources = conf.get("sources", [])
+    # Support both dict and list inputs
+    if isinstance(conf, dict):
+        sources = conf.get("sources", [])
+        label = conf.get("label", "Environment Canada")
+    elif isinstance(conf, list):
+        sources = conf
+        label = "Environment Canada"
+    else:
+        logging.warning(f"[EC SCRAPER ERROR] Invalid conf type: {type(conf)}")
+        return {"entries": [], "error": "Invalid configuration", "source": "Environment Canada"}
+
     try:
         all_entries = asyncio.run(_scrape_ec_async(sources))
-        return {"entries": all_entries, "source": conf.get("label", "Environment Canada")}
+        return {"entries": all_entries, "source": label}
     except Exception as e:
         logging.warning(f"[EC SCRAPER ERROR] {e}")
-        return {"entries": [], "error": str(e), "source": conf.get("label", "Environment Canada")}
+        return {"entries": [], "error": str(e), "source": label}
