@@ -54,20 +54,18 @@ for key, conf in FEED_CONFIG.items():
         try:
             scraper = SCRAPER_REGISTRY[conf['type']]
             entries = scraper(conf).get('entries', [])
-                        entries = entries[:MAX_ENTRIES]
             st.session_state[f"{key}_data"] = entries
             st.session_state[f"{key}_last_fetch"] = now
             st.session_state['last_refreshed'] = now
             # Advance seen on idle refresh if open and no new alerts
             if st.session_state.get('active_feed') == key:
-                last_seen = (
-                    st.session_state[f"{key}_last_seen_alerts"]
-                    if conf['type']=='rss_meteoalarm'
-                    else st.session_state[f"{key}_last_seen_time"]
-                )
+                if conf['type'] == 'rss_meteoalarm':
+                    last_seen = st.session_state[f"{key}_last_seen_alerts"]
+                else:
+                    last_seen = st.session_state[f"{key}_last_seen_time"]
                 total, new_count = compute_counts(entries, conf, last_seen, alert_id_fn=alert_id)
                 if new_count == 0:
-                    if conf['type']=='rss_meteoalarm':
+                    if conf['type'] == 'rss_meteoalarm':
                         all_ids = {
                             alert_id(e)
                             for country in entries
@@ -96,7 +94,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
     seen = (
         st.session_state[f"{key}_last_seen_alerts"]
-        if conf['type']=='rss_meteoalarm'
+        if conf['type'] == 'rss_meteoalarm'
         else st.session_state[f"{key}_last_seen_time"]
     )
     total, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
@@ -111,7 +109,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         if clicked:
             # Toggle open/close
             if st.session_state['active_feed'] == key:
-                if conf['type']=='rss_meteoalarm':
+                if conf['type'] == 'rss_meteoalarm':
                     snap = {
                         alert_id(e)
                         for country in entries
@@ -133,9 +131,9 @@ if active:
     conf = FEED_CONFIG[active]
     entries = st.session_state[f"{active}_data"]
     # Sort newest-first
-    data_list = sorted(entries, key=lambda x: x.get('published',''), reverse=True)
+    data_list = sorted(entries, key=lambda x: x.get('published', ''), reverse=True)
     # Tag MeteoAlarm alerts with is_new
-    if conf['type']=='rss_meteoalarm':
+    if conf['type'] == 'rss_meteoalarm':
         seen_ids = st.session_state[f"{active}_last_seen_alerts"]
         for country in data_list:
             for alerts in country.get('alerts', {}).values():
@@ -144,11 +142,11 @@ if active:
     # Determine seen for red bar
     seen = (
         st.session_state[f"{active}_last_seen_alerts"]
-        if conf['type']=='rss_meteoalarm'
+        if conf['type'] == 'rss_meteoalarm'
         else st.session_state[f"{active}_last_seen_time"]
     )
     for item in data_list:
-        if conf['type']=='rss_meteoalarm':
+        if conf['type'] == 'rss_meteoalarm':
             alerts = [e for alerts in item['alerts'].values() for e in alerts]
             if any(e.get('is_new') for e in alerts):
                 st.markdown("<div style='height:4px;background:red;margin:8px 0;'></div>", unsafe_allow_html=True)
@@ -159,16 +157,21 @@ if active:
                     ts = dateparser.parse(pub).timestamp()
                 except Exception:
                     ts = 0.0
-                seen_ts = seen if isinstance(seen,(int,float)) else 0.0
+                seen_ts = seen if isinstance(seen, (int, float)) else 0.0
                 if ts > seen_ts:
                     st.markdown("<div style='height:4px;background:red;margin:8px 0;'></div>", unsafe_allow_html=True)
         # Render item
-        RENDERERS.get(conf['type'], lambda i,c: None)(item, conf)
+        RENDERERS.get(conf['type'], lambda i, c: None)(item, conf)
     # Snapshot last seen after render
     pkey = f"{active}_pending_seen_time"
     if pkey in st.session_state:
-        if conf['type']=='rss_meteoalarm':
-            snap = {alert_id(e) for country in data_list for alerts in country.get('alerts', {}).values() for e in alerts}
+        if conf['type'] == 'rss_meteoalarm':
+            snap = {
+                alert_id(e)
+                for country in data_list
+                for alerts in country.get('alerts', {}).values()
+                for e in alerts
+            }
             st.session_state[f"{active}_last_seen_alerts"] = snap
         else:
             st.session_state[f"{active}_last_seen_time"] = st.session_state.pop(pkey)
