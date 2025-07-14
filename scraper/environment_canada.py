@@ -82,7 +82,7 @@ async def _scrape_async(sources):
             return datetime.min
     return sorted(all_entries, key=key, reverse=True)
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=60, show_spinner=False)
 def scrape_ec(sources):
     """
     sources: list of {'ATOM URL', 'Region Name', optional 'Province-Territory'}
