@@ -7,7 +7,7 @@ from scraper.cma import scrape_cma
 
 SCRAPER_REGISTRY = {
     "json": lambda conf: scrape_nws(conf.get("url")),
-    "ec_async": lambda conf: asyncio.run(scrape_ec(json.load(open(conf.get("source_file"))))),
+    "ec_async": lambda conf: scrape_ec(json.load(open(conf.get("source_file"))).get("sources", [])),
     "rss_meteoalarm": lambda conf: scrape_meteoalarm(conf),
     "rss_cma": lambda conf: scrape_cma(conf),
 }
