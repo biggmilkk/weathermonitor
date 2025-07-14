@@ -61,22 +61,6 @@ async def _fetch_and_parse(session, region):
         logging.warning(f"[EC FETCH ERROR] {url} - {e}")
         return []
 
-# Cached entry point for Streamlit
-@st.cache_data(ttl=60)
-def scrape_ec(sources):
-    """
-    Fetch and parse Environment Canada Atom feeds for multiple regions.
-    Cached for 60 seconds to minimize repeated network and XML parsing.
-    Returns a dict with 'entries' (list) and 'source' identifier.
-    """
-    try:
-        # Run the async fetch across all regions
-        all_entries = asyncio.run(_scrape_ec_async(sources))
-        return {"entries": all_entries, "source": "Environment Canada"}
-    except Exception as e:
-        logging.warning(f"[EC SCRAPER ERROR] {e}")
-        return {"entries": [], "error": str(e), "source": "Environment Canada"}
-
 # Helper async runner
 async def _scrape_ec_async(sources):
     async with aiohttp.ClientSession() as session:
@@ -90,3 +74,19 @@ async def _scrape_ec_async(sources):
         all_entries = [e for sublist in results for e in sublist]
         logging.warning(f"[EC DEBUG] Successfully fetched {len(all_entries)} alerts")
         return all_entries
+
+# Cached entry point for Streamlit
+@st.cache_data(ttl=60)
+def scrape_ec(sources):
+    """
+    Fetch and parse Environment Canada Atom feeds for multiple regions.
+    Cached for 60 seconds to minimize repeated network and XML parsing.
+    Returns a dict with 'entries' (list) and 'source' identifier.
+    """
+    try:
+        # Run the async fetch across all regions
+        entries = asyncio.run(_scrape_ec_async(sources))
+        return {"entries": entries, "source": "Environment Canada"}
+    except Exception as e:
+        logging.warning(f"[EC SCRAPER ERROR] {e}")
+        return {"entries": [], "error": str(e), "source": "Environment Canada"}
