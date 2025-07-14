@@ -6,91 +6,92 @@ import logging
 import re
 from datetime import datetime
 
-async def _fetch_and_parse(session, region):
-    # Ensure region is a dict with a proper ATOM URL
-    url = region.get("ATOM URL") if isinstance(region, dict) else None
-    if not isinstance(url, str) or not url:
-        # Skip invalid region configs
+# Namespace for Atom feeds
+en = {"atom": "http://www.w3.org/2005/Atom"}
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+async def fetch_feed(session, region):
+    """
+    Fetch and parse a single ATOM feed. Returns list of alert dicts:
+    {"alert": str, "area": str, "published": isoformat str}
+    """
+    url = region.get("ATOM URL")
+    if not url:
         return []
     try:
         async with session.get(url, timeout=10) as resp:
             text = await resp.text()
-            root = ET.fromstring(text)
     except Exception as e:
         logging.warning(f"[EC FETCH ERROR] {url} - {e}")
         return []
 
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as e:
+        logging.warning(f"[EC PARSE ERROR] {url} - {e}")
+        return []
+
     entries = []
-    for item in root.findall("{http://www.w3.org/2005/Atom}entry"):
-        title_elem = item.find("{http://www.w3.org/2005/Atom}title")
-        summary_elem = item.find("{http://www.w3.org/2005/Atom}summary")
-        link_elem = item.find("{http://www.w3.org/2005/Atom}link")
-        pub_elem = item.find("{http://www.w3.org/2005/Atom}published")
-
-        title = title_elem.text if title_elem is not None else ""
-        if not title:
+    for entry in root.findall("atom:entry", en):
+        title_elem = entry.find("atom:title", en)
+        pub_elem = entry.find("atom:published", en) or entry.find("atom:updated", en)
+        if title_elem is None or not title_elem.text:
             continue
-        if 'ENDED' in title.upper() or title.strip().upper().startswith('NO ALERT'):
+        title_text = title_elem.text.strip()
+        # skip expiry notices
+        if re.search(r"ended", title_text, re.IGNORECASE):
             continue
-
-        alert_type = re.split(r",\s*", title)[0].strip().upper()
-        if 'WARNING' not in alert_type and alert_type != 'SEVERE THUNDERSTORM WATCH':
+        # split into alert and area
+        parts = [p.strip() for p in title_text.split(",", 1)]
+        alert_type = parts[0]
+        area = parts[1] if len(parts) == 2 else region.get("Region Name", "")
+        # filter for warnings only
+        if not (re.search(r"warning\b", alert_type, re.IGNORECASE)
+                or re.match(r"severe thunderstorm watch", alert_type, re.IGNORECASE)):
             continue
-
-        raw_pub = pub_elem.text if pub_elem is not None else ""
+        # parse published time
+        time_text = pub_elem.text.strip() if pub_elem is not None and pub_elem.text else ""
         try:
-            dt = datetime.strptime(raw_pub, "%Y-%m-%dT%H:%M:%SZ")
-            pub_iso = dt.isoformat()
-        except Exception:
-            pub_iso = raw_pub
-
+            dt = datetime.strptime(time_text, TIME_FORMAT)
+            published = dt.isoformat()
+        except ValueError:
+            published = time_text
         entries.append({
-            "title": alert_type,
-            "summary": (summary_elem.text[:500] if summary_elem is not None else ""),
-            "link": (link_elem.attrib.get("href", "") if link_elem is not None else ""),
-            "published": pub_iso,
-            "region": region.get("Region Name", ""),
-            "province": region.get("Province-Territory", "")
+            "alert": alert_type,
+            "area": area,
+            "published": published
         })
     return entries
 
-async def _scrape_ec_async(sources):
+async def scrape_all(sources):
+    """
+    Concurrently fetch all feeds and aggregate entries, sorted by published desc.
+    """
+    tasks = []
     async with aiohttp.ClientSession() as session:
-        # Only include regions with valid ATOM URL strings
-        tasks = [
-            _fetch_and_parse(session, region)
-            for region in sources
-            if isinstance(region, dict) and isinstance(region.get("ATOM URL"), str)
-        ]
+        for region in sources:
+            if isinstance(region, dict) and isinstance(region.get("ATOM URL"), str):
+                tasks.append(fetch_feed(session, region))
         results = await asyncio.gather(*tasks)
-        all_entries = [e for sub in results for e in sub]
-        logging.warning(f"[EC DEBUG] Successfully fetched {len(all_entries)} alerts")
-        return all_entries
+    all_entries = [item for sub in results for item in sub]
+    # sort by published datetime (fallback unsorted)
+    def _key(e):
+        try:
+            return datetime.fromisoformat(e["published"])
+        except Exception:
+            return datetime.min
+    all_entries.sort(key=_key, reverse=True)
+    return all_entries
 
 @st.cache_data(ttl=60)
-def scrape_ec(conf):
+def scrape_ec(sources):
     """
-    Fetch and parse Environment Canada Atom feeds.
-    Accepts either:
-      - conf as a dict with key 'sources': list of region dicts
-      - conf directly as list of region dicts
-    Cached for 60 seconds.
-    Returns a dict: {'entries': [...], 'source': label}.
+    sources: list of dicts each with 'ATOM URL' and 'Region Name'.
+    Returns dict with 'entries' (filtered and sorted) and 'source'.
     """
-    # Determine sources list and label
-    if isinstance(conf, dict):
-        sources = conf.get("sources") if isinstance(conf.get("sources"), list) else []
-        label = conf.get("label", "Environment Canada")
-    elif isinstance(conf, list):
-        sources = conf
-        label = "Environment Canada"
-    else:
-        logging.warning(f"[EC SCRAPER ERROR] Invalid conf type: {type(conf)}")
-        return {"entries": [], "error": "Invalid configuration", "source": "Environment Canada"}
+    if not isinstance(sources, list):
+        logging.error(f"[EC SCRAPER ERROR] Expected liste of sources, got {type(sources)}")
+        return {"entries": [], "error": "Invalid sources type", "source": "Environment Canada"}
 
-    try:
-        all_entries = asyncio.run(_scrape_ec_async(sources))
-        return {"entries": all_entries, "source": label}
-    except Exception as e:
-        logging.warning(f"[EC SCRAPER ERROR] {e}")
-        return {"entries": [], "error": str(e), "source": label}
+    entries = asyncio.run(scrape_all(sources))
+    return {"entries": entries, "source": "Environment Canada"}
