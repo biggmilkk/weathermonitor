@@ -93,5 +93,5 @@ def scrape_ec(sources):
         return {"entries": [], "error": "Invalid sources type", "source": "Environment Canada"}
     # run async
     entries = asyncio.run(_scrape_async(sources))
-     logging.warning(f"[EC DEBUG] Successfully parsed {len(entries)} alerts")
+    logging.warning(f"[EC DEBUG] Successfully parsed {len(entries)} alerts")
     return {"entries": entries, "source": "Environment Canada"}
