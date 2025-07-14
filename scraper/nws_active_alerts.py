@@ -13,7 +13,7 @@ ALLOWED_EVENTS = {
 }
 
 # Cache this scraper for 60 seconds to reduce repeated parsing and memory churn
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=60, show_spinner=False)
 def scrape_nws(url="https://api.weather.gov/alerts/active"):
     headers = {
         "User-Agent": "WeatherMonitorApp (your@email.com)"
