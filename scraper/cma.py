@@ -71,7 +71,7 @@ def scrape_cma(conf):
                 'province': ''
             })
 
-        logging.warning(f"[CMA DEBUG] Parsed {len(entries)} CMA alerts from {url}")
+        logging.warning(f"[CMA DEBUG] Successfully parsed {len(entries)} alerts")
         return {'entries': entries, 'source': url}
 
     except Exception as e:
