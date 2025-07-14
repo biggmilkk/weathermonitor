@@ -53,13 +53,19 @@ for key, conf in FEED_CONFIG.items():
     last_fetch = st.session_state[f"{key}_last_fetch"] or 0
     if now - last_fetch > REFRESH_INTERVAL:
         try:
-            scraper = SCRAPER_REGISTRY[conf['type']]
-            # Handle async Environment Canada scraper
+                        scraper = SCRAPER_REGISTRY[conf['type']]
+            # Call scraper with appropriate arguments
             if conf['type'] == 'ec_async':
-                feed_data = asyncio.run(scraper(conf.get('sources', [])))
+                raw_data = scraper(conf.get('sources', []))
             else:
-                feed_data = scraper(conf)
-            entries = feed_data.get('entries', []) if isinstance(feed_data, dict) else []
+                raw_data = scraper(conf)
+            # Normalize entries list
+            if isinstance(raw_data, dict):
+                entries = raw_data.get('entries', [])
+            elif isinstance(raw_data, list):
+                entries = raw_data
+            else:
+                entries = []
 
             st.session_state[f"{key}_data"] = entries
             st.session_state[f"{key}_last_fetch"] = now
