@@ -5,7 +5,7 @@ from dateutil import parser as dateparser
 from datetime import datetime
 
 # Cache this scraper for 60 seconds to reduce repeated parsing and memory churn
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=60, show_spinner=False)
 def scrape_cma(conf):
     """
     Fetch and parse the CMA CAP RSS feed synchronously using feedparser.
