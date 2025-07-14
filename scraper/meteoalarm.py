@@ -28,7 +28,7 @@ AWARENESS_TYPES = {
 }
 
 # Cache this scraper for 60 seconds to reduce repeated parsing and memory churn
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=60, show_spinner=False)
 def scrape_meteoalarm(conf):
     """
     Fetch and parse the MeteoAlarm RSS feed for European countries.
