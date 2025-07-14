@@ -53,7 +53,7 @@ for key, conf in FEED_CONFIG.items():
     last_fetch = st.session_state[f"{key}_last_fetch"] or 0
     if now - last_fetch > REFRESH_INTERVAL:
         try:
-                        scraper = SCRAPER_REGISTRY[conf['type']]
+            scraper = SCRAPER_REGISTRY[conf['type']]
             # Call scraper with appropriate arguments
             if conf['type'] == 'ec_async':
                 raw_data = scraper(conf.get('sources', []))
