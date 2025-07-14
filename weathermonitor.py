@@ -53,10 +53,17 @@ for key, conf in FEED_CONFIG.items():
     if now - last_fetch > REFRESH_INTERVAL:
         try:
             scraper = SCRAPER_REGISTRY[conf['type']]
-            entries = scraper(conf).get('entries', [])
+            # Pass correct argument to EC scraper
+            if conf['type'] == 'ec_async':
+                feed_data = scraper(conf['sources'])
+            else:
+                feed_data = scraper(conf)
+            entries = feed_data.get('entries', [])
+
             st.session_state[f"{key}_data"] = entries
             st.session_state[f"{key}_last_fetch"] = now
             st.session_state['last_refreshed'] = now
+
             # Advance seen on idle refresh if open and no new alerts
             if st.session_state.get('active_feed') == key:
                 if conf['type'] == 'rss_meteoalarm':
@@ -75,6 +82,7 @@ for key, conf in FEED_CONFIG.items():
                         st.session_state[f"{key}_last_seen_alerts"] = all_ids
                     else:
                         st.session_state[f"{key}_last_seen_time"] = now
+
             # Run garbage collector to free unused memory
             gc.collect()
         except Exception as e:
@@ -132,6 +140,7 @@ if active:
     entries = st.session_state[f"{active}_data"]
     # Sort newest-first
     data_list = sorted(entries, key=lambda x: x.get('published', ''), reverse=True)
+
     # Tag MeteoAlarm alerts with is_new
     if conf['type'] == 'rss_meteoalarm':
         seen_ids = st.session_state[f"{active}_last_seen_alerts"]
@@ -139,6 +148,7 @@ if active:
             for alerts in country.get('alerts', {}).values():
                 for e in alerts:
                     e['is_new'] = alert_id(e) not in seen_ids
+
     # Determine seen for red bar
     seen = (
         st.session_state[f"{active}_last_seen_alerts"]
@@ -162,6 +172,7 @@ if active:
                     st.markdown("<div style='height:4px;background:red;margin:8px 0;'></div>", unsafe_allow_html=True)
         # Render item
         RENDERERS.get(conf['type'], lambda i, c: None)(item, conf)
+
     # Snapshot last seen after render
     pkey = f"{active}_pending_seen_time"
     if pkey in st.session_state:
