@@ -90,7 +90,7 @@ def scrape_ec(sources):
     Returns dict with 'entries' (filtered and sorted) and 'source'.
     """
     if not isinstance(sources, list):
-        logging.error(f"[EC SCRAPER ERROR] Expected liste of sources, got {type(sources)}")
+        logging.error(f"[EC SCRAPER ERROR] Expected list of sources, got {type(sources)}")
         return {"entries": [], "error": "Invalid sources type", "source": "Environment Canada"}
 
     entries = asyncio.run(scrape_all(sources))
