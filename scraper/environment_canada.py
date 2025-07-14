@@ -29,14 +29,16 @@ async def _fetch_and_parse(session, region):
                     continue
 
                 # Skip ended alerts and 'no alert' entries
-                up = title.upper()
-                if 'ENDED' in up or up.startswith('NO ALERT'):
+                upper = title.upper()
+                if 'ENDED' in upper or upper.startswith('NO ALERT'):
                     continue
 
+                # Take only WARNING or specific watch
                 alert_type = re.split(r",\s*", title)[0].strip().upper()
                 if 'WARNING' not in alert_type and alert_type != 'SEVERE THUNDERSTORM WATCH':
                     continue
 
+                # Normalize published time to ISO
                 raw_pub = published_elem.text if published_elem is not None else ""
                 try:
                     pub_dt = datetime.strptime(raw_pub, "%Y-%m-%dT%H:%M:%SZ")
@@ -44,6 +46,7 @@ async def _fetch_and_parse(session, region):
                 except Exception:
                     pub_iso = raw_pub
 
+                # Build minimal alert dict
                 entries.append({
                     "title": alert_type,
                     "summary": summary_elem.text[:500] if summary_elem is not None else "",
@@ -67,6 +70,7 @@ def scrape_ec(sources):
     Returns a dict with 'entries' (list) and 'source' identifier.
     """
     try:
+        # Run the async fetch across all regions
         all_entries = asyncio.run(_scrape_ec_async(sources))
         return {"entries": all_entries, "source": "Environment Canada"}
     except Exception as e:
@@ -76,10 +80,13 @@ def scrape_ec(sources):
 # Helper async runner
 async def _scrape_ec_async(sources):
     async with aiohttp.ClientSession() as session:
-        tasks = [_fetch_and_parse(session, region) for region in sources if region.get("ATOM URL")]
+        tasks = [
+            _fetch_and_parse(session, region)
+            for region in sources
+            if region.get("ATOM URL")
+        ]
         results = await asyncio.gather(*tasks)
-        all_entries = []
-        for result in results:
-            all_entries.extend(result)
+        # Flatten list of per-region entries
+        all_entries = [e for sublist in results for e in sublist]
         logging.warning(f"[EC DEBUG] Successfully fetched {len(all_entries)} alerts")
         return all_entries
