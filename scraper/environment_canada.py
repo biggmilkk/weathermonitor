@@ -6,92 +6,105 @@ import logging
 import re
 from datetime import datetime
 
-# Namespace for Atom feeds
+# Atom namespace and timestamp format
 en = {"atom": "http://www.w3.org/2005/Atom"}
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 async def fetch_feed(session, region):
     """
-    Fetch and parse a single ATOM feed. Returns list of alert dicts:
-    {"alert": str, "area": str, "published": isoformat str}
+    Fetch one Atom feed and return list of warning-level alerts.
+    Each entry dict has keys: title, region, published, link.
     """
     url = region.get("ATOM URL")
-    if not url:
+    if not isinstance(url, str) or not url:
         return []
     try:
         async with session.get(url, timeout=10) as resp:
-            text = await resp.text()
+            xml_text = await resp.text()
     except Exception as e:
         logging.warning(f"[EC FETCH ERROR] {url} - {e}")
         return []
 
     try:
-        root = ET.fromstring(text)
+        root = ET.fromstring(xml_text)
     except ET.ParseError as e:
         logging.warning(f"[EC PARSE ERROR] {url} - {e}")
         return []
 
     entries = []
-    for entry in root.findall("atom:entry", en):
-        title_elem = entry.find("atom:title", en)
-        pub_elem = entry.find("atom:published", en) or entry.find("atom:updated", en)
+    for elem in root.findall("atom:entry", en):
+        title_elem = elem.find("atom:title", en)
         if title_elem is None or not title_elem.text:
             continue
-        title_text = title_elem.text.strip()
-        # skip expiry notices
-        if re.search(r"ended", title_text, re.IGNORECASE):
+        raw_title = title_elem.text.strip()
+        # Skip expired alerts
+        if re.search(r"ended", raw_title, re.IGNORECASE):
             continue
-        # split into alert and area
-        parts = [p.strip() for p in title_text.split(",", 1)]
+        # Split into alert type and area
+        parts = [p.strip() for p in raw_title.split(",", 1)]
         alert_type = parts[0]
         area = parts[1] if len(parts) == 2 else region.get("Region Name", "")
-        # filter for warnings only
+        # Only warnings or severe thunderstorm watches
         if not (re.search(r"warning\b", alert_type, re.IGNORECASE)
                 or re.match(r"severe thunderstorm watch", alert_type, re.IGNORECASE)):
             continue
-        # parse published time
+        # Extract published or updated timestamp
+        pub_elem = elem.find("atom:published", en) or elem.find("atom:updated", en)
         time_text = pub_elem.text.strip() if pub_elem is not None and pub_elem.text else ""
         try:
             dt = datetime.strptime(time_text, TIME_FORMAT)
             published = dt.isoformat()
         except ValueError:
             published = time_text
+        # Extract read-more link
+        link_elem = elem.find("atom:link", en)
+        link = link_elem.attrib.get("href", "") if link_elem is not None else region.get("ATOM URL", "")
         entries.append({
-            "alert": alert_type,
-            "area": area,
-            "published": published
+            "title": alert_type,
+            "region": area,
+            "published": published,
+            "link": link
         })
     return entries
 
 async def scrape_all(sources):
     """
-    Concurrently fetch all feeds and aggregate entries, sorted by published desc.
+    Concurrently fetch all feeds and return combined list sorted by published desc.
     """
-    tasks = []
     async with aiohttp.ClientSession() as session:
-        for region in sources:
-            if isinstance(region, dict) and isinstance(region.get("ATOM URL"), str):
-                tasks.append(fetch_feed(session, region))
+        tasks = [fetch_feed(session, r)
+                 for r in sources
+                 if isinstance(r, dict) and isinstance(r.get("ATOM URL"), str)]
         results = await asyncio.gather(*tasks)
-    all_entries = [item for sub in results for item in sub]
-    # sort by published datetime (fallback unsorted)
-    def _key(e):
+    all_entries = [e for sub in results for e in sub]
+    # Sort most recent first
+    def key_fn(item):
         try:
-            return datetime.fromisoformat(e["published"])
+            return datetime.fromisoformat(item["published"])
         except Exception:
             return datetime.min
-    all_entries.sort(key=_key, reverse=True)
-    return all_entries
+    return sorted(all_entries, key=key_fn, reverse=True)
 
 @st.cache_data(ttl=60)
-def scrape_ec(sources):
+def scrape_ec(conf):
     """
-    sources: list of dicts each with 'ATOM URL' and 'Region Name'.
-    Returns dict with 'entries' (filtered and sorted) and 'source'.
+    Wrapper for Streamlit: accepts either a list of region dicts or a dict with 'sources'.
+    Returns {'entries': [...], 'source': 'Environment Canada'}.
+    Each entry has: title, region, published, link.
     """
+    if isinstance(conf, dict):
+        sources = conf.get("sources", [])
+    else:
+        sources = conf if isinstance(conf, list) else []
+
     if not isinstance(sources, list):
-        logging.error(f"[EC SCRAPER ERROR] Expected list of sources, got {type(sources)}")
+        logging.error(f"[EC SCRAPER ERROR] Invalid sources type: {type(sources)}")
         return {"entries": [], "error": "Invalid sources type", "source": "Environment Canada"}
 
-    entries = asyncio.run(scrape_all(sources))
+    try:
+        entries = asyncio.run(scrape_all(sources))
+    except Exception as e:
+        logging.warning(f"[EC SCRAPER ERROR] {e}")
+        return {"entries": [], "error": str(e), "source": "Environment Canada"}
+
     return {"entries": entries, "source": "Environment Canada"}
