@@ -1,4 +1,3 @@
-import streamlit as st
 import aiohttp
 import asyncio
 import xml.etree.ElementTree as ET
@@ -62,7 +61,6 @@ async def fetch_and_parse(session, region):
         logging.warning(f"[EC FETCH ERROR] {url} - {e}")
         return []
 
-@st.cache_data(ttl=60)
 async def scrape_ec(sources):
     async with aiohttp.ClientSession() as session:
         tasks = [fetch_and_parse(session, region) for region in sources if region.get("ATOM URL")]
