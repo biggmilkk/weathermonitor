@@ -7,12 +7,10 @@ import re
 from datetime import datetime
 
 async def _fetch_and_parse(session, region):
-    # region should be a dict with keys including "ATOM URL"
-    if not isinstance(region, dict):
-        logging.warning(f"[EC FETCH ERROR] Invalid region config: {region}")
-        return []
-    url = region.get("ATOM URL")
-    if not url:
+    # Ensure region is a dict with a proper ATOM URL
+    url = region.get("ATOM URL") if isinstance(region, dict) else None
+    if not isinstance(url, str) or not url:
+        # Skip invalid region configs
         return []
     try:
         async with session.get(url, timeout=10) as resp:
@@ -48,8 +46,8 @@ async def _fetch_and_parse(session, region):
 
         entries.append({
             "title": alert_type,
-            "summary": summary_elem.text[:500] if summary_elem is not None else "",
-            "link": link_elem.attrib.get("href", "") if link_elem is not None else "",
+            "summary": (summary_elem.text[:500] if summary_elem is not None else ""),
+            "link": (link_elem.attrib.get("href", "") if link_elem is not None else ""),
             "published": pub_iso,
             "region": region.get("Region Name", ""),
             "province": region.get("Province-Territory", "")
@@ -58,11 +56,11 @@ async def _fetch_and_parse(session, region):
 
 async def _scrape_ec_async(sources):
     async with aiohttp.ClientSession() as session:
-        # filter out invalid configs
+        # Only include regions with valid ATOM URL strings
         tasks = [
             _fetch_and_parse(session, region)
             for region in sources
-            if isinstance(region, dict)
+            if isinstance(region, dict) and isinstance(region.get("ATOM URL"), str)
         ]
         results = await asyncio.gather(*tasks)
         all_entries = [e for sub in results for e in sub]
@@ -72,16 +70,16 @@ async def _scrape_ec_async(sources):
 @st.cache_data(ttl=60)
 def scrape_ec(conf):
     """
-    Fetch and parse Environment Canada Atom feeds for multiple regions.
+    Fetch and parse Environment Canada Atom feeds.
     Accepts either:
-      - conf as a dict with key 'sources': a list of region dicts
-      - conf directly as a list of region dicts
-    Cached for 60 seconds to minimize network and XML parsing.
-    Returns a dict with 'entries' and 'source'.
+      - conf as a dict with key 'sources': list of region dicts
+      - conf directly as list of region dicts
+    Cached for 60 seconds.
+    Returns a dict: {'entries': [...], 'source': label}.
     """
-    # Support both dict and list inputs
+    # Determine sources list and label
     if isinstance(conf, dict):
-        sources = conf.get("sources", [])
+        sources = conf.get("sources") if isinstance(conf.get("sources"), list) else []
         label = conf.get("label", "Environment Canada")
     elif isinstance(conf, list):
         sources = conf
