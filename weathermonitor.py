@@ -4,16 +4,15 @@ import os
 import sys
 import logging
 import gc
-import asyncio
 from dateutil import parser as dateparser
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from streamlit_autorefresh import st_autorefresh
-from computation import compute_counts, advance_seen
+from computation import compute_counts
 from renderer import RENDERERS
 
 # Constants
-FETCH_TTL = 60     # seconds
+FETCH_TTL = 60  # seconds
 
 # Ensure scrapers are on path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -23,7 +22,7 @@ st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
 
 # Auto-refresh every minute
-st_autorefresh(interval=60 * 1000, key="autorefresh")
+st_autorefresh(interval=FETCH_TTL * 1000, key="autorefresh")
 
 # Timing constants
 now = time.time()
@@ -54,11 +53,8 @@ for key, conf in FEED_CONFIG.items():
     if now - last_fetch > REFRESH_INTERVAL:
         try:
             scraper = SCRAPER_REGISTRY[conf['type']]
-            # Call scraper with appropriate arguments
-            if conf['type'] == 'ec_async':
-                raw_data = scraper(conf.get('sources', []))
-            else:
-                raw_data = scraper(conf)
+            # Call scraper uniformly with conf dict
+            raw_data = scraper(conf)
             # Normalize entries list
             if isinstance(raw_data, dict):
                 entries = raw_data.get('entries', [])
