@@ -5,11 +5,12 @@ import xml.etree.ElementTree as ET
 
 # Common HTTP headers for BOM feeds (mimic a browser or known agent)
 HEADERS = {
-    "User-Agent": "WeatherMonitorApp/1.0 (contact@example.com)"
+    "User-Agent": "WeatherMonitorApp/1.0 (contact@example.com)",
+    "Accept": "application/xml, text/xml, */*;q=0.1",
+    "Referer": "https://www.bom.gov.au/"
 }
 
-
-def _parse_bom_root(content: bytes, state: str):
+def _parse_bom_root(content: bytes, state: str) -> list[dict]:
     """
     Parse BOM XML content and tag each alert with its state.
     """
@@ -20,7 +21,7 @@ def _parse_bom_root(content: bytes, state: str):
         logging.warning(f"[BOM PARSE ERROR] {state} - {e}")
         return entries
 
-    # BOM uses <warning> elements under root
+    # BOM uses <warning> elements under the root
     for warning in root.findall('.//warning'):
         title = warning.findtext('headline') or ''
         summary = warning.findtext('description') or ''
@@ -34,7 +35,6 @@ def _parse_bom_root(content: bytes, state: str):
             'state': state
         })
     return entries
-
 
 @st.cache_data(ttl=60, show_spinner=False)
 def scrape_bom_multi(conf: dict) -> dict:
@@ -53,7 +53,6 @@ def scrape_bom_multi(conf: dict) -> dict:
         except Exception as e:
             logging.warning(f"[BOM FETCH ERROR] sync {state} {url}: {e}")
     return {'entries': entries, 'source': 'Australia BOM'}
-
 
 async def scrape_bom_multi_async(conf: dict, client: httpx.AsyncClient) -> dict:
     """
