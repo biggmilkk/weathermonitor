@@ -8,10 +8,10 @@ import asyncio
 from dateutil import parser as dateparser
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
-from utils.clients import get_async_client
 from streamlit_autorefresh import st_autorefresh
 from computation import compute_counts
 from renderer import RENDERERS
+import httpx
 
 # Constants
 FETCH_TTL = 60  # seconds
@@ -48,23 +48,21 @@ def alert_id(entry):
 # Async fetcher
 async def _fetch_all_feeds(configs: dict):
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
-    client = get_async_client()
-    async def bound_fetch(key, conf):
-        async with sem:
-            try:
-                data = await SCRAPER_REGISTRY[conf['type']](conf, client)
-            except Exception as e:
-                logging.warning(f"[{key.upper()} FETCH ERROR] {e}")
-                data = {'entries': [], 'error': str(e), 'source': conf}
-            return key, data
-    tasks = [bound_fetch(k, cfg) for k, cfg in configs.items()]
-    return await asyncio.gather(*tasks)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        async def bound_fetch(key, conf):
+            async with sem:
+                func = SCRAPER_REGISTRY[conf['type']]
+                try:
+                    data = await func(conf, client)
+                except Exception as e:
+                    logging.warning(f"[{key.upper()} FETCH ERROR] {e}")
+                    data = {'entries': [], 'error': str(e), 'source': conf}
+                return key, data
+        tasks = [bound_fetch(k, cfg) for k, cfg in configs.items()]
+        return await asyncio.gather(*tasks)
 
 # Helper to run coroutines in a fresh event loop
 def run_async(coro):
-    """
-    Execute a coroutine in a new event loop to avoid conflicts with any existing loop.
-    """
     loop = asyncio.new_event_loop()
     try:
         return loop.run_until_complete(coro)
@@ -103,7 +101,7 @@ st.caption(
 )
 st.markdown('---')
 
-# Feed buttons
+# Feed selection buttons
 cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
@@ -115,7 +113,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         clicked = st.button(conf['label'], key=f"btn_{key}", use_container_width=True)
         if new_count > 0:
             st.markdown(
-                f"<span style='margin-left:8px;padding:2px 6px;border-radius:4px;"
+                f"<span style='margin-left:8px;padding:2px 6px;border-radius:4px;" \
                 f"background:#ffeecc;font-size:0.9em;'>❗ {new_count} New</span>",
                 unsafe_allow_html=True
             )
