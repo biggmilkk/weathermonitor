@@ -57,7 +57,7 @@ def scrape_bom_multi(conf: dict) -> dict:
 
     for url, state in zip(urls, states):
         try:
-            resp = httpx.get(url, headers=HEADERS, timeout=10)
+            resp = httpx.get(url, headers=HEADERS, timeout=10, follow_redirects=True)
             resp.raise_for_status()
             entries.extend(_parse_bom_root(resp.content, state))
         except Exception as e:
@@ -76,7 +76,7 @@ async def scrape_bom_multi_async(conf: dict, client: httpx.AsyncClient) -> dict:
 
     for url, state in zip(urls, states):
         try:
-            resp = await client.get(url, headers=HEADERS, timeout=10)
+            resp = await client.get(url, headers=HEADERS, timeout=10, follow_redirects=True)
             resp.raise_for_status()
             entries.extend(_parse_bom_root(resp.content, state))
         except Exception as e:
