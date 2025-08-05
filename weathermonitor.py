@@ -190,4 +190,4 @@ if active:
             st.session_state[f"{active}_last_seen_alerts"] = ids
         else:
             st.session_state[f"{active}_last_seen_time"] = st.session_state.pop(pkey)
-        st.session_state.pop(pkey, None)"}]}
+        st.session_state.pop(pkey, None)
