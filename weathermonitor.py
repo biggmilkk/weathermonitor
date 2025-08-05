@@ -45,7 +45,7 @@ for key, conf in FEED_CONFIG.items():
 st.session_state.setdefault('last_refreshed', now)
 st.session_state.setdefault('active_feed', None)
 
-# Unique ID for MeteoAlarm
+# Unique ID for MeteoAlarm entries
 def alert_id(entry):
     return f"{entry['level']}|{entry['type']}|{entry['from']}|{entry['until']}"
 
@@ -82,14 +82,20 @@ if to_fetch:
         st.session_state['last_refreshed'] = now
         conf = FEED_CONFIG[key]
         if st.session_state.get('active_feed') == key:
-            last_seen = (st.session_state[f"{key}_last_seen_alerts"]
-                         if conf['type'] == 'rss_meteoalarm'
-                         else st.session_state[f"{key}_last_seen_time"])
+            last_seen = (
+                st.session_state[f"{key}_last_seen_alerts"]
+                if conf['type'] == 'rss_meteoalarm'
+                else st.session_state[f"{key}_last_seen_time"]
+            )
             _, new_count = compute_counts(entries, conf, last_seen, alert_id_fn=alert_id)
             if new_count == 0:
                 if conf['type'] == 'rss_meteoalarm':
-                    ids = {alert_id(e) for country in entries
-                           for alerts in country.get('alerts', {}).values() for e in alerts}
+                    ids = {
+                        alert_id(e)
+                        for country in entries
+                        for alerts in country.get('alerts', {}).values()
+                        for e in alerts
+                    }
                     st.session_state[f"{key}_last_seen_alerts"] = ids
                 else:
                     st.session_state[f"{key}_last_seen_time"] = now
@@ -104,25 +110,30 @@ st.markdown('---')
 
 # Feed selection buttons
 cols = st.columns(len(FEED_CONFIG))
-for i, (key, conf) in enumerate(FEED_CONFIG.items()):(FEED_CONFIG.items()):
+for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
-    seen = (st.session_state[f"{key}_last_seen_alerts"]
-            if conf['type'] == 'rss_meteoalarm'
-            else st.session_state[f"{key}_last_seen_time"])
+    seen = (
+        st.session_state[f"{key}_last_seen_alerts"]
+        if conf['type'] == 'rss_meteoalarm'
+        else st.session_state[f"{key}_last_seen_time"]
+    )
     _, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
     with cols[i]:
-        clicked = st.button(conf['label'], key=f"btn_{key}_{i}", use_container_width=True), use_container_width=True)
+        clicked = st.button(conf['label'], key=f"btn_{key}_{i}", use_container_width=True)
         if new_count > 0:
             st.markdown(
-                f"<span style='margin-left:8px;padding:2px 6px;border-radius:4px;" +
-                f"background:#ffeecc;font-size:0.9em;'>❗ {new_count} New</span>",
+                f"<span style='margin-left:8px;padding:2px 6px;border-radius:4px;background:#ffeecc;font-size:0.9em;'>❗ {new_count} New</span>",
                 unsafe_allow_html=True
             )
         if clicked:
             if st.session_state['active_feed'] == key:
                 if conf['type'] == 'rss_meteoalarm':
-                    ids = {alert_id(e) for country in entries
-                           for alerts in country.get('alerts', {}).values() for e in alerts}
+                    ids = {
+                        alert_id(e)
+                        for country in entries
+                        for alerts in country.get('alerts', {}).values()
+                        for e in alerts
+                    }
                     st.session_state[f"{key}_last_seen_alerts"] = ids
                 else:
                     st.session_state[f"{key}_last_seen_time"] = time.time()
@@ -131,7 +142,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):(FEED_CONFIG.items()):
                 st.session_state['active_feed'] = key
                 st.session_state[f"{key}_pending_seen_time"] = time.time()
 
-# Display details
+# Display selected feed details
 active = st.session_state['active_feed']
 if active:
     st.markdown('---')
@@ -146,9 +157,11 @@ if active:
                 for e in alerts:
                     e['is_new'] = alert_id(e) not in seen_ids
 
-    seen = (st.session_state[f"{active}_last_seen_alerts"]
-            if conf['type'] == 'rss_meteoalarm'
-            else st.session_state[f"{active}_last_seen_time"])
+    seen = (
+        st.session_state[f"{active}_last_seen_alerts"]
+        if conf['type'] == 'rss_meteoalarm'
+        else st.session_state[f"{active}_last_seen_time"]
+    )
     for item in data_list:
         if conf['type'] == 'rss_meteoalarm':
             alerts = [e for alerts in item['alerts'].values() for e in alerts]
@@ -164,13 +177,17 @@ if active:
                 st.markdown("<div style='height:4px;background:red;margin:8px 0;'></div>", unsafe_allow_html=True)
         RENDERERS.get(conf['type'], lambda i, c: None)(item, conf)
 
-    # Snapshot last seen
+    # Snapshot last seen timestamps or alerts
     pkey = f"{active}_pending_seen_time"
     if pkey in st.session_state:
         if conf['type'] == 'rss_meteoalarm':
-            ids = {alert_id(e) for country in data_list
-                   for alerts in country.get('alerts', {}).values() for e in alerts}
+            ids = {
+                alert_id(e)
+                for country in data_list
+                for alerts in country.get('alerts', {}).values()
+                for e in alerts
+            }
             st.session_state[f"{active}_last_seen_alerts"] = ids
         else:
             st.session_state[f"{active}_last_seen_time"] = st.session_state.pop(pkey)
-        st.session_state.pop(pkey, None)
+        st.session_state.pop(pkey, None)"}]}
