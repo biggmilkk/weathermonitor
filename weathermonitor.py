@@ -104,14 +104,14 @@ st.markdown('---')
 
 # Feed selection buttons
 cols = st.columns(len(FEED_CONFIG))
-for i, (key, conf) in enumerate(FEED_CONFIG.items()):
+for i, (key, conf) in enumerate(FEED_CONFIG.items()):(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
     seen = (st.session_state[f"{key}_last_seen_alerts"]
             if conf['type'] == 'rss_meteoalarm'
             else st.session_state[f"{key}_last_seen_time"])
     _, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
     with cols[i]:
-        clicked = st.button(conf['label'], key=f"btn_{key}", use_container_width=True)
+        clicked = st.button(conf['label'], key=f"btn_{key}_{i}", use_container_width=True), use_container_width=True)
         if new_count > 0:
             st.markdown(
                 f"<span style='margin-left:8px;padding:2px 6px;border-radius:4px;" +
