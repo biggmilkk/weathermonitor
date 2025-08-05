@@ -24,13 +24,13 @@ def get_feed_definitions():
             "label": "Australia BOM",
             "type": "rss_bom_multi",
             "urls": [
-                "http://www.bom.gov.au/fwo/IDZ00054.warnings_nsw.xml",  # NSW & ACT
-                "http://www.bom.gov.au/fwo/IDZ00059.warnings_vic.xml",  # Victoria
-                "http://www.bom.gov.au/fwo/IDZ00056.warnings_qld.xml",  # Queensland
-                "http://www.bom.gov.au/fwo/IDZ00060.warnings_wa.xml",   # West Australia
-                "http://www.bom.gov.au/fwo/IDZ00057.warnings_sa.xml",   # South Australia
-                "http://www.bom.gov.au/fwo/IDZ00058.warnings_tas.xml",  # Tasmania
-                "http://www.bom.gov.au/fwo/IDZ00055.warnings_nt.xml",   # Northern Territory
+                "https://www.bom.gov.au/fwo/IDZ00054.warnings_nsw.xml",  # NSW & ACT
+                "https://www.bom.gov.au/fwo/IDZ00059.warnings_vic.xml",  # Victoria
+                "https://www.bom.gov.au/fwo/IDZ00056.warnings_qld.xml",  # Queensland
+                "https://www.bom.gov.au/fwo/IDZ00060.warnings_wa.xml",   # West Australia
+                "https://www.bom.gov.au/fwo/IDZ00057.warnings_sa.xml",   # South Australia
+                "https://www.bom.gov.au/fwo/IDZ00058.warnings_tas.xml",  # Tasmania
+                "https://www.bom.gov.au/fwo/IDZ00055.warnings_nt.xml",   # Northern Territory
             ],
             "states": [
                 "NSW & ACT",
