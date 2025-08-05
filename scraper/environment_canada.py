@@ -11,7 +11,7 @@ ns = {"atom": "http://www.w3.org/2005/Atom"}
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 PROVINCE_FROM_URL = re.compile(r"/battleboard/([a-z]{2})\d+_e\.xml", re.IGNORECASE)
 
-async def _fetch_one(session, region):
+async def _fetch_one(session: aiohttp.ClientSession, region: dict) -> list:
     url = region.get("ATOM URL")
     if not url:
         return []
@@ -26,7 +26,6 @@ async def _fetch_one(session, region):
     except ET.ParseError as e:
         logging.warning(f"[EC PARSE ERROR] {url} - {e}")
         return []
-    # derive metadata
     region_name = region.get("Region Name", "")
     explicit = region.get("Province-Territory") or region.get("province") or ""
     if explicit:
@@ -49,14 +48,12 @@ async def _fetch_one(session, region):
                 or re.match(r"severe thunderstorm watch", alert, re.IGNORECASE)):
             continue
         area = parts[1] if len(parts) == 2 else region_name
-        # timestamp
         pub = entry.find("atom:published", ns) or entry.find("atom:updated", ns)
         ts = pub.text.strip() if pub is not None and pub.text else ""
         try:
             published = datetime.strptime(ts, TIME_FORMAT).isoformat()
         except Exception:
             published = ts
-        # link
         link_elem = entry.find("atom:link", ns)
         link = link_elem.get("href") if link_elem is not None else url
         entries.append({
@@ -68,30 +65,43 @@ async def _fetch_one(session, region):
         })
     return entries
 
-async def _scrape_async(sources):
+async def _scrape_async(sources: list) -> list:
+    """
+    Internal async fetch for Environment Canada sources.
+    """
     async with aiohttp.ClientSession() as session:
         tasks = [_fetch_one(session, r) for r in sources if isinstance(r, dict) and r.get("ATOM URL")]
         results = await asyncio.gather(*tasks)
-    # flatten
-    all_entries = [e for sub in results for e in sub]
-    # sort
+    # flatten and sort reverse-chronological
+    flat = [e for sub in results for e in sub]
     def key(e):
         try:
             return datetime.fromisoformat(e["published"])
-        except:
+        except Exception:
             return datetime.min
-    return sorted(all_entries, key=key, reverse=True)
+    return sorted(flat, key=key, reverse=True)
 
 @st.cache_data(ttl=60, show_spinner=False)
-def scrape_ec(sources):
+def scrape_ec(sources: list) -> dict:
     """
-    sources: list of {'ATOM URL', 'Region Name', optional 'Province-Territory'}
-    Returns {'entries': [...], 'source': 'Environment Canada'}
+    Synchronous wrapper for ECMWF feeds: runs the async scraper under the hood.
     """
     if not isinstance(sources, list):
         logging.error(f"[EC SCRAPER ERROR] Invalid sources type: {type(sources)}")
         return {"entries": [], "error": "Invalid sources type", "source": "Environment Canada"}
-    # run async
     entries = asyncio.run(_scrape_async(sources))
     logging.warning(f"[EC DEBUG] Successfully parsed {len(entries)} alerts")
     return {"entries": entries, "source": "Environment Canada"}
+
+async def scrape_ec_async(sources: list, client) -> dict:
+    """
+    Async wrapper for Environment Canada scraper using existing async internals.
+    The `client` parameter is unused, provided for interface consistency.
+    """
+    try:
+        entries = await _scrape_async(sources)
+        logging.warning(f"[EC DEBUG] Parsed {len(entries)} alerts (async)")
+        return {"entries": entries, "source": "Environment Canada"}
+    except Exception as e:
+        logging.warning(f"[EC ERROR] Async fetch failed: {e}")
+        return {"entries": [], "error": str(e), "source": "Environment Canada"}
