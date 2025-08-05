@@ -23,6 +23,10 @@ def _parse_feed(content: bytes, state: str) -> list[dict]:
     parsed = feedparser.parse(content)
     entries = []
     for e in parsed.entries:
+        title = getattr(e, "title", "").strip()
+        if re.search(r"\b(cancellation|final)\b", title, re.IGNORECASE):
+            continue
+        
         entries.append({
             "state":     state,
             "title":     getattr(e, "title", "").strip(),
