@@ -1,6 +1,6 @@
 import json
 import asyncio
-from clients import get_async_client
+from .clients import get_async_client
 
 from scraper.environment_canada import scrape_ec_async
 from scraper.meteoalarm import scrape_meteoalarm_async
