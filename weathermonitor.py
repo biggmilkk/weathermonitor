@@ -157,57 +157,7 @@ if active:
     data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
 
     if conf["type"] == "rss_bom_multi":
-        # 1) parse and attach numeric timestamps
-        for e in data_list:
-            try:
-                t = dateparser.parse(e.get("published", "")).timestamp()
-            except:
-                t = 0.0
-            e["timestamp"] = t
-        # 2) resort by timestamp
-        data_list.sort(key=lambda x: x["timestamp"], reverse=True)
-        # 3) mark new vs last seen
-        last_seen = st.session_state.get(f"{active}_last_seen_time") or 0.0
-        for e in data_list:
-            e["is_new"] = e["timestamp"] > last_seen
-        # 4) group by state
-        from collections import OrderedDict
-        by_state = OrderedDict()
-        for e in data_list:
-            by_state.setdefault(e["state"], []).append(e)
-        # 5) render each state block in your custom order
-        desired_order = [
-            "NSW & ACT",
-            "Northern Territory",
-            "Queensland",
-            "South Australia",
-            "Tasmania",
-            "Victoria",
-            "West Australia",
-        ]
-        for state in desired_order:
-            alerts = by_state.get(state, [])
-            if not alerts:
-                continue
-            if any(a.get("is_new") for a in alerts):
-                st.markdown(
-                    "<div style='height:4px;background:red;margin:8px 0;'></div>",
-                    unsafe_allow_html=True,
-                )
-            st.markdown(f"## {state}")
-            for a in alerts:
-                prefix = "[NEW] " if a.get("is_new") else ""
-                if a.get("link"):
-                    st.markdown(f"{prefix}**[{a['title']}]({a['link']})**")
-                else:
-                    st.markdown(f"{prefix}**{a['title']}**")
-                if a.get("published"):
-                    st.caption(f"Published: {a['published']}")
-                if a.get("summary"):
-                    st.write(a["summary"])
-            st.markdown("---")
-        # 6) snapshot last seen time
-        st.session_state[f"{active}_last_seen_time"] = time.time()
+        RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
 
     elif conf["type"] == "ec_async":
         # Environment Canada: grouped & ordered renderer
