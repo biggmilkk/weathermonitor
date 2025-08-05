@@ -39,7 +39,24 @@ def render_ec(item, conf):
         st.caption(f"Published: {published}")
     st.markdown('---')
 
-# --- New grouped EC renderer ---
+# Map 2-letter codes → full names
+_PROVINCE_NAMES = {
+    "AB": "Alberta",
+    "BC": "British Columbia",
+    "MB": "Manitoba",
+    "NB": "New Brunswick",
+    "NL": "Newfoundland and Labrador",
+    "NT": "Northwest Territories",
+    "NS": "Nova Scotia",
+    "NU": "Nunavut",
+    "ON": "Ontario",
+    "PE": "Prince Edward Island",
+    "QC": "Quebec",
+    "SK": "Saskatchewan",
+    "YT": "Yukon",
+}
+
+# Full province ordering for grouped view
 _PROVINCE_ORDER = [
     "Alberta",
     "British Columbia",
@@ -58,10 +75,10 @@ _PROVINCE_ORDER = [
 
 def render_ec_grouped(entries, conf):
     """
-    entries: list of EC alert dicts (with 'province','region','published',etc.)
-    conf: original feed config dict plus 'key' for session_state markers
+    Grouped, ordered renderer for Environment Canada feeds.
+    entries: list of alert dicts with keys 'province' (2-letter), 'region', 'published', etc.
+    conf: feed config dict plus 'key' for session_state.
     """
-
     # 1) parse timestamps & sort newest-first
     for e in entries:
         try:
@@ -76,13 +93,14 @@ def render_ec_grouped(entries, conf):
     for e in entries:
         e["is_new"] = e["timestamp"] > last_seen
 
-    # 3) group by province
+    # 3) group by full province name
     groups = OrderedDict()
     for e in entries:
-        prov = e.get("province", "")
-        groups.setdefault(prov, []).append(e)
+        code = e.get("province", "")
+        name = _PROVINCE_NAMES.get(code, code)  # map code→name
+        groups.setdefault(name, []).append(e)
 
-    # 4) render per‐province in desired order, hiding empties
+    # 4) render in your desired order, hiding empty groups
     for prov in _PROVINCE_ORDER:
         alerts = groups.get(prov, [])
         if not alerts:
@@ -91,7 +109,7 @@ def render_ec_grouped(entries, conf):
         if any(a["is_new"] for a in alerts):
             st.markdown(
                 "<div style='height:4px;background:red;margin:8px 0;'></div>",
-                unsafe_allow_html=True
+                unsafe_allow_html=True,
             )
         st.markdown(f"## {prov}")
         for a in alerts:
@@ -102,9 +120,9 @@ def render_ec_grouped(entries, conf):
             st.caption(f"Published: {a['published']}")
             if a.get("link"):
                 st.markdown(f"[More details]({a['link']})")
-        st.markdown('---')
+        st.markdown("---")
 
-    # 5) snapshot last-seen timestamp
+    # 5) snapshot last-seen
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
 # CMA China renderer
@@ -183,8 +201,8 @@ def render_bom_multi(item, conf):
 # Renderer registry
 RENDERERS = {
     'json': render_json,
-    'ec_async': render_ec,             # per-item fallback
-    'ec_grouped': render_ec_grouped,   # new grouped view
+    'ec_async': render_ec,
+    'ec_grouped': render_ec_grouped, 
     'rss_cma': render_cma,
     'rss_meteoalarm': render_meteoalarm,
     'rss_bom_multi': render_bom_multi,
