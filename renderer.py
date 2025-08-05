@@ -23,7 +23,7 @@ def render_json(item, conf):
         st.caption(f"Published: {published}")
     st.markdown('---')
 
-# Environment Canada simple renderer (per-item)
+# Environment Canada simple per-item renderer
 def render_ec(item, conf):
     st.markdown(f"**{item.get('title','')}**")
     region = item.get('region','')
@@ -39,7 +39,7 @@ def render_ec(item, conf):
         st.caption(f"Published: {published}")
     st.markdown('---')
 
-# Full province ordering for grouped view
+# --- New grouped EC renderer ---
 _PROVINCE_ORDER = [
     "Alberta",
     "British Columbia",
@@ -58,11 +58,11 @@ _PROVINCE_ORDER = [
 
 def render_ec_grouped(entries, conf):
     """
-    Grouped, ordered renderer for Environment Canada feeds.
-    - entries: list of alert dicts (with 'province', 'region', 'published', etc.)
-    - conf: feed config dict, used to derive session state key="active_feed"
+    entries: list of EC alert dicts (with 'province','region','published',etc.)
+    conf: original feed config dict plus 'key' for session_state markers
     """
-    # 1) attach numeric timestamps & sort descending
+
+    # 1) parse timestamps & sort newest-first
     for e in entries:
         try:
             e_ts = dateparser.parse(e["published"]).timestamp()
@@ -76,18 +76,18 @@ def render_ec_grouped(entries, conf):
     for e in entries:
         e["is_new"] = e["timestamp"] > last_seen
 
-    # 3) group by province name
-    groups: dict[str, list] = OrderedDict()
+    # 3) group by province
+    groups = OrderedDict()
     for e in entries:
         prov = e.get("province", "")
         groups.setdefault(prov, []).append(e)
 
-    # 4) render in desired order, hiding empty groups
+    # 4) render per‐province in desired order, hiding empties
     for prov in _PROVINCE_ORDER:
         alerts = groups.get(prov, [])
         if not alerts:
             continue
-        # red bar if any new
+        # red bar if any new in this province
         if any(a["is_new"] for a in alerts):
             st.markdown(
                 "<div style='height:4px;background:red;margin:8px 0;'></div>",
@@ -102,11 +102,10 @@ def render_ec_grouped(entries, conf):
             st.caption(f"Published: {a['published']}")
             if a.get("link"):
                 st.markdown(f"[More details]({a['link']})")
-        st.markdown("---")
+        st.markdown('---')
 
     # 5) snapshot last-seen timestamp
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
-
 
 # CMA China renderer
 CMA_COLORS = {'Orange':'#FF7F00','Red':'#E60026'}
@@ -133,18 +132,22 @@ def render_cma(item, conf):
 
 # MeteoAlarm renderer
 def render_meteoalarm(item, conf):
-    st.markdown(f"<h3 style='margin-bottom:4px'>{item.get('title','')}</h3>", unsafe_allow_html=True)
+    st.markdown(f"<h3 style='margin-bottom:4px'>{item.get('title','')}</h3>",
+                unsafe_allow_html=True)
     for day in ['today','tomorrow']:
         alerts = item.get('alerts',{}).get(day, [])
         if alerts:
-            st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>", unsafe_allow_html=True)
+            st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>",
+                        unsafe_allow_html=True)
             for e in alerts:
                 try:
                     dt1 = dateparser.parse(e['from']).strftime('%H:%M UTC %B %d')
                     dt2 = dateparser.parse(e['until']).strftime('%H:%M UTC %B %d')
                 except:
                     dt1, dt2 = e['from'], e['until']
-                color = {'Orange':'#FF7F00','Red':'#E60026'}.get(e.get('level',''), '#888')
+                color = {'Orange':'#FF7F00','Red':'#E60026'}.get(
+                    e.get('level',''), '#888'
+                )
                 prefix = '[NEW] ' if e.get('is_new') else ''
                 text = f"{prefix}[{e.get('level','')}] {e.get('type','')} – {dt1} to {dt2}"
                 st.markdown(
@@ -177,12 +180,11 @@ def render_bom_multi(item, conf):
         st.markdown(summary)
     st.markdown('---')
 
-
 # Renderer registry
 RENDERERS = {
     'json': render_json,
-    'ec_async': render_ec,           # existing per-item
-    'ec_grouped': render_ec_grouped, # new grouped renderer
+    'ec_async': render_ec,             # per-item fallback
+    'ec_grouped': render_ec_grouped,   # new grouped view
     'rss_cma': render_cma,
     'rss_meteoalarm': render_meteoalarm,
     'rss_bom_multi': render_bom_multi,
