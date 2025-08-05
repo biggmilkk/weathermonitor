@@ -254,4 +254,3 @@ RENDERERS = {
     'rss_meteoalarm': render_meteoalarm,
     'rss_bom_multi': render_bom_grouped,
 }
-```
