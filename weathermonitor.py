@@ -168,7 +168,7 @@ if active:
         # 2) resort by timestamp
         data_list.sort(key=lambda x: x["timestamp"], reverse=True)
         # 3) mark new vs last seen
-        last_seen = st.session_state.get(f"{active}_last_seen_time", 0.0)
+        last_seen = st.session_state.get(f"{active}_last_seen_time") or 0.0
         for e in data_list:
             e["is_new"] = e["timestamp"] > last_seen
         # 4) group by state
