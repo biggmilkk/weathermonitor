@@ -2,6 +2,7 @@ import streamlit as st
 import httpx
 import logging
 import feedparser
+import re
 
 # Browser-like headers to avoid 403s
 HEADERS = {
