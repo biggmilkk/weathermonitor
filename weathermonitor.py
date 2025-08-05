@@ -60,17 +60,16 @@ async def _fetch_all_feeds(configs: dict):
     tasks = [bound_fetch(k, cfg) for k, cfg in configs.items()]
     return await asyncio.gather(*tasks)
 
-# Helper to reuse event loop
+# Helper to run coroutines in a fresh event loop
 def run_async(coro):
+    """
+    Execute a coroutine in a new event loop to avoid conflicts with any existing loop.
+    """
+    loop = asyncio.new_event_loop()
     try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    if loop.is_closed():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 # Fetch stale feeds
 now = time.time()
