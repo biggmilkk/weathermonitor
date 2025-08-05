@@ -209,14 +209,19 @@ if active:
         # 6) snapshot last seen time
         st.session_state[f"{active}_last_seen_time"] = time.time()
 
+    elif conf["type"] == "ec_async":
+        # Environment Canada: grouped & ordered renderer
+        RENDERERS["ec_grouped"](entries, {**conf, "key": active})
+
     elif conf["type"] == "rss_meteoalarm":
+        # MeteoAlarm rendering
         seen_ids = st.session_state[f"{active}_last_seen_alerts"]
         for country in data_list:
             for alerts in country.get("alerts", {}).values():
                 for e in alerts:
                     e["is_new"] = alert_id(e) not in seen_ids
 
-        seen = st.session_state[f"{active}_last_seen_alerts"]
+        # red-bar + render
         for country in data_list:
             alerts_flat = [
                 e for alerts in country.get("alerts", {}).values() for e in alerts
@@ -229,6 +234,7 @@ if active:
             RENDERERS.get(conf["type"], lambda i, c: None)(country, conf)
 
     else:
+        # Generic rendering
         seen = st.session_state[f"{active}_last_seen_time"]
         for item in data_list:
             pub = item.get("published")
