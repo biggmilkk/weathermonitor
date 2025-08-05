@@ -14,10 +14,11 @@ ALLOWED_EVENTS = {
 }
 
 @st.cache_data(ttl=60, show_spinner=False)
-def scrape_nws(url: str = "https://api.weather.gov/alerts/active") -> dict:
+def scrape_nws(conf: dict) -> dict:
     """
-    Synchronous scraper for NWS active alerts using requests.
+    Synchronous scraper for NWS active alerts (expects conf dict with optional 'url').
     """
+    url = conf.get("url", "https://api.weather.gov/alerts/active")
     headers = {"User-Agent": "WeatherMonitorApp (your@email.com)"}
     try:
         resp = requests.get(url, headers=headers, timeout=10)
@@ -42,10 +43,11 @@ def scrape_nws(url: str = "https://api.weather.gov/alerts/active") -> dict:
         })
     return {"entries": entries, "source": url}
 
-async def scrape_nws_async(url: str = "https://api.weather.gov/alerts/active", client: httpx.AsyncClient = None) -> dict:
+async def scrape_nws_async(conf: dict, client: httpx.AsyncClient) -> dict:
     """
     Async scraper for NWS active alerts using httpx.AsyncClient.
     """
+    url = conf.get("url", "https://api.weather.gov/alerts/active")
     headers = {"User-Agent": "WeatherMonitorApp (your@email.com)"}
     try:
         resp = await client.get(url, headers=headers, timeout=10)
