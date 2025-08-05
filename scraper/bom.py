@@ -51,6 +51,8 @@ def scrape_bom_multi(conf: dict) -> dict:
             logging.warning(f"[BOM FETCH ERROR] sync {state} {url}: {e}")
 
     return {"entries": entries, "source": "Australia BOM"}
+    logging.warning(f"[BOM DEBUG] Parsed {len(entries)} alerts across {len(states)} states")
+    return {"entries": entries, "source": "Australia BOM"}
 
 async def scrape_bom_multi_async(conf: dict, client: httpx.AsyncClient) -> dict:
     """
@@ -68,4 +70,6 @@ async def scrape_bom_multi_async(conf: dict, client: httpx.AsyncClient) -> dict:
         except Exception as e:
             logging.warning(f"[BOM FETCH ERROR] async {state} {url}: {e}")
 
+    return {"entries": entries, "source": "Australia BOM"}
+    logging.warning(f"[BOM DEBUG] Async parsed {len(entries)} alerts across {len(states)} states")
     return {"entries": entries, "source": "Australia BOM"}
