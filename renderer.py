@@ -37,13 +37,15 @@ def render_ec(item, conf):
         st.caption(f"Published: {published}")
     st.markdown('---')
 
-# CMA China renderer with color bullets
+# CMA China renderer
 CMA_COLORS = {'Orange':'#FF7F00','Red':'#E60026'}
 def render_cma(item, conf):
     level = item.get('level','Orange')
     color = CMA_COLORS.get(level,'#888')
     st.markdown(
-        f"<div style='margin-bottom:8px;'><span style='color:{color};font-size:18px;'>&#9679;</span> <strong>{item.get('title','')}</strong></div>",
+        f"<div style='margin-bottom:8px;'>"
+        f"<span style='color:{color};font-size:18px;'>&#9679;</span> "
+        f"<strong>{item.get('title','')}</strong></div>",
         unsafe_allow_html=True
     )
     region = item.get('region','')
@@ -58,7 +60,7 @@ def render_cma(item, conf):
         st.caption(f"Published: {published}")
     st.markdown('---')
 
-# MeteoAlarm renderer showing per-alert [NEW]
+# MeteoAlarm renderer
 def render_meteoalarm(item, conf):
     # Country heading
     st.markdown(f"<h3 style='margin-bottom:4px'>{item.get('title','')}</h3>", unsafe_allow_html=True)
@@ -73,13 +75,12 @@ def render_meteoalarm(item, conf):
                     dt2 = dateparser.parse(e['until']).strftime('%H:%M UTC %B %d')
                 except Exception:
                     dt1, dt2 = e['from'], e['until']
-                # color bullet
                 color = {'Orange':'#FF7F00','Red':'#E60026'}.get(e.get('level',''), '#888')
-                # NEW prefix
                 prefix = '[NEW] ' if e.get('is_new') else ''
-                text = f"{prefix}[{e.get('level','')}] {e.get('type','')} - {dt1} - {dt2}"
+                text = f"{prefix}[{e.get('level','')}] {e.get('type','')} – {dt1} to {dt2}"
                 st.markdown(
-                    f"<div style='margin-bottom:6px;'><span style='color:{color};font-size:16px;'>&#9679;</span> {text}</div>",
+                    f"<div style='margin-bottom:6px;'>"
+                    f"<span style='color:{color};font-size:16px;'>&#9679;</span> {text}</div>",
                     unsafe_allow_html=True
                 )
     # Footer link and timestamp
@@ -91,10 +92,36 @@ def render_meteoalarm(item, conf):
         st.caption(f"Published: {published}")
     st.markdown('---')
 
+# BOM multi-state renderer
+def render_bom_multi(item, conf):
+    """
+    Renderer for BOM multi-state feed entries.
+    Each item has: state, title, summary, link, published.
+    """
+    # State header (only once per entry)
+    st.markdown(f"### {item.get('state','')}")
+    # Title with link
+    title = item.get('title','(no title)').strip()
+    link  = item.get('link','').strip()
+    if link:
+        st.markdown(f"**[{title}]({link})**")
+    else:
+        st.markdown(f"**{title}**")
+    # Published timestamp
+    pub = item.get('published','').strip()
+    if pub:
+        st.caption(f"Published: {pub}")
+    # Summary/body
+    summary = item.get('summary','').strip()
+    if summary:
+        st.markdown(summary)
+    st.markdown('---')
+
 # Renderer registry
 RENDERERS = {
     'json': render_json,
     'ec_async': render_ec,
     'rss_cma': render_cma,
     'rss_meteoalarm': render_meteoalarm,
+    'rss_bom_multi': render_bom_multi,
 }
