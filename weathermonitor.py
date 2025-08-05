@@ -155,10 +155,8 @@ if active:
     st.markdown("---")
     conf = FEED_CONFIG[active]
     entries = st.session_state[f"{active}_data"]
-    # New: generic sort by published string
     data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
 
-    # --- BOM multi-state branch ---
     if conf["type"] == "rss_bom_multi":
         # 1) parse and attach numeric timestamps
         for e in data_list:
@@ -175,6 +173,7 @@ if active:
             e["is_new"] = e["timestamp"] > last_seen
         # 4) group by state
         from collections import OrderedDict
+
         by_state = OrderedDict()
         for e in data_list:
             by_state.setdefault(e["state"], []).append(e)
@@ -197,47 +196,44 @@ if active:
                 if a.get("summary"):
                     st.write(a["summary"])
             st.markdown("---")
-        # 6) snapshot last seen
+        # 6) snapshot last seen time
         st.session_state[f"{active}_last_seen_time"] = time.time()
-        # 7) done
-        return
 
-    # --- Meteolarm logic ---
-    if conf["type"] == "rss_meteoalarm":
+    elif conf["type"] == "rss_meteoalarm":
         seen_ids = st.session_state[f"{active}_last_seen_alerts"]
         for country in data_list:
             for alerts in country.get("alerts", {}).values():
                 for e in alerts:
                     e["is_new"] = alert_id(e) not in seen_ids
 
-    # generic red-bar for all types
-    seen = (
-        st.session_state[f"{active}_last_seen_alerts"]
-        if conf["type"] == "rss_meteoalarm"
-        else st.session_state[f"{active}_last_seen_time"]
-    )
-    for item in data_list:
-        if conf["type"] == "rss_meteoalarm":
-            alerts = [e for alerts in item["alerts"].values() for e in alerts]
-            if any(e.get("is_new") for e in alerts):
+        # generic red‐bar and rendering for MeteoAlarm
+        seen = st.session_state[f"{active}_last_seen_alerts"]
+        for country in data_list:
+            alerts_flat = [e for alerts in country.get("alerts", {}).values() for e in alerts]
+            if any(e.get("is_new") for e in alerts_flat):
                 st.markdown(
                     "<div style='height:4px;background:red;margin:8px 0;'></div>",
                     unsafe_allow_html=True,
                 )
-        else:
+            RENDERERS.get(conf["type"], lambda i, c: None)(country, conf)
+
+    else:
+        # generic red‐bar for all other feeds
+        seen = st.session_state[f"{active}_last_seen_time"]
+        for item in data_list:
             pub = item.get("published")
             try:
                 ts = dateparser.parse(pub).timestamp() if pub else 0.0
-            except Exception:
+            except:
                 ts = 0.0
-            if ts > (seen if isinstance(seen, (int, float)) else 0.0):
+            if ts > seen:
                 st.markdown(
                     "<div style='height:4px;background:red;margin:8px 0;'></div>",
                     unsafe_allow_html=True,
                 )
-        RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
+            RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
 
-    # snapshot seen
+    # Snapshot last seen timestamps or alerts
     pkey = f"{active}_pending_seen_time"
     if pkey in st.session_state:
         if conf["type"] == "rss_meteoalarm":
