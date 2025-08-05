@@ -132,7 +132,6 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 unsafe_allow_html=True,
             )
         if clicked:
-            # toggle open/close
             if st.session_state["active_feed"] == key:
                 if conf["type"] == "rss_meteoalarm":
                     snap = {
@@ -173,12 +172,23 @@ if active:
             e["is_new"] = e["timestamp"] > last_seen
         # 4) group by state
         from collections import OrderedDict
-
         by_state = OrderedDict()
         for e in data_list:
             by_state.setdefault(e["state"], []).append(e)
-        # 5) render each state block
-        for state, alerts in by_state.items():
+        # 5) render each state block in your custom order
+        desired_order = [
+            "NSW & ACT",
+            "Northern Territory",
+            "Queensland",
+            "South Australia",
+            "Tasmania",
+            "Victoria",
+            "West Australia",
+        ]
+        for state in desired_order:
+            alerts = by_state.get(state, [])
+            if not alerts:
+                continue
             if any(a.get("is_new") for a in alerts):
                 st.markdown(
                     "<div style='height:4px;background:red;margin:8px 0;'></div>",
@@ -206,10 +216,11 @@ if active:
                 for e in alerts:
                     e["is_new"] = alert_id(e) not in seen_ids
 
-        # generic red‐bar and rendering for MeteoAlarm
         seen = st.session_state[f"{active}_last_seen_alerts"]
         for country in data_list:
-            alerts_flat = [e for alerts in country.get("alerts", {}).values() for e in alerts]
+            alerts_flat = [
+                e for alerts in country.get("alerts", {}).values() for e in alerts
+            ]
             if any(e.get("is_new") for e in alerts_flat):
                 st.markdown(
                     "<div style='height:4px;background:red;margin:8px 0;'></div>",
@@ -218,7 +229,6 @@ if active:
             RENDERERS.get(conf["type"], lambda i, c: None)(country, conf)
 
     else:
-        # generic red‐bar for all other feeds
         seen = st.session_state[f"{active}_last_seen_time"]
         for item in data_list:
             pub = item.get("published")
