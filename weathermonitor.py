@@ -5,6 +5,7 @@ import sys
 import logging
 import gc
 import asyncio
+import nest_asyncio
 from dateutil import parser as dateparser
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
@@ -12,6 +13,9 @@ from streamlit_autorefresh import st_autorefresh
 from computation import compute_counts
 from renderer import RENDERERS
 import httpx
+
+# Apply nest_asyncio to allow nested event loops
+nest_asyncio.apply()
 
 # Constants
 FETCH_TTL = 60  # seconds
@@ -61,13 +65,10 @@ async def _fetch_all_feeds(configs: dict):
         tasks = [bound_fetch(k, cfg) for k, cfg in configs.items()]
         return await asyncio.gather(*tasks)
 
-# Helper to run coroutines in a fresh event loop
+# Helper to run coroutines on the current loop
 def run_async(coro):
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    loop = asyncio.get_event_loop()
+    return loop.run_until_complete(coro)
 
 # Fetch stale feeds
 now = time.time()
@@ -113,7 +114,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         clicked = st.button(conf['label'], key=f"btn_{key}", use_container_width=True)
         if new_count > 0:
             st.markdown(
-                f"<span style='margin-left:8px;padding:2px 6px;border-radius:4px;" \
+                f"<span style='margin-left:8px;padding:2px 6px;border-radius:4px;" +
                 f"background:#ffeecc;font-size:0.9em;'>❗ {new_count} New</span>",
                 unsafe_allow_html=True
             )
