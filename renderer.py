@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 from dateutil import parser as dateparser
 from collections import OrderedDict
