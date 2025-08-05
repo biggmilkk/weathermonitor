@@ -8,7 +8,7 @@ import asyncio
 from dateutil import parser as dateparser
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
-from clients import get_async_client
+from utils.clients import get_async_client
 from streamlit_autorefresh import st_autorefresh
 from computation import compute_counts
 from renderer import RENDERERS
