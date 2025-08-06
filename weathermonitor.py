@@ -18,8 +18,8 @@ import httpx
 nest_asyncio.apply()
 
 # Constants
-FETCH_TTL = 60
-MAX_CONCURRENCY = 20
+FETCH_TTL = 60        # seconds between metadata refreshes
+MAX_CONCURRENCY = 20  # parallel scraper limit
 
 # Ensure module path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -28,28 +28,30 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
 
-# Auto-refresh
+# Auto‐refresh every FETCH_TTL seconds
 st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 
-# Load feeds and init session state
+# Load feeds
 FEED_CONFIG = get_feed_definitions()
+
+# --- Session state: last_seen + last_fetch markers only ---
 now = time.time()
 for key, conf in FEED_CONFIG.items():
-    st.session_state.setdefault(f"{key}_data", [])
-    st.session_state.setdefault(f"{key}_last_fetch", 0)
+    st.session_state.setdefault(f"{key}_last_fetch", 0.0)
     st.session_state.setdefault(f"{key}_last_seen_time", 0.0)
-    st.session_state.setdefault(f"{key}_pending_seen_time", None)
     if conf["type"] == "rss_meteoalarm":
         st.session_state.setdefault(f"{key}_last_seen_alerts", set())
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
 
-# Unique ID for MeteoAlarm
+
+# Unique ID generator for MeteoAlarm entries
 def alert_id(e):
     return f"{e['level']}|{e['type']}|{e['from']}|{e['until']}"
 
-# Async fetcher
-async def _fetch_all_feeds(configs):
+
+# Async metadata fetcher
+async def _fetch_all_feeds(configs: dict):
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
     async with httpx.AsyncClient(timeout=30.0) as client:
         async def bound_fetch(key, conf):
@@ -58,51 +60,40 @@ async def _fetch_all_feeds(configs):
                     data = await SCRAPER_REGISTRY[conf["type"]](conf, client)
                 except Exception as ex:
                     logging.warning(f"[{key.upper()} FETCH ERROR] {ex}")
-                    data = {"entries": [], "error": str(ex), "source": conf}
-                return key, data
+                    data = {"entries": []}
+                return key, data.get("entries", [])
         tasks = [bound_fetch(k, cfg) for k, cfg in configs.items()]
         return await asyncio.gather(*tasks)
 
-# Run async on current loop
+
+# Run an async coroutine on the current loop
 def run_async(coro):
     loop = asyncio.get_event_loop()
     return loop.run_until_complete(coro)
 
-# Refresh stale feeds
+
+# --- 1) Metadata pass: fetch all feeds, update badges ---
 now = time.time()
 to_fetch = {
     k: v for k, v in FEED_CONFIG.items()
     if now - st.session_state[f"{k}_last_fetch"] > FETCH_TTL
 }
+meta_entries: dict[str, list] = {}
 if to_fetch:
     results = run_async(_fetch_all_feeds(to_fetch))
-    for key, raw in results:
-        entries = raw.get("entries", [])
-        st.session_state[f"{key}_data"] = entries
+    for key, entries in results:
         st.session_state[f"{key}_last_fetch"] = now
-        st.session_state["last_refreshed"] = now
-        conf = FEED_CONFIG[key]
-        if st.session_state.get("active_feed") == key:
-            last_seen = (
-                st.session_state[f"{key}_last_seen_alerts"]
-                if conf["type"] == "rss_meteoalarm"
-                else st.session_state[f"{key}_last_seen_time"]
-            )
-            _, new_count = compute_counts(entries, conf, last_seen, alert_id_fn=alert_id)
-            if new_count == 0:
-                if conf["type"] == "rss_meteoalarm":
-                    snap = {
-                        alert_id(e)
-                        for country in entries
-                        for alerts in country.get("alerts", {}).values()
-                        for e in alerts
-                    }
-                    st.session_state[f"{key}_last_seen_alerts"] = snap
-                else:
-                    st.session_state[f"{key}_last_seen_time"] = now
-        gc.collect()
+        meta_entries[key] = entries
+    st.session_state["last_refreshed"] = now
 
-# Header
+# Fill in any feeds not fetched this cycle (from cache)
+for key in FEED_CONFIG:
+    if key not in meta_entries:
+        meta_entries[key] = run_async(
+            _fetch_all_feeds({key: FEED_CONFIG[key]})
+        )[0][1]
+
+# --- UI Header ---
 st.title("Global Weather Monitor")
 st.caption(
     f"Last refreshed: "
@@ -110,21 +101,22 @@ st.caption(
 )
 st.markdown("---")
 
-# Feed buttons
+# --- Buttons with “new” badges ---
 cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
-    entries = st.session_state[f"{key}_data"]
-    seen = (
-        st.session_state[f"{key}_last_seen_alerts"]
-        if conf["type"] == "rss_meteoalarm"
-        else st.session_state[f"{key}_last_seen_time"]
-    )
-    _, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
+    entries = meta_entries.get(key, [])
+    # choose correct last_seen
+    if conf["type"] == "rss_meteoalarm":
+        last_seen = st.session_state[f"{key}_last_seen_alerts"]
+    else:
+        last_seen = st.session_state[f"{key}_last_seen_time"]
+    _, new_count = compute_counts(entries, conf, last_seen, alert_id_fn=alert_id)
+
     with cols[i]:
         clicked = st.button(
             conf["label"], key=f"btn_{key}_{i}", use_container_width=True
         )
-        if new_count > 0:
+        if new_count:
             st.markdown(
                 "<span style='margin-left:8px;padding:2px 6px;"
                 "border-radius:4px;background:#ffeecc;font-size:0.9em;'>"
@@ -132,84 +124,34 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 unsafe_allow_html=True,
             )
         if clicked:
+            # Toggle open/close
             if st.session_state["active_feed"] == key:
-                if conf["type"] == "rss_meteoalarm":
-                    snap = {
-                        alert_id(e)
-                        for country in entries
-                        for alerts in country.get("alerts", {}).values()
-                        for e in alerts
-                    }
-                    st.session_state[f"{key}_last_seen_alerts"] = snap
-                else:
-                    st.session_state[f"{key}_last_seen_time"] = time.time()
                 st.session_state["active_feed"] = None
             else:
                 st.session_state["active_feed"] = key
-                st.session_state[f"{key}_pending_seen_time"] = time.time()
 
-# Display details
+# --- 2) Detail pass: render only the active feed ---
 active = st.session_state["active_feed"]
 if active:
-    st.markdown("---")
     conf = FEED_CONFIG[active]
-    entries = st.session_state[f"{active}_data"]
-    data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
+    # fetch full entries (cached or network)
+    entries = run_async(_fetch_all_feeds({active: conf}))[0][1]
 
-    if conf["type"] == "rss_bom_multi":
-        RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
+    # render via your existing renderer
+    RENDERERS[conf["type"]](entries, {**conf, "key": active})
 
-    elif conf["type"] == "ec_async":
-        # Environment Canada: grouped & ordered renderer
-        RENDERERS["ec_grouped"](entries, {**conf, "key": active})
-
-    elif conf["type"] == "rss_meteoalarm":
-        # MeteoAlarm rendering
-        seen_ids = st.session_state[f"{active}_last_seen_alerts"]
-        for country in data_list:
-            for alerts in country.get("alerts", {}).values():
-                for e in alerts:
-                    e["is_new"] = alert_id(e) not in seen_ids
-
-        # red-bar + render
-        for country in data_list:
-            alerts_flat = [
-                e for alerts in country.get("alerts", {}).values() for e in alerts
-            ]
-            if any(e.get("is_new") for e in alerts_flat):
-                st.markdown(
-                    "<div style='height:4px;background:red;margin:8px 0;'></div>",
-                    unsafe_allow_html=True,
-                )
-            RENDERERS.get(conf["type"], lambda i, c: None)(country, conf)
-
+    # advance last_seen
+    if conf["type"] == "rss_meteoalarm":
+        seen_ids = {alert_id(e) for e in entries}
+        st.session_state[f"{active}_last_seen_alerts"] = seen_ids
     else:
-        # Generic rendering
-        seen = st.session_state[f"{active}_last_seen_time"]
-        for item in data_list:
-            pub = item.get("published")
-            try:
-                ts = dateparser.parse(pub).timestamp() if pub else 0.0
-            except:
-                ts = 0.0
-            if ts > seen:
-                st.markdown(
-                    "<div style='height:4px;background:red;margin:8px 0;'></div>",
-                    unsafe_allow_html=True,
-                )
-            RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
+        try:
+            latest_ts = max(
+                dateparser.parse(e["published"]).timestamp()
+                for e in entries
+            )
+        except:
+            latest_ts = time.time()
+        st.session_state[f"{active}_last_seen_time"] = latest_ts
 
-    # Snapshot last seen timestamps or alerts
-    pkey = f"{active}_pending_seen_time"
-    if pkey in st.session_state:
-        if conf["type"] == "rss_meteoalarm":
-            snap = {
-                alert_id(e)
-                for country in data_list
-                for alerts in country.get("alerts", {}).values()
-                for e in alerts
-            }
-            st.session_state[f"{active}_last_seen_alerts"] = snap
-        else:
-            st.session_state[f"{active}_last_seen_time"] = st.session_state.pop(pkey)
-        st.session_state.pop(pkey, None)
+    st.markdown("---")
