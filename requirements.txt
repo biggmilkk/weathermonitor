@@ -6,3 +6,4 @@ streamlit-autorefresh
 aiohttp>=3.8.0
 httpx
 nest_asyncio
+psutil
