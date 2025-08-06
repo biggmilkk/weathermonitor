@@ -245,23 +245,30 @@ def render_bom_grouped(entries, conf):
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
 def render_jma_warning(item, conf):
-    # pick whichever area field you have
-    area = item.get('area_code') or item.get('area', 'Unknown area')
+    level  = item.get("level")
+    status = item.get("status", "")
 
-    # your scraper now names the warning state "status", not "type"
-    status = item.get('status') or item.get('type', 'Unknown status')
+    # 1) Skip anything with no numeric level
+    if level is None:
+        return
 
-    # level is optional, but if present we'll show it
-    level = item.get('level')
-    status_text = f"{status}" + (f" (level {level})" if level is not None else "")
+    # 2) Skip the “no warnings/advisories” entries
+    #    (they use the Japanese “なし” in that status text)
+    if "なし" in status:
+        return
 
-    # description & published are the same
-    desc = item.get('description', '')
-    published = item.get('published')
+    # (Optional) If you want to only show *really* serious warnings
+    # # uncomment and tweak the threshold below:
+    # WARNING_THRESHOLD = conf.get("threshold", 30)
+    # if isinstance(level, (int, float)) and level < WARNING_THRESHOLD:
+    #     return
 
-    st.markdown(f"**{area} – {status_text}**  \n{desc}")
-    if published:
-        st.caption(f"Updated: {published}")
+    # 3) Now render
+    st.markdown(
+        f"**{item['area_code']} – {status} (level {level})**  \n"
+        f"{item['description']}"
+    )
+    st.caption(f"Updated: {item['published']}")
     st.markdown("---")
 
 # Renderer registry
