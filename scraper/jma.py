@@ -2,14 +2,15 @@ import httpx
 from dateutil import parser as dateparser
 
 async def scrape_jma_table_async(conf: dict, client: httpx.AsyncClient):
-    url = conf.get(
-        "url",
-        "https://www.jma.go.jp/bosai/warning/data/warning/map.json"
-    )
+    """
+    Fetch JMA warning/map.json, extract any non‐zero warning levels,
+    and return them as a list of dict entries.
+    """
+    url = conf.get("url", "https://www.jma.go.jp/bosai/warning/data/warning/map.json")
     try:
-        resp = await client.get(url, headers={"Referer": "https://www.jma.go.jp/bosai/warning/"})
+        resp = await client.get(url)
         resp.raise_for_status()
-        reports = resp.json()
+        data = resp.json()
     except Exception as e:
         return {
             "entries": [],
@@ -18,35 +19,29 @@ async def scrape_jma_table_async(conf: dict, client: httpx.AsyncClient):
         }
 
     entries = []
-    # reports is a list of report objects; pick the latest one if you like:
-    for report in reports:
-        ts = report.get("reportDatetime") or report.get("time")
+    # data is a dict of prefecture_code → region info
+    for prefecture_code, region_info in data.items():
+        ts = region_info.get("time")
         try:
             published = dateparser.parse(ts).isoformat()
         except Exception:
             published = None
 
-        # Now dive into each areaType → areas → warnings
-        for area_type in report.get("areaTypes", []):
-            # You may need to extract a human‐readable type name here…
-            warns_list = area_type.get("areas", [])
-            for area in warns_list:
-                area_code = area.get("code")
-                for warn in area.get("warnings", []):
-                    status = warn.get("status")
-                    level  = warn.get("code")  # or whatever numeric level they use
-                    if status != "解除":  # skip “cleared” alerts
-                        uid = f"jma|{area_code}|{warn.get('code')}|{published}"
-                        entries.append({
-                            "id":          uid,
-                            "title":       f"{area_code}: warning {warn.get('code')} [{status}]",
-                            "description": f"JMA warning {warn.get('code')} in {area_code} (status: {status})",
-                            "link":        url,
-                            "published":   published,
-                            "area_code":   area_code,
-                            "status":      status,
-                            "level":       level,
-                        })
+        for area_name, warns in region_info.get("areas", {}).items():
+            for warning_type, level in warns.items():
+                if level and level > 0:
+                    uid = f"jma|{prefecture_code}|{area_name}|{warning_type}|{published}"
+                    entries.append({
+                        "id":          uid,
+                        "region":      area_name,             # ← add this
+                        "title":       f"{area_name}: {warning_type} (level {level})",
+                        "description": f"JMA advisory: {warning_type} level {level} in {area_name}",
+                        "link":        url,
+                        "published":   published,
+                        "pref_code":   prefecture_code,
+                        "type":        warning_type,
+                        "level":       level,
+                    })
 
     return {
         "entries": entries,
