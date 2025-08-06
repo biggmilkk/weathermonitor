@@ -245,27 +245,8 @@ def render_bom_grouped(entries, conf):
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
 def render_jma_warning(item, conf):
-    level  = item.get("level")
-    status = item.get("status", "")
-
-    # 1) Skip anything with no numeric level
-    if level is None:
-        return
-
-    # 2) Skip the “no warnings/advisories” entries
-    #    (they use the Japanese “なし” in that status text)
-    if "なし" in status:
-        return
-
-    # (Optional) If you want to only show *really* serious warnings
-    # # uncomment and tweak the threshold below:
-    # WARNING_THRESHOLD = conf.get("threshold", 30)
-    # if isinstance(level, (int, float)) and level < WARNING_THRESHOLD:
-    #     return
-
-    # 3) Now render
     st.markdown(
-        f"**{item['area_code']} – {status} (level {level})**  \n"
+        f"**{item['area_name']} — {item['type_label']}**  \n"
         f"{item['description']}"
     )
     st.caption(f"Updated: {item['published']}")
