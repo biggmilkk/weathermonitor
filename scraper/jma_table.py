@@ -12,18 +12,23 @@ _CLASS_TO_LEVEL = {
 }
 
 @st.cache_data(ttl=60, show_spinner=False)
-async def scrape_jma_table_async(conf: dict, client: httpx.AsyncClient) -> dict:
+async def scrape_jma_table_async(conf: dict, _client: httpx.AsyncClient) -> dict:
     """
-    Fetch the JMA HTML warning page and extract the warning‐table.
-    Returns entries of {group, region, type, level, timestamp}.
+    Fetch the JMA HTML warning page and extract the warning-table.
     """
     url = conf.get("url", "https://www.jma.go.jp/bosai/warning/")
     try:
-        resp = await client.get(url, timeout=10, follow_redirects=True)
+        resp = await _client.get(url, timeout=10, follow_redirects=True)
         resp.raise_for_status()
     except Exception as e:
         logging.warning(f"[JMA TABLE FETCH ERROR] {url} - {e}")
         return {"entries": [], "error": str(e), "source": url}
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    table = soup.find("table", class_="warning-table")
+    if not table:
+        logging.warning(f"[JMA TABLE] No <table.warning-table> found at {url}")
+        return {"entries": [], "source": url}
 
     soup = BeautifulSoup(resp.text, "html.parser")
     table = soup.find("table", class_="warning-table")
