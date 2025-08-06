@@ -2,6 +2,7 @@ import streamlit as st
 from dateutil import parser as dateparser
 from collections import OrderedDict
 import time
+import requests
 
 # Generic JSON/NWS renderer
 def render_json(item, conf):
@@ -244,9 +245,21 @@ def render_bom_grouped(entries, conf):
     # 5) snapshot last seen
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
+_area_index = requests.get(
+    "https://www.jma.go.jp/bosai/common/const/class20s/index.json"
+).json()
+AREA_NAME = { e["code"]: e["name"] for e in _area_index }
+
 def render_jma_warning(item, conf):
+    # 1) human-readable area name (fall back to code if missing)
+    area_code = item["region"]
+    area_name = AREA_NAME.get(area_code, area_code)
+
+    # 2) pick the English label we stored as `label_en`
+    type_label = item.get("label_en", item.get("label_ja", str(item.get("code", ""))))
+
     st.markdown(
-        f"**{item['area_name']} — {item['type_label']}**  \n"
+        f"**{area_name} — {type_label}**  \n"
         f"{item['description']}"
     )
     st.caption(f"Updated: {item['published']}")
