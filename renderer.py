@@ -2,47 +2,6 @@ import streamlit as st
 from dateutil import parser as dateparser
 from collections import OrderedDict
 import time
-import requests
-from requests.exceptions import RequestException, JSONDecodeError
-
-# ---------------------------
-# 1) Load AREA_NAME safely
-# ---------------------------
-try:
-    resp = requests.get(
-        "https://www.jma.go.jp/bosai/common/const/class20s/index.json",
-        timeout=5,
-    )
-    resp.raise_for_status()
-    area_list = resp.json()
-    AREA_NAME = { entry.get("code"): entry.get("name") for entry in area_list }
-except (RequestException, JSONDecodeError, ValueError):
-    AREA_NAME = {}
-
-# ---------------------------
-# 2) JMA warning renderer
-# ---------------------------
-def render_jma_warning(item, conf):
-    # a) Find the area code → human name
-    code = item.get("region") or item.get("area_code") or ""
-    name = AREA_NAME.get(code, code)
-
-    # b) Pick the English label (fall back to raw type or level)
-    label = item.get("label_en") \
-         or item.get("label_ja") \
-         or item.get("type") \
-         or f"level {item.get('level','?')}"
-
-    # c) Description & published timestamp
-    desc      = item.get("description", "")
-    published = item.get("published", "")
-
-    # d) Render
-    st.markdown(f"**{name} — {label}**  \n{desc}")
-    if published:
-        st.caption(f"Updated: {published}")
-    st.markdown("---")
-
 
 # Generic JSON/NWS renderer
 def render_json(item, conf):
@@ -298,5 +257,4 @@ RENDERERS = {
     'rss_cma': render_cma,
     'rss_meteoalarm': render_meteoalarm,
     'rss_bom_multi': render_bom_grouped,
-    'rss_jma': render_jma_warning,
 }
