@@ -12,7 +12,7 @@ async def scrape_jma_table_async(_client: httpx.AsyncClient, conf: dict) -> dict
     entries = []
     try:
         resp = await _client.get(url, timeout=10, follow_redirects=True)
-        logging.warning(resp.text[:10000])
+        logging.warning(resp.text[:100000])
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
