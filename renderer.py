@@ -244,6 +244,52 @@ def render_bom_grouped(entries, conf):
     # 5) snapshot last seen
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
+def render_jma_table(entries, conf):
+    """
+    entries: list of dicts {group, region, type, level, timestamp}
+    conf['key'] is the feed key for session_state tracking.
+    """
+    # 1) parse timestamps to floats
+    for e in entries:
+        try:
+            e["_ts"] = dateparser.parse(e["timestamp"]).timestamp()
+        except:
+            e["_ts"] = 0.0
+
+    # 2) sort newest-first
+    entries.sort(key=lambda x: x["_ts"], reverse=True)
+
+    # 3) mark new vs last seen
+    last_seen = st.session_state.get(f"{conf['key']}_last_seen_time") or 0.0
+    for e in entries:
+        e["is_new"] = (e["_ts"] > last_seen)
+
+    # 4) group by group→region
+    grouped = OrderedDict()
+    for e in entries:
+        grp = e["group"]
+        grouped.setdefault(grp, OrderedDict())
+        grouped[grp].setdefault(e["region"], []).append(e)
+
+    # 5) render
+    for grp, regions in grouped.items():
+        # draw red bar if ANY in this group are new
+        if any(e["is_new"] for regs in regions.values() for e in regs):
+            st.markdown(
+                "<div style='height:4px;background:red;margin:8px 0;'></div>",
+                unsafe_allow_html=True
+            )
+        st.markdown(f"## {grp}")
+        for region, alerts in regions.items():
+            st.markdown(f"### {region}")
+            for a in alerts:
+                prefix = "[NEW] " if a["is_new"] else ""
+                st.markdown(f"{prefix}**[{a['type']}] {a['level']}**")
+            st.markdown("")  # small spacer
+        st.markdown("---")
+
+    # 6) snapshot last seen
+    st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
 # Renderer registry
 RENDERERS = {
@@ -253,4 +299,5 @@ RENDERERS = {
     'rss_cma': render_cma,
     'rss_meteoalarm': render_meteoalarm,
     'rss_bom_multi': render_bom_grouped,
+    'jme_table': render_jma_table,
 }
