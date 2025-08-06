@@ -245,9 +245,23 @@ def render_bom_grouped(entries, conf):
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
 def render_jma_warning(item, conf):
-    st.markdown(f"**{item['area_code']} – {item['type']}**  \n"
-                f"{item['description']}  ")
-    st.caption(f"Updated: {item['published']}")
+    # pick whichever area field you have
+    area = item.get('area_code') or item.get('area', 'Unknown area')
+
+    # your scraper now names the warning state "status", not "type"
+    status = item.get('status') or item.get('type', 'Unknown status')
+
+    # level is optional, but if present we'll show it
+    level = item.get('level')
+    status_text = f"{status}" + (f" (level {level})" if level is not None else "")
+
+    # description & published are the same
+    desc = item.get('description', '')
+    published = item.get('published')
+
+    st.markdown(f"**{area} – {status_text}**  \n{desc}")
+    if published:
+        st.caption(f"Updated: {published}")
     st.markdown("---")
 
 # Renderer registry
