@@ -2,70 +2,53 @@ import httpx
 from dateutil import parser as dateparser
 
 async def scrape_jma_table_async(conf: dict, client: httpx.AsyncClient):
-    """
-    Fetch JMA warning/map.json, extract any non‐zero warning levels,
-    and return them under a dict 'alerts' keyed by conf['key'].
-    Each alert item has: id, region, type, description, link, published.
-    """
     url = conf.get(
         "url",
         "https://www.jma.go.jp/bosai/warning/data/warning/map.json"
     )
-    feed_key = conf.get("key", "rss_jma")
-
-    # 1) Fetch & parse JSON
     try:
-        resp = await client.get(url)
+        resp = await client.get(url, headers={"Referer": "https://www.jma.go.jp/bosai/warning/"})
         resp.raise_for_status()
-        data = resp.json()
+        reports = resp.json()
     except Exception as e:
         return {
-            "alerts": {},
+            "entries": [],
             "error": f"JMA fetch failed: {e}",
             "source": conf,
         }
 
-    # 2) Ensure it's a dict
-    if not isinstance(data, dict):
-        return {
-            "alerts": {},
-            "error": f"Unexpected JSON structure: expected object, got {type(data).__name__}",
-            "source": conf,
-        }
-
     entries = []
-
-    # 3) Walk prefectures → areas → warning types
-    for pref_code, region in data.items():
-        ts = region.get("time")
+    # reports is a list of report objects; pick the latest one if you like:
+    for report in reports:
+        ts = report.get("reportDatetime") or report.get("time")
         try:
             published = dateparser.parse(ts).isoformat()
         except Exception:
             published = None
 
-        areas = region.get("areas", {})
-        if not isinstance(areas, dict):
-            continue
+        # Now dive into each areaType → areas → warnings
+        for area_type in report.get("areaTypes", []):
+            # You may need to extract a human‐readable type name here…
+            warns_list = area_type.get("areas", [])
+            for area in warns_list:
+                area_code = area.get("code")
+                for warn in area.get("warnings", []):
+                    status = warn.get("status")
+                    level  = warn.get("code")  # or whatever numeric level they use
+                    if status != "解除":  # skip “cleared” alerts
+                        uid = f"jma|{area_code}|{warn.get('code')}|{published}"
+                        entries.append({
+                            "id":          uid,
+                            "title":       f"{area_code}: warning {warn.get('code')} [{status}]",
+                            "description": f"JMA warning {warn.get('code')} in {area_code} (status: {status})",
+                            "link":        url,
+                            "published":   published,
+                            "area_code":   area_code,
+                            "status":      status,
+                            "level":       level,
+                        })
 
-        for area_name, warns in areas.items():
-            if not isinstance(warns, dict):
-                continue
-            for warning_type, level in warns.items():
-                # only numeric levels > 0
-                if isinstance(level, (int, float)) and level > 0:
-                    uid = f"jma|{pref_code}|{area_name}|{warning_type}|{published}"
-                    entries.append({
-                        "id":          uid,
-                        "region":      area_name,
-                        "type":        warning_type,
-                        "description": f"{warning_type} level {level} in {area_name}",
-                        "link":        url,
-                        "published":   published,
-                    })
-
-    # 4) Return under an 'alerts' dict so downstream code can do:
-    #      for alerts in country.get("alerts", {}).values(): ...
     return {
-        "alerts": { feed_key: entries },
+        "entries": entries,
         "source":  conf,
     }
