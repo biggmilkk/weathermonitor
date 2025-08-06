@@ -1,5 +1,3 @@
-# scraper/jma.py
-
 import httpx
 from dateutil import parser as dateparser
 
