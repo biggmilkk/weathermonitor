@@ -1,54 +1,69 @@
 import httpx
 from dateutil import parser as dateparser
 
-async def scrape_jma_table_async(conf: dict, client: httpx.AsyncClient):
-    url = conf.get(
-        "url",
-        "https://www.jma.go.jp/bosai/warning/data/warning/map.json"
-    )
-    try:
-        resp = await client.get(url, headers={"Referer": "https://www.jma.go.jp/bosai/warning/"})
-        resp.raise_for_status()
-        reports = resp.json()
-    except Exception as e:
-        return {
-            "entries": [],
-            "error": f"JMA fetch failed: {e}",
-            "source": conf,
-        }
+# 1) Load your lookup tables once at startup:
 
-    entries = []
-    # reports is a list of report objects; pick the latest one if you like:
-    for report in reports:
-        ts = report.get("reportDatetime") or report.get("time")
+# A) Area codes → human name
+#    You can grab this from JMA’s own index.json for class20s:
+#    https://www.jma.go.jp/bosai/common/const/class20s/index.json
+import requests
+area_index = requests.get(
+    "https://www.jma.go.jp/bosai/common/const/class20s/index.json"
+).json()
+AREA_NAME = { entry["code"]: entry["name"] for entry in area_index }
+
+# B) Warning type keys → labels
+TYPE_LABEL = {
+    "rain_fall":       {"ja": "大雨警報",      "en": "Heavy Rain Warning"},
+    "flood":           {"ja": "洪水警報",      "en": "Flood Warning"},
+    "land_slide":      {"ja": "土砂災害警戒情報","en": "Landslide Advisory"},
+    "storm_surge":     {"ja": "高潮警報",      "en": "Storm Surge Warning"},
+    # … add whatever your feed actually uses …
+}
+
+# C) Status codes → English
+STATUS_LABEL = {
+    "発表": "Issued",
+    "継続": "Continued",
+    "解除": "Cancelled",
+}
+
+# 2) Fetch & render only true “警報” (warning) level items:
+async def scrape_and_render_jma(conf: dict, client: httpx.AsyncClient, lang="en"):
+    url = conf["url"]
+    resp = await client.get(url, headers={"Referer": "https://www.jma.go.jp/bosai/warning/"})
+    resp.raise_for_status()
+    data = resp.json()
+
+    for pref_code, region in data.items():
+        ts = region.get("time")
+        published = None
         try:
             published = dateparser.parse(ts).isoformat()
-        except Exception:
-            published = None
+        except:
+            pass
 
-        # Now dive into each areaType → areas → warnings
-        for area_type in report.get("areaTypes", []):
-            # You may need to extract a human‐readable type name here…
-            warns_list = area_type.get("areas", [])
-            for area in warns_list:
-                area_code = area.get("code")
-                for warn in area.get("warnings", []):
-                    status = warn.get("status")
-                    level  = warn.get("code")  # or whatever numeric level they use
-                    if status != "解除":  # skip “cleared” alerts
-                        uid = f"jma|{area_code}|{warn.get('code')}|{published}"
-                        entries.append({
-                            "id":          uid,
-                            "title":       f"{area_code}: warning {warn.get('code')} [{status}]",
-                            "description": f"JMA warning {warn.get('code')} in {area_code} (status: {status})",
-                            "link":        url,
-                            "published":   published,
-                            "area_code":   area_code,
-                            "status":      status,
-                            "level":       level,
-                        })
+        for area_code, warns in region.get("areas", {}).items():
+            # map the area code to name (falls back to code itself)
+            name = AREA_NAME.get(area_code, area_code)
 
-    return {
-        "entries": entries,
-        "source":  conf,
-    }
+            for typ, level in warns.items():
+                # numeric level > 0 only:
+                if not isinstance(level, (int, float)) or level <= 0:
+                    continue
+
+                # only show real “警報” levels (JMA uses level>=30 for 警報)
+                if level < 30:
+                    continue
+
+                # lookup human labels
+                type_label = TYPE_LABEL.get(typ, {}).get(lang, typ)
+                status     = region.get("status", "")   # if your JSON has status
+                status_lbl = STATUS_LABEL.get(status, status)
+
+                st.markdown(
+                    f"**{name} — {type_label} (level {level})**  \n"
+                    f"{status_lbl} at {published}"
+                )
+                st.caption(f"Updated: {published}")
+                st.markdown("---")
