@@ -30,5 +30,5 @@ SCRAPER_REGISTRY = {
     # JMA
     "rss_jma": lambda conf, client: __import__(
         "scraper.jma", fromlist=["scrape_jma_table_async"]
-    ).scrape_jma_table_async(conf, client),
+    ).scrape_jma_table_async(client, conf),
 }
