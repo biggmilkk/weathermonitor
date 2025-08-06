@@ -42,4 +42,9 @@ def get_feed_definitions():
                 "Northern Territory",
             ],
         },
+        "jma": {
+            "label": "JMA Warnings",
+            "type": "jma",
+            "url": "https://www.jma.go.jp/bosai/warning/#lang=en",
+        },
     }
