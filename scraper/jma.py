@@ -1,3 +1,6 @@
+import httpx
+from dateutil import parser as dateparser
+
 async def scrape_jma_table_async(conf: dict, client: httpx.AsyncClient):
     url = conf.get(
         "url",
