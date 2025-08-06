@@ -43,8 +43,8 @@ def get_feed_definitions():
             ],
         },
         "jma": {
-            "type":  "rss_jma",
-            "label": "JMA Warnings",
-            "url":   "https://www.jma.go.jp/bosai/warning/"
+            "type":  "jma_warning",
+            "label": "JMA",
+            "url":   "https://www.jma.go.jp/bosai/warning/data/warning/map.json"
         },
     }
