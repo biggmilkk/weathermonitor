@@ -13,9 +13,44 @@ from streamlit_autorefresh import st_autorefresh
 from computation import compute_counts
 from renderer import RENDERERS
 import httpx
+import psutil
 
 # Allow nested asyncio loops under Streamlit
 nest_asyncio.apply()
+
+# —— Autotuning constants —— 
+MEMORY_LIMIT = 1 * 1024**3         # 1 GiB
+MEMORY_HIGH_WATER = 0.85 * MEMORY_LIMIT
+MEMORY_LOW_WATER  = 0.50 * MEMORY_LIMIT
+
+MIN_CONC = 5
+MAX_CONC = 50
+STEP     = 5
+
+# Initialize in session_state once
+st.session_state.setdefault("concurrency", 20)
+
+# Measure current process RSS
+proc = psutil.Process(os.getpid())
+rss  = proc.memory_info().rss
+
+# Nudge concurrency based on memory
+if rss > MEMORY_HIGH_WATER:
+    # memory too high → back off
+    st.session_state["concurrency"] = max(
+        MIN_CONC, st.session_state["concurrency"] - STEP
+    )
+elif rss < MEMORY_LOW_WATER:
+    # memory comfortably low → can push it up
+    st.session_state["concurrency"] = min(
+        MAX_CONC, st.session_state["concurrency"] + STEP
+    )
+
+# Use this dynamic value everywhere you used MAX_CONCURRENCY
+MAX_CONCURRENCY = st.session_state["concurrency"]
+
+# (Optional) Print for debugging
+st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss//(1024*1024)} MB")
 
 # Constants
 FETCH_TTL = 60
