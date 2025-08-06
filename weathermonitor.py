@@ -210,7 +210,7 @@ if active:
     elif conf["type"] == "rss_jma":
         # JMA
         for item in entries:
-        RENDERERS["rss_jma"](item, conf)    
+            RENDERERS["rss_jma"](item, conf)    
 
         # red-bar + render
         for country in data_list:
