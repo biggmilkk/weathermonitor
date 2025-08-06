@@ -192,6 +192,7 @@ if active:
     data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
 
     if conf["type"] == "rss_bom_multi":
+        # BOM
         RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
 
     elif conf["type"] == "ec_async":
@@ -205,6 +206,10 @@ if active:
             for alerts in country.get("alerts", {}).values():
                 for e in alerts:
                     e["is_new"] = alert_id(e) not in seen_ids
+
+    elif conf["type"] == "jma_table":
+        # JMA
+        RENDERERS["jma_table"](st.session_state[f"{active}_data"], {"key": active})    
 
         # red-bar + render
         for country in data_list:
