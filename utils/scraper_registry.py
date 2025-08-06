@@ -28,7 +28,7 @@ SCRAPER_REGISTRY = {
     ).scrape_bom_multi_async(conf, client),
 
     # JMA
-    "jma": lambda conf, client: __import__(
-        "scraper.jma", fromlist=["scrape_jma_async"]
-    ).scrape_jma_async(conf, client),
+    "jma_table": lambda conf, client: __import__(
+        "scraper.jma_table", fromlist=["scrape_jma_table_async"]
+    ).scrape_jma_table_async(conf, client),
 }
