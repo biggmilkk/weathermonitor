@@ -3,6 +3,46 @@ from dateutil import parser as dateparser
 from collections import OrderedDict
 import time
 import requests
+from requests.exceptions import RequestException, JSONDecodeError
+
+# ---------------------------
+# 1) Load AREA_NAME safely
+# ---------------------------
+try:
+    resp = requests.get(
+        "https://www.jma.go.jp/bosai/common/const/class20s/index.json",
+        timeout=5,
+    )
+    resp.raise_for_status()
+    area_list = resp.json()
+    AREA_NAME = { entry.get("code"): entry.get("name") for entry in area_list }
+except (RequestException, JSONDecodeError, ValueError):
+    AREA_NAME = {}
+
+# ---------------------------
+# 2) JMA warning renderer
+# ---------------------------
+def render_jma_warning(item, conf):
+    # a) Find the area code → human name
+    code = item.get("region") or item.get("area_code") or ""
+    name = AREA_NAME.get(code, code)
+
+    # b) Pick the English label (fall back to raw type or level)
+    label = item.get("label_en") \
+         or item.get("label_ja") \
+         or item.get("type") \
+         or f"level {item.get('level','?')}"
+
+    # c) Description & published timestamp
+    desc      = item.get("description", "")
+    published = item.get("published", "")
+
+    # d) Render
+    st.markdown(f"**{name} — {label}**  \n{desc}")
+    if published:
+        st.caption(f"Updated: {published}")
+    st.markdown("---")
+
 
 # Generic JSON/NWS renderer
 def render_json(item, conf):
@@ -249,21 +289,6 @@ _area_index = requests.get(
     "https://www.jma.go.jp/bosai/common/const/class20s/index.json"
 ).json()
 AREA_NAME = { e["code"]: e["name"] for e in _area_index }
-
-def render_jma_warning(item, conf):
-    # 1) human-readable area name (fall back to code if missing)
-    area_code = item["region"]
-    area_name = AREA_NAME.get(area_code, area_code)
-
-    # 2) pick the English label we stored as `label_en`
-    type_label = item.get("label_en", item.get("label_ja", str(item.get("code", ""))))
-
-    st.markdown(
-        f"**{area_name} — {type_label}**  \n"
-        f"{item['description']}"
-    )
-    st.caption(f"Updated: {item['published']}")
-    st.markdown("---")
 
 # Renderer registry
 RENDERERS = {
