@@ -244,11 +244,6 @@ def render_bom_grouped(entries, conf):
     # 5) snapshot last seen
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
-_area_index = requests.get(
-    "https://www.jma.go.jp/bosai/common/const/class20s/index.json"
-).json()
-AREA_NAME = { e["code"]: e["name"] for e in _area_index }
-
 # Renderer registry
 RENDERERS = {
     'json': render_json,
