@@ -1,87 +1,65 @@
-import streamlit as st
-import httpx
-from bs4 import BeautifulSoup
 import logging
-from datetime import datetime
+import httpx
+import streamlit as st
+from bs4 import BeautifulSoup
 
-# Map the cell CSS classes to human levels
-_CLASS_TO_LEVEL = {
-    "contents-level20": "Advisory",
-    "contents-level30": "Warning",
-    "contents-level40": "Alert",
+# browser-like headers
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/115.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://www.jma.go.jp/bosai/warning/",
 }
 
+def _parse_jma_table(html: str) -> list[dict]:
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table", class_="warning-table")
+    if not table:
+        return []
+    entries = []
+    # first header row defines columns (skip it)
+    rows = table.find_all("tr")
+    current_area = None
+    for tr in rows:
+        th = tr.find("th", class_="warning-clickable")
+        if th and "contents-area" in tr.get("class", []):
+            # this is a region header (e.g. “Hokkaido”) – store it
+            current_area = th.get_text(strip=True)
+            continue
+
+        # data row: first TH is sub-region; TDs are advisory levels
+        if th and not any(c.startswith("contents-header") for c in tr.get("class", [])):
+            sub = th.get_text(strip=True)
+            cells = tr.find_all("td")
+            # for each column, if it’s not “contents-missing” record an alert
+            for idx, td in enumerate(cells, start=1):
+                if "contents-missing" in td.get("class", []):
+                    continue
+                level = td.get("title") or td.get_text(strip=True)
+                entries.append({
+                    "region": current_area,
+                    "subregion": sub,
+                    "type":    table.find_all("th")[idx].get_text(" ", strip=True),
+                    "level":   level,
+                })
+    return entries
+
 @st.cache_data(ttl=60, show_spinner=False)
-async def scrape_jma_table_async(conf: dict, _client: httpx.AsyncClient) -> dict:
+def scrape_jma_table(conf: dict) -> dict:
     """
-    Fetch the JMA HTML warning page and extract the warning-table.
+    Synchronous scraper for the JMA warning table.
     """
     url = conf.get("url", "https://www.jma.go.jp/bosai/warning/")
     try:
-        resp = await _client.get(url, timeout=10, follow_redirects=True)
+        resp = httpx.get(url, headers=HEADERS, timeout=10, follow_redirects=True)
         resp.raise_for_status()
     except Exception as e:
-        logging.warning(f"[JMA TABLE FETCH ERROR] {url} - {e}")
+        logging.warning(f"[JMA FETCH ERROR] {url} - {e}")
         return {"entries": [], "error": str(e), "source": url}
 
-    soup = BeautifulSoup(resp.text, "html.parser")
-    table = soup.find("table", class_="warning-table")
-    if not table:
-        logging.warning(f"[JMA TABLE] No <table.warning-table> found at {url}")
-        return {"entries": [], "source": url}
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-    table = soup.find("table", class_="warning-table")
-    if not table:
-        logging.warning(f"[JMA TABLE] No <table.warning-table> found at {url}")
-        return {"entries": [], "source": url}
-
-    # First header row gives the column names (skip the very first empty column)
-    header = table.find("tr", class_="contents-header")
-    type_names = [
-        th.get_text(" ", strip=True)
-        for th in header.find_all("th")[1:]
-    ]
-
-    entries = []
-    current_group = None
-
-    # Walk each row
-    for tr in table.find_all("tr"):
-        classes = tr.get("class", [])
-        # group header row
-        if "contents-header" in classes:
-            area_th = tr.find("th", class_="contents-area")
-            if area_th:
-                current_group = area_th.get_text(strip=True)
-            continue
-
-        # region row: first <th> is region name
-        if "contents-clickable" not in "".join(classes):
-            continue
-        region_th = tr.find("th", class_="contents-clickable")
-        if not region_th or not current_group:
-            continue
-
-        region = region_th.get_text(strip=True)
-        cells = tr.find_all("td")
-        for idx, td in enumerate(cells):
-            # pick out the level by CSS class
-            level = None
-            for cls in td.get("class", []):
-                if cls in _CLASS_TO_LEVEL:
-                    level = _CLASS_TO_LEVEL[cls]
-                    break
-            if not level:
-                continue
-            entries.append({
-                "group":     current_group,
-                "region":    region,
-                "type":      type_names[idx],
-                "level":     level,
-                # timestamp so we can diff against last‐seen
-                "timestamp": datetime.utcnow().isoformat() + "Z"
-            })
-
-    logging.warning(f"[JMA TABLE DEBUG] Parsed {len(entries)} alerts from {url}")
+    entries = _parse_jma_table(resp.text)
+    logging.warning(f"[JMA DEBUG] Parsed {len(entries)} entries")
     return {"entries": entries, "source": url}
