@@ -44,7 +44,7 @@ def get_feed_definitions():
         },
         "jma": {
             "label": "JMA",
-            "type": "jma",
+            "type": "jma_table",
             "url": "https://www.jma.go.jp/bosai/warning/#lang=en",
         },
     }
