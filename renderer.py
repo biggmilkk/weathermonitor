@@ -245,7 +245,7 @@ def render_bom_grouped(entries, conf):
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
 def render_jma_warning(item, conf):
-    st.markdown(f"**{item['region']} – {item['type']}**  \n"
+    st.markdown(f"**{item['area']} – {item['type']}**  \n"
                 f"{item['description']}  ")
     st.caption(f"Updated: {item['published']}")
     st.markdown("---")
