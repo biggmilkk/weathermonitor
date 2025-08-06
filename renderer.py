@@ -244,24 +244,24 @@ def render_bom_grouped(entries, conf):
     # 5) snapshot last seen
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
-WARNING_THRESHOLD = 30
-
 def render_jma_warning(item, conf):
-    # if there’s no numeric level, or it’s below warning, skip
-    try:
-        lvl = int(item.get("level", 0))
-    except (TypeError, ValueError):
-        return
-    if lvl < WARNING_THRESHOLD:
-        return
+    # pick whichever area field you have
+    area = item.get('area_code') or item.get('area', 'Unknown area')
 
-    # pick your area field
-    area = item.get("area_code") or item.get("region", "Unknown area")
-    # you may still have a status field but let's show level explicitly
-    st.markdown(f"**{area} – Warning level {lvl}**  \n"
-                f"{item.get('description', '')}")
-    if item.get("published"):
-        st.caption(f"Updated: {item['published']}")
+    # your scraper now names the warning state "status", not "type"
+    status = item.get('status') or item.get('type', 'Unknown status')
+
+    # level is optional, but if present we'll show it
+    level = item.get('level')
+    status_text = f"{status}" + (f" (level {level})" if level is not None else "")
+
+    # description & published are the same
+    desc = item.get('description', '')
+    published = item.get('published')
+
+    st.markdown(f"**{area} – {status_text}**  \n{desc}")
+    if published:
+        st.caption(f"Updated: {published}")
     st.markdown("---")
 
 # Renderer registry
