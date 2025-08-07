@@ -1,30 +1,52 @@
 import json
+from importlib import import_module
+from typing import Callable, Dict
 
-# Lazy-loading scraper functions to prevent circular imports
-SCRAPER_REGISTRY = {
-    # NWS active alerts
-    "json": lambda conf, client: __import__(
-        'scraper.nws_active_alerts', fromlist=['scrape_nws_async']
-    ).scrape_nws_async(conf, client),
+
+class ScraperEntry:
+    """
+    Lazily imports scraper modules and invokes the specified async function.
+    Optionally applies a loader to transform conf before calling the scraper.
+    """
+    def __init__(self, module_name: str, func_name: str, loader: Callable[[dict], dict] = None):
+        self.module_name = module_name
+        self.func_name = func_name
+        self.loader = loader
+
+    async def __call__(self, conf: dict, client) -> dict:
+        # Load or transform conf if a loader is provided
+        conf_arg = self.loader(conf) if self.loader else conf
+        mod = import_module(f"scraper.{self.module_name}")
+        fn = getattr(mod, self.func_name)
+        return await fn(conf_arg, client)
+
+
+def _load_ec_conf(conf: dict) -> dict:
+    """
+    Loads the Environment Canada feed definition JSON.
+    """
+    source_file = conf.get("source_file")
+    if not source_file:
+        raise ValueError("Missing 'source_file' in EC config")
+    with open(source_file, "r") as f:
+        return json.load(f)
+
+
+SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
+    # NWS active alerts (json)
+    "json": ScraperEntry("nws_active_alerts", "scrape_nws_async"),
 
     # Environment Canada RSS feeds
-    "ec_async": lambda conf, client: __import__(
-        'scraper.environment_canada', fromlist=['scrape_ec_async']
-    ).scrape_ec_async(json.load(open(conf.get('source_file'))), client),
+    "ec_async": ScraperEntry(
+        "environment_canada", "scrape_ec_async", loader=_load_ec_conf
+    ),
 
     # MeteoAlarm countries
-    "rss_meteoalarm": lambda conf, client: __import__(
-        'scraper.meteoalarm', fromlist=['scrape_meteoalarm_async']
-    ).scrape_meteoalarm_async(conf, client),
+    "rss_meteoalarm": ScraperEntry("meteoalarm", "scrape_meteoalarm_async"),
 
     # China Meteorological Admin regions
-    "rss_cma": lambda conf, client: __import__(
-        'scraper.cma', fromlist=['scrape_cma_async']
-    ).scrape_cma_async(conf, client),
+    "rss_cma": ScraperEntry("cma", "scrape_cma_async"),
 
     # BOM multi-state Australia
-    "rss_bom_multi": lambda conf, client: __import__(
-        'scraper.bom', fromlist=['scrape_bom_multi_async']
-    ).scrape_bom_multi_async(conf, client),
-
+    "rss_bom_multi": ScraperEntry("bom", "scrape_bom_multi_async"),
 }
