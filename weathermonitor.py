@@ -207,11 +207,6 @@ if active:
                 for e in alerts:
                     e["is_new"] = alert_id(e) not in seen_ids
 
-    elif conf["type"] == "rss_jma":
-        # JMA
-        for item in entries:
-            RENDERERS["rss_jma"](item, conf)    
-
         # red-bar + render
         for country in data_list:
             alerts_flat = [
