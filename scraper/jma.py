@@ -1,108 +1,83 @@
-import os
+# scraper/jma.py
+
 import json
-import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List
+from dateutil import parser
+from datetime import timezone
+from typing import Any, Dict
+from aiohttp import ClientResponse
 
 async def scrape_jma_async(conf: Dict[str, Any], client) -> Dict[str, Any]:
     """
-    Fetch JMA warning map JSON and produce a small feed with only the eight warning
-    phenomena (Heavy Rain (Inundation), Heavy Rain (Landslide), Flood, Storm/Gale,
-    High Wave, Storm Surge, Thunderstorm, Dense Fog), filtering out non‐warning levels.
+    Scrape the JMA warnings feed (map.json), map area codes to names and numeric codes
+    to phenomenon keys, and return only active warnings per region.
     """
-    # 1) Get the URL
     url = conf.get("url")
     if not url:
-        logging.warning("[JMA FETCH ERROR] Missing 'url' in JMA config")
-        return {}
+        raise ValueError("Missing 'url' in JMA config")
 
-    # 2) Fetch the live map.json
-    try:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        logging.warning(f"[JMA FETCH ERROR] {e}")
-        return {}
+    # 1) Fetch the JMA JSON
+    resp: ClientResponse
+    async with client.get(url) as resp:
+        data = await resp.json()
 
-    # 3) Load local data files
-    base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-    try:
-        with open(os.path.join(base, "areacode.json"), encoding="utf-8") as f:
-            area_data = json.load(f)
-        with open(os.path.join(base, "weather.json"), encoding="utf-8") as f:
-            weather_sections = json.load(f)
-    except Exception as e:
-        logging.warning(f"[JMA FETCH ERROR] loading local JSONs: {e}")
-        return {}
+    # 2) Parse and humanize the report time (to UTC)
+    report_dt = parser.isoparse(data["reportDatetime"])
+    report_utc = report_dt.astimezone(timezone.utc)
+    report_str = report_utc.strftime("%Y-%m-%d %H:%M UTC")
 
-    # 4) Build a map of class10 (prefecture) and class15 (region)
-    class10 = area_data.get("class10s", {})
-    class15 = area_data.get("class15s", {})
-    area_map: Dict[str, str] = {}
-    for code, region_name in class15.items():
-        pref_code = code[:2] + "0000"
-        pref_name = class10.get(pref_code, "").strip()
-        area_map[code] = f"{pref_name}: {region_name}" if pref_name else region_name
+    # 3) Flatten your area_codes JSON into a code → enName map
+    raw_areas = conf["area_codes"]
+    flat_areas: Dict[str, str] = {}
+    for category in ("centers", "offices", "class20s"):
+        for code, info in raw_areas.get(category, {}).items():
+            flat_areas[code] = info.get("enName", code)
 
-    # 5) Extract the flat list of phenomena (in order) and an English lookup
-    phenomenon_order: List[str] = []
+    # 4) Build weather_map: phenomenon key → English name
     weather_map: Dict[str, str] = {}
-    for section in weather_sections:
-        if section.get("key") == "elem":
-            for item in section.get("values", []):
-                val = item.get("value")
-                en = item.get("enName")
-                phenomenon_order.append(val)
-                weather_map[val] = en
-            break
+    for group in conf["weather"]:
+        if group.get("key") == "elem":
+            for v in group.get("values", []):
+                weather_map[v["value"]] = v["enName"]
 
-    # 6) Define which codes are “warnings” and the severity→color mapping
-    WARNING_PHENOMENA = {
-        "inundation", "landslide", "flood", "wind",
-        "wave", "tide", "thunder", "fog",
-    }
-    SEVERITY_COLOR = {
-        2: "Yellow",   # Advisory
-        3: "Orange",   # Warning
-        4: "Red",      # Heavy Warning
+    # 5) Numeric JMA warning codes → your phenomenon keys
+    PHENOMENON_CODE_MAP = {
+        "10": "inundation",  # 大雨（浸水）
+        "15": "landslide",   # 大雨（土砂災害）
+        "14": "flood",       # 洪水
+        "20": "wave",        # 波浪
+        "19": "tide",        # 高潮
+        # add more mappings here as needed...
     }
 
-    # 7) Parse the issued‐at time
-    time_str = data.get("time")
-    try:
-        dt_local = datetime.fromisoformat(time_str)
-        dt_utc = dt_local.astimezone(timezone.utc)
-        updated = dt_utc.strftime("%H:%M UTC %B %d")
-    except Exception:
-        updated = time_str or ""
-
-    # 8) Build your list of items
-    items: List[str] = []
-    for area_entry in data.get("areas", []):
-        # area_entry is [ areaCode, lvl0, lvl1, lvl2, ... ]
-        area_code = area_entry[0]
-        levels = area_entry[1:]
-        area_label = area_map.get(area_code)
-        if not area_label:
-            continue
-
-        for idx, lvl in enumerate(levels):
-            # skip “no warning” or unknown
-            if lvl not in SEVERITY_COLOR:
-                continue
-            phen = phenomenon_order[idx]
-            if phen not in WARNING_PHENOMENA:
-                continue
-            color = SEVERITY_COLOR[lvl]
-            name = weather_map.get(phen)
-            if not name:
+    # 6) Collect only active warnings per region
+    items = []
+    for area_group in data.get("areaTypes", []):
+        for area in area_group.get("areas", []):
+            code = area.get("code")
+            region = flat_areas.get(code)
+            if not region:
                 continue
 
-            items.append(f"● [{color}] {area_label} – {name}")
+            active_warns = []
+            for w in area.get("warnings", []):
+                status = w.get("status")
+                # only include 初回発表 or 継続
+                if status not in ("発表", "継続"):
+                    continue
+
+                ph_code = w.get("code")
+                key = PHENOMENON_CODE_MAP.get(ph_code)
+                name = weather_map.get(key) if key else None
+                if name and name not in active_warns:
+                    active_warns.append(name)
+
+            if active_warns:
+                items.append({
+                    "region": region,
+                    "warnings": active_warns
+                })
 
     return {
-        "title": "JMA Warnings",
-        "updated": updated,
-        "items": items,
+        "title": f"JMA Warnings ({report_str})",
+        "items": items
     }
