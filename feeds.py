@@ -1,45 +1,81 @@
-def get_feed_definitions():
-    return {
-        "nws": {
-            "label": "NWS Alerts",
-            "type": "json",
-            "url": "https://api.weather.gov/alerts/active"
-        },
-        "ec": {
-            "label": "Environment Canada",
-            "type": "ec_async",
-            "source_file": "environment_canada_sources.json"
-        },
-        "meteoalarm": {
-            "label": "Meteoalarm Europe",
-            "type": "rss_meteoalarm",
-            "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"
-        },
-        "cma_china": {
-            "label": "China Alerts",
-            "type": "rss_cma",
-            "url": "https://severeweather.wmo.int/v2/cap-alerts/cn-cma-xx/rss.xml"
-        },
-        "bom_all": {
-            "label": "Australia BOM",
-            "type": "rss_bom_multi",
-            "urls": [
-                "https://www.bom.gov.au/fwo/IDZ00054.warnings_nsw.xml",  # NSW & ACT
-                "https://www.bom.gov.au/fwo/IDZ00059.warnings_vic.xml",  # Victoria
-                "https://www.bom.gov.au/fwo/IDZ00056.warnings_qld.xml",  # Queensland
-                "https://www.bom.gov.au/fwo/IDZ00060.warnings_wa.xml",   # West Australia
-                "https://www.bom.gov.au/fwo/IDZ00057.warnings_sa.xml",   # South Australia
-                "https://www.bom.gov.au/fwo/IDZ00058.warnings_tas.xml",  # Tasmania
-                "https://www.bom.gov.au/fwo/IDZ00055.warnings_nt.xml",   # Northern Territory
-            ],
-            "states": [
-                "NSW & ACT",
-                "Victoria",
-                "Queensland",
-                "West Australia",
-                "South Australia",
-                "Tasmania",
-                "Northern Territory",
-            ],
-        },
-    }
+import json
+from importlib import import_module
+from typing import Callable, Dict
+
+
+class ScraperEntry:
+    """
+    Lazily imports scraper modules and invokes the specified async function.
+    Optionally applies a loader to transform conf before calling the scraper.
+    """
+    def __init__(self, module_name: str, func_name: str, loader: Callable[[dict], dict] = None):
+        self.module_name = module_name
+        self.func_name = func_name
+        self.loader = loader
+
+    async def __call__(self, conf: dict, client) -> dict:
+        # Load or transform conf if a loader is provided
+        conf_arg = self.loader(conf) if self.loader else conf
+        mod = import_module(f"scraper.{self.module_name}")
+        fn = getattr(mod, self.func_name)
+        return await fn(conf_arg, client)
+
+
+def _load_ec_conf(conf: dict) -> dict:
+    """
+    Loads the Environment Canada feed definition JSON.
+    """
+    source_file = conf.get("source_file")
+    if not source_file:
+        raise ValueError("Missing 'source_file' in EC config")
+    with open(source_file, "r") as f:
+        return json.load(f)
+
+
+def _load_jma_conf(conf: dict) -> dict:
+    """
+    Loads the JMA area codes file and content definitions for warnings.
+    """
+    area_file = conf.get("area_code_file")
+    content_file = conf.get("content_file")
+    if not area_file or not content_file:
+        raise ValueError("Missing 'area_code_file' or 'content_file' in JMA config")
+
+    # Parse area codes (CSV: code,name)
+    area_codes: Dict[str, str] = {}
+    with open(area_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            code, name = line.split(",", 1)
+            area_codes[code] = name
+
+    # Load content mappings (JSON list of phenomena and levels)
+    with open(content_file, "r", encoding="utf-8") as f:
+        content = json.load(f)
+
+    return {"area_codes": area_codes, "content": content}
+
+
+SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
+    # NWS active alerts (json)
+    "json": ScraperEntry("nws_active_alerts", "scrape_nws_async"),
+
+    # Environment Canada RSS feeds
+    "ec_async": ScraperEntry(
+        "environment_canada", "scrape_ec_async", loader=_load_ec_conf
+    ),
+
+    # MeteoAlarm countries
+    "rss_meteoalarm": ScraperEntry("meteoalarm", "scrape_meteoalarm_async"),
+
+    # China Meteorological Admin regions
+    "rss_cma": ScraperEntry("cma", "scrape_cma_async"),
+
+    # BOM multi-state Australia
+    "rss_bom_multi": ScraperEntry("bom", "scrape_bom_multi_async"),
+
+    # Japan Meteorological Agency warnings (only warning levels)
+    "rss_jma": ScraperEntry("jma", "scrape_jma_async", loader=_load_jma_conf),
+}
