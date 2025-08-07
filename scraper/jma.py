@@ -1,94 +1,72 @@
-import os
 import json
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict
 
-# Status code to level name mapping
-STATUS_MAP = {
-    1: "Advisory",
-    2: "Warning",
-    3: "Emergency Warning"
-}
-
-# Directory of this script
-HERE = os.path.dirname(__file__)
-
-# Load phenomenon code to English name mapping from weather.json
-with open(os.path.join(HERE, "weather.json"), encoding="utf-8") as f:
-    weather_data = json.load(f)
-WEATHER_MAPPING: Dict[str, str] = {
-    v["value"]: v["enName"]
-    for v in weather_data[0]["values"]
-}
-
-# Load area code hierarchy from areacode.json and flatten to class10 mapping
-with open(os.path.join(HERE, "areacode.json"), encoding="utf-8") as f:
-    areacode = json.load(f)
-REGION_MAPPING: Dict[str, str] = {
-    code: info["enName"]
-    for code, info in areacode["class10s"].items()
-}
 
 async def scrape_jma_async(conf: Dict[str, Any], client) -> Dict[str, Any]:
     """
-    Fetch JMA warning map and return list of region-level warnings.
-    Expects conf to optionally contain:
-      - url: override for the JMA map.json endpoint
+    Scrapes JMA warnings GeoJSON and returns a mapping of areas to current warning/advisory statuses.
+    Only phenomena with active advisories or warnings are included.
     """
+    # Fetch the JMA warnings map
     url = conf.get(
         "url",
         "https://www.jma.go.jp/bosai/warning/data/warning/map.json"
     )
     resp = await client.get(url)
-    data = await resp.json()
+    resp.raise_for_status()
+    data = resp.json()
 
-    # Extract timestamp if present
-    timestamp = (
-        data.get("time", {}).get("time")
-        or data.get("reportDatetime")
-        or data.get("generated_at")
+    # Load local mapping files
+    base_dir = Path(__file__).resolve().parents[1] / "data"
+    with open(base_dir / "areacode.json", encoding="utf-8") as f:
+        area_map = json.load(f)
+    with open(base_dir / "weather.json", encoding="utf-8") as f:
+        weather_map = json.load(f)
+
+    # Extract phenomenon definitions
+    elems = next(
+        (e["values"] for e in weather_map if e.get("key") == "elem"), []
     )
+    # Level mapping: 1 = Advisory, 2 = Warning
+    status_map = {1: "advisory", 2: "warning"}
 
-    results: List[Dict[str, str]] = []
-    
-    # Case 1: data contains 'map' as dict of code->{phenomenon: status}
-    if "map" in data and isinstance(data["map"], dict):
-        for code, warnings_dict in data["map"].items():
-            region = REGION_MAPPING.get(code)
-            if not region:
-                continue
-            for phen_code, status in warnings_dict.items():
-                if status <= 0:
-                    continue
-                level = STATUS_MAP.get(status, f"Level {status}")
-                phen_name = WEATHER_MAPPING.get(phen_code, phen_code)
-                results.append({
-                    "region": region,
-                    "phenomenon": phen_name,
-                    "level": level
-                })
-    # Case 2: data contains list of areas under 'areas'
-    else:
-        areas = data.get("areas", [])
-        for area in areas:
-            code = area.get("code")
-            region = REGION_MAPPING.get(code)
-            if not region:
-                continue
-            for w in area.get("warnings", []):
-                status = w.get("status", 0)
-                if status <= 0:
-                    continue
-                level = STATUS_MAP.get(status, f"Level {status}")
-                phen_code = w.get("code")
-                phen_name = WEATHER_MAPPING.get(phen_code, phen_code)
-                results.append({
-                    "region": region,
-                    "phenomenon": phen_name,
-                    "level": level
-                })
-
-    return {
-        "title": "JMA Warnings",
-        "timestamp": timestamp,
-        "data": results
+    result: Dict[str, Any] = {
+        "source": url,
+        "updated": data.get("updated"),
+        "areas": {}
     }
+
+    # Iterate each geographic feature
+    for feature in data.get("features", []):
+        props = feature.get("properties", {})
+        # Area code used as key in areacode.json
+        code = str(props.get("code", ""))
+        # Try to resolve to a human-readable name via class10s (regions), offices, or centers
+        area_info = (
+            area_map.get("class10s", {}).get(code)
+            or area_map.get("offices", {}).get(code)
+            or area_map.get("centers", {}).get(code)
+        )
+        if area_info:
+            area_name = area_info.get("enName") or area_info.get("name")
+        else:
+            area_name = code
+
+        # Collect active statuses for this area
+        statuses: Dict[str, str] = {}
+        for idx, elem in enumerate(elems):
+            # Skip the "all" catch-all element at index 0
+            if idx == 0:
+                continue
+            key = f"w{idx:02d}"
+            level_code = props.get(key)
+            # Only include advisory or warning levels
+            if isinstance(level_code, int) and level_code in status_map:
+                # elem['value'] is the phenomenon code (e.g., "inundation")
+                statuses[elem["value"]] = status_map[level_code]
+
+        if statuses:
+            result["areas"][area_name] = statuses
+
+    return result
