@@ -28,31 +28,32 @@ def _load_ec_conf(conf: dict) -> dict:
     source_file = conf.get("source_file")
     if not source_file:
         raise ValueError("Missing 'source_file' in EC config")
-    with open(source_file, "r") as f:
+    with open(source_file, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def _load_jma_conf(conf: dict) -> dict:
     """
-    Loads the JMA area codes file and content definitions for warnings.
+    Loads JMA warning feed definition, merging area codes and weather mapping.
     """
     area_file = conf.get("area_code_file")
-    content_file = conf.get("content_file")
-    if not area_file or not content_file:
-        raise ValueError("Missing 'area_code_file' or 'content_file' in JMA config")
+    weather_file = conf.get("weather_file")
+    if not area_file or not weather_file:
+        raise ValueError("Missing 'area_code_file' or 'weather_file' in JMA config")
 
-    # Load area codes mapping (JSON of code → name)
+    # Load area codes mapping (JSON)
     with open(area_file, "r", encoding="utf-8") as f:
         area_codes = json.load(f)
 
-    # Load phenomenon content mapping (JSON)
-    with open(content_file, "r", encoding="utf-8") as f:
-        content = json.load(f)
+    # Load weather phenomena mapping (JSON)
+    with open(weather_file, "r", encoding="utf-8") as f:
+        weather_map = json.load(f)
 
-    return {
-        "area_codes": area_codes,
-        "content": content,
-    }
+    # Merge original config with loaded data
+    merged_conf = dict(conf)
+    merged_conf["area_codes"] = area_codes
+    merged_conf["weather"] = weather_map
+    return merged_conf
 
 
 SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
@@ -74,5 +75,7 @@ SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
     "rss_bom_multi": ScraperEntry("bom", "scrape_bom_multi_async"),
 
     # Japan Meteorological Agency warnings (only warning levels)
-    "rss_jma": ScraperEntry("jma", "scrape_jma_async", loader=_load_jma_conf),
+    "rss_jma": ScraperEntry(
+        "jma", "scrape_jma_async", loader=_load_jma_conf
+    ),
 }
