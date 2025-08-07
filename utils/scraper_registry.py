@@ -41,21 +41,18 @@ def _load_jma_conf(conf: dict) -> dict:
     if not area_file or not content_file:
         raise ValueError("Missing 'area_code_file' or 'content_file' in JMA config")
 
-    # Parse area codes (CSV: code,name)
-    area_codes: Dict[str, str] = {}
+    # Load area codes mapping (JSON of code → name)
     with open(area_file, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            code, name = line.split(",", 1)
-            area_codes[code] = name
+        area_codes = json.load(f)
 
-    # Load content mappings (JSON list of phenomena and levels)
+    # Load phenomenon content mapping (JSON)
     with open(content_file, "r", encoding="utf-8") as f:
         content = json.load(f)
 
-    return {"area_codes": area_codes, "content": content}
+    return {
+        "area_codes": area_codes,
+        "content": content,
+    }
 
 
 SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
