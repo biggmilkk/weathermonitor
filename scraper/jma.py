@@ -1,72 +1,89 @@
 import json
-from pathlib import Path
-from typing import Any, Dict
+from datetime import datetime, timezone
 
+async def scrape_jma_async(conf: dict, client) -> dict:
+    """
+    Scrapes JMA warning levels from the map.json feed.
+    Only returns active warnings for the eight main phenomena.
+    """
+    url = conf.get("url")
+    if not url:
+        raise ValueError("Missing 'url' in JMA config")
 
-async def scrape_jma_async(conf: Dict[str, Any], client) -> Dict[str, Any]:
-    """
-    Scrapes JMA warnings GeoJSON and returns a mapping of areas to current warning/advisory statuses.
-    Only phenomena with active advisories or warnings are included.
-    """
-    # Fetch the JMA warnings map
-    url = conf.get(
-        "url",
-        "https://www.jma.go.jp/bosai/warning/data/warning/map.json"
-    )
+    # Fetch the map.json
     resp = await client.get(url)
-    resp.raise_for_status()
-    data = resp.json()
+    data = await resp.json()
 
-    # Load local mapping files
-    base_dir = Path(__file__).resolve().parents[1] / "data"
-    with open(base_dir / "areacode.json", encoding="utf-8") as f:
-        area_map = json.load(f)
-    with open(base_dir / "weather.json", encoding="utf-8") as f:
-        weather_map = json.load(f)
+    # Parse publication time
+    time_str = data.get("datetime") or data.get("reportDatetime") or data.get("time")
+    if time_str:
+        try:
+            # ISO format with offset (e.g. 2023-08-06T05:34:00+09:00)
+            dt = datetime.fromisoformat(time_str)
+            pub_time = dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        except ValueError:
+            pub_time = time_str
+    else:
+        pub_time = ""
 
-    # Extract phenomenon definitions
-    elems = next(
-        (e["values"] for e in weather_map if e.get("key") == "elem"), []
-    )
-    # Level mapping: 1 = Advisory, 2 = Warning
-    status_map = {1: "advisory", 2: "warning"}
+    # Build phenomenon code → English name map from weather.json
+    phen_map = {}
+    for block in conf.get("content", []):
+        if block.get("key") == "elem":
+            for v in block.get("values", []):
+                phen_map[v["value"]] = v["enName"]
+            break
 
-    result: Dict[str, Any] = {
-        "source": url,
-        "updated": data.get("updated"),
-        "areas": {}
+    # We only care about these eight codes
+    target_codes = {
+        "inundation",  # Heavy Rain (Inundation)
+        "landslide",   # Heavy Rain (Landslide)
+        "flood",       # Flood
+        "wind",        # Storm/Gale
+        "wave",        # High Wave
+        "tide",        # Storm Surge
+        "thunder",     # Thunderstorm
+        "fog"          # Dense Fog
     }
 
-    # Iterate each geographic feature
-    for feature in data.get("features", []):
-        props = feature.get("properties", {})
-        # Area code used as key in areacode.json
-        code = str(props.get("code", ""))
-        # Try to resolve to a human-readable name via class10s (regions), offices, or centers
-        area_info = (
-            area_map.get("class10s", {}).get(code)
-            or area_map.get("offices", {}).get(code)
-            or area_map.get("centers", {}).get(code)
-        )
-        if area_info:
-            area_name = area_info.get("enName") or area_info.get("name")
-        else:
-            area_name = code
+    # Area code → name mapping from areacode.json
+    area_codes = conf.get("area_codes", {})
 
-        # Collect active statuses for this area
-        statuses: Dict[str, str] = {}
-        for idx, elem in enumerate(elems):
-            # Skip the "all" catch-all element at index 0
-            if idx == 0:
+    # Collect all active warnings
+    warnings_list = []
+    for phen_code, area_map in data.items():
+        # skip non-phenomenon keys
+        if phen_code in ("datetime", "reportDatetime", "time"):
+            continue
+        if phen_code not in target_codes:
+            continue
+
+        phen_name = phen_map.get(phen_code)
+        if not phen_name:
+            continue
+
+        for area_code, level in area_map.items():
+            # only include if there's any advisory/warning
+            if not level:
                 continue
-            key = f"w{idx:02d}"
-            level_code = props.get(key)
-            # Only include advisory or warning levels
-            if isinstance(level_code, int) and level_code in status_map:
-                # elem['value'] is the phenomenon code (e.g., "inundation")
-                statuses[elem["value"]] = status_map[level_code]
+            region = area_codes.get(area_code)
+            if not region:
+                continue
+            warnings_list.append({
+                "region": region,
+                "phenomenon": phen_name,
+                "level": level
+            })
 
-        if statuses:
-            result["areas"][area_name] = statuses
+    # Format into feed entries
+    entries = [
+        f"● [Level {w['level']}] {w['region']}: {w['phenomenon']}"
+        for w in warnings_list
+    ]
 
-    return result
+    return {
+        "title": "JMA Warnings",
+        "url": url,
+        "published": pub_time,
+        "entries": entries
+    }
