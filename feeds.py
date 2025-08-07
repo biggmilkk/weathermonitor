@@ -44,8 +44,10 @@ def get_feed_definitions():
         },
         "jma": {
             "label": "JMA Warnings",
-            "type": "rss_jma",
-            "url": "https://www.jma.go.jp/bosai/warning/data/warning/map.json"
+            "type": "rss_jma",   # matches SCRAPER_REGISTRY["rss_jma"]
+            "url": "https://www.jma.go.jp/bosai/warning/data/warning/map.json",
+            "area_code_file": "data/areacode.json",
+            "weather_file":   "data/weather.json",
         },
 
     }
