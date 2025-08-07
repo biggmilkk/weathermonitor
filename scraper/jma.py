@@ -1,99 +1,94 @@
-import json
 import os
-import requests
+import json
+from typing import Any, Dict, List
 
+# Status code to level name mapping
+STATUS_MAP = {
+    1: "Advisory",
+    2: "Warning",
+    3: "Emergency Warning"
+}
 
-def load_area_codes(path='areacode.txt'):
+# Directory of this script
+HERE = os.path.dirname(__file__)
+
+# Load phenomenon code to English name mapping from weather.json
+with open(os.path.join(HERE, "weather.json"), encoding="utf-8") as f:
+    weather_data = json.load(f)
+WEATHER_MAPPING: Dict[str, str] = {
+    v["value"]: v["enName"]
+    for v in weather_data[0]["values"]
+}
+
+# Load area code hierarchy from areacode.json and flatten to class10 mapping
+with open(os.path.join(HERE, "areacode.json"), encoding="utf-8") as f:
+    areacode = json.load(f)
+REGION_MAPPING: Dict[str, str] = {
+    code: info["enName"]
+    for code, info in areacode["class10s"].items()
+}
+
+async def scrape_jma_async(conf: Dict[str, Any], client) -> Dict[str, Any]:
     """
-    Load mapping of region names to JMA area codes from a CSV-style file.
-    Each line: <Prefecture>: <Region Name>,<AreaCode>
+    Fetch JMA warning map and return list of region-level warnings.
+    Expects conf to optionally contain:
+      - url: override for the JMA map.json endpoint
     """
-    codes = {}
-    with open(path, encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
+    url = conf.get(
+        "url",
+        "https://www.jma.go.jp/bosai/warning/data/warning/map.json"
+    )
+    resp = await client.get(url)
+    data = await resp.json()
+
+    # Extract timestamp if present
+    timestamp = (
+        data.get("time", {}).get("time")
+        or data.get("reportDatetime")
+        or data.get("generated_at")
+    )
+
+    results: List[Dict[str, str]] = []
+    
+    # Case 1: data contains 'map' as dict of code->{phenomenon: status}
+    if "map" in data and isinstance(data["map"], dict):
+        for code, warnings_dict in data["map"].items():
+            region = REGION_MAPPING.get(code)
+            if not region:
                 continue
-            parts = line.split(',')
-            if len(parts) < 2:
+            for phen_code, status in warnings_dict.items():
+                if status <= 0:
+                    continue
+                level = STATUS_MAP.get(status, f"Level {status}")
+                phen_name = WEATHER_MAPPING.get(phen_code, phen_code)
+                results.append({
+                    "region": region,
+                    "phenomenon": phen_name,
+                    "level": level
+                })
+    # Case 2: data contains list of areas under 'areas'
+    else:
+        areas = data.get("areas", [])
+        for area in areas:
+            code = area.get("code")
+            region = REGION_MAPPING.get(code)
+            if not region:
                 continue
-            name = ','.join(parts[:-1]).strip()
-            code = parts[-1].strip()
-            codes[name] = code
-    return codes
+            for w in area.get("warnings", []):
+                status = w.get("status", 0)
+                if status <= 0:
+                    continue
+                level = STATUS_MAP.get(status, f"Level {status}")
+                phen_code = w.get("code")
+                phen_name = WEATHER_MAPPING.get(phen_code, phen_code)
+                results.append({
+                    "region": region,
+                    "phenomenon": phen_name,
+                    "level": level
+                })
 
-
-def load_content_mapping(path='content.txt'):
-    """
-    Load JMA phenomenon mappings (value -> (ja, en)) from a JSON file.
-    Expects an array of sections; finds the one where key == 'elem'.
-    """
-    with open(path, encoding='utf-8') as f:
-        data = json.load(f)
-    for section in data:
-        if section.get('key') == 'elem':
-            return {
-                v['value']: (v.get('name'), v.get('enName'))
-                for v in section.get('values', [])
-            }
-    return {}
-
-
-def fetch_warnings(area_code):
-    """
-    Retrieve the raw GeoJSON warning data for a given area code.
-    """
-    url = f'https://www.jma.go.jp/bosai/warning/data/warning/{area_code}.json'
-    resp = requests.get(url)
-    resp.raise_for_status()
-    return resp.json().get('features', [])
-
-
-def parse_warnings(features, mapping):
-    """
-    From a list of GeoJSON features, extract only those with level == 'Warning',
-    mapping the phenomenon code to Japanese and English names.
-    Returns a list of dicts: time, area, phenomenon_ja, phenomenon_en, level.
-    """
-    warnings = []
-    for feat in features:
-        props = feat.get('properties', {})
-        level = props.get('level')
-        if level != 'Warning':  # filter out advisories, watches, etc.
-            continue
-        ph = props.get('phenomenon')
-        ja, en = mapping.get(ph, (ph, ph))
-        area = props.get('areaName') or props.get('area', '')
-        time = props.get('time')
-        warnings.append({
-            'time': time,
-            'area': area,
-            'phenomenon_ja': ja,
-            'phenomenon_en': en,
-            'level': level,
-        })
-    return warnings
-
-
-def get_all_warnings(area_codes_path='areacode.txt', content_path='content.txt'):
-    """
-    Load all area codes and phenomenon mappings, fetch and parse warnings for each,
-    and return a dict mapping region names to lists of warning entries.
-    """
-    codes = load_area_codes(area_codes_path)
-    mapping = load_content_mapping(content_path)
-    output = {}
-    for region, code in codes.items():
-        feats = fetch_warnings(code)
-        ws = parse_warnings(feats, mapping)
-        if ws:
-            output[region] = ws
-    return output
-
-
-if __name__ == '__main__':
-    # Quick CLI: prints all current warnings
-    warnings = get_all_warnings()
-    for region, items in warnings.items():
-        for w in items:
-            print(f"{w['time']} — {region} — {w['phenomenon_en']} [{w['level']}]  {w['phenomenon_ja']}")
+    return {
+        "title": "JMA Warnings",
+        "timestamp": timestamp,
+        "data": results
+    }
