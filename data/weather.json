@@ -1,0 +1,25 @@
+[
+  {
+    "key": "elem",
+    "values": [
+      { "name": "全て", "enName": "All", "value": "all" },
+      { "name": "大雨（浸水）", "enName": "Heavy Rain (Inundation)", "value": "inundation" },
+      { "name": "大雨（土砂災害）", "enName": "Heavy Rain (Landslide)", "value": "landslide" },
+      { "name": "洪水", "enName": "Flood", "value": "flood" },
+      { "name": "暴風・強風", "enName": "Storm/Gale", "value": "wind" },
+      { "name": "暴風雪・風雪", "enName": "Snowstorm/Gale and Snow", "value": "wind_snow" },
+      { "name": "大雪", "enName": "Heavy Snow", "value": "snow" },
+      { "name": "波浪", "enName": "High Wave", "value": "wave" },
+      { "name": "高潮", "enName": "Storm Surge", "value": "tide" },
+      { "name": "雷", "enName": "Thunderstorm", "value": "thunder" },
+      { "name": "融雪", "enName": "Snow Melting", "value": "snow_melting" },
+      { "name": "濃霧", "enName": "Dense Fog", "value": "fog" },
+      { "name": "乾燥", "enName": "Dry Air", "value": "dry" },
+      { "name": "なだれ", "enName": "Avalanche", "value": "avalanche" },
+      { "name": "低温", "enName": "Low Temperature", "value": "cold" },
+      { "name": "霜", "enName": "Frost", "value": "frost" },
+      { "name": "着氷", "enName": "Ice Accretion", "value": "ice_accretion" },
+      { "name": "着雪", "enName": "Snow Accretion", "value": "snow_accretion" }
+    ]
+  }
+]
