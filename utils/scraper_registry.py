@@ -32,6 +32,32 @@ def _load_ec_conf(conf: dict) -> dict:
         return json.load(f)
 
 
+def _load_jma_conf(conf: dict) -> dict:
+    """
+    Loads the JMA area codes file and content definitions for warnings.
+    """
+    area_file = conf.get("area_code_file")
+    content_file = conf.get("content_file")
+    if not area_file or not content_file:
+        raise ValueError("Missing 'area_code_file' or 'content_file' in JMA config")
+
+    # Parse area codes (CSV: code,name)
+    area_codes: Dict[str, str] = {}
+    with open(area_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            code, name = line.split(",", 1)
+            area_codes[code] = name
+
+    # Load content mappings (JSON list of phenomena and levels)
+    with open(content_file, "r", encoding="utf-8") as f:
+        content = json.load(f)
+
+    return {"area_codes": area_codes, "content": content}
+
+
 SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
     # NWS active alerts (json)
     "json": ScraperEntry("nws_active_alerts", "scrape_nws_async"),
@@ -49,4 +75,7 @@ SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
 
     # BOM multi-state Australia
     "rss_bom_multi": ScraperEntry("bom", "scrape_bom_multi_async"),
+
+    # Japan Meteorological Agency warnings (only warning levels)
+    "rss_jma": ScraperEntry("jma", "scrape_jma_async", loader=_load_jma_conf),
 }
