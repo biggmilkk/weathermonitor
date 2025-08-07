@@ -1,82 +1,99 @@
-import httpx
-from dateutil import parser as dateparser
+import json
+import os
 import requests
 
-# Pre-load JMA’s code→label→category table
-_class25s_url = "https://www.jma.go.jp/bosai/common/const/class25s/index.json"
-_class25s = requests.get(_class25s_url).json()
-# Map numeric code → { name, enName, category }
-CODE_INFO = { entry["code"]: entry for entry in _class25s }
 
-async def scrape_jma_table_async(conf: dict, client: httpx.AsyncClient):
+def load_area_codes(path='areacode.txt'):
     """
-    Fetch JMA warning/map.json, extract only true 警報 (category == "warning")
-    and return them under `alerts[conf['key']]`.
-    Each alert has: id, region, code, label, description, link, published.
+    Load mapping of region names to JMA area codes from a CSV-style file.
+    Each line: <Prefecture>: <Region Name>,<AreaCode>
     """
-    url     = conf.get("url", "https://www.jma.go.jp/bosai/warning/data/warning/map.json")
-    feed_key= conf.get("key", "rss_jma")
-
-    # 1) Fetch JSON
-    try:
-        resp = await client.get(url, headers={"Referer": "https://www.jma.go.jp/bosai/warning/"})
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        return { "alerts": {}, "error": f"JMA fetch failed: {e}", "source": conf }
-
-    if not isinstance(data, dict):
-        return {
-            "alerts": {},
-            "error": f"Unexpected JSON structure: expected object, got {type(data).__name__}",
-            "source": conf
-        }
-
-    entries = []
-
-    # 2) Walk prefectures → areas → warning‐type keys → numeric code
-    for pref_code, region in data.items():
-        ts = region.get("time")
-        try:
-            published = dateparser.parse(ts).isoformat()
-        except Exception:
-            published = None
-
-        areas = region.get("areas", {})
-        if not isinstance(areas, dict):
-            continue
-
-        for area_code, warns in areas.items():
-            if not isinstance(warns, dict):
+    codes = {}
+    with open(path, encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
                 continue
+            parts = line.split(',')
+            if len(parts) < 2:
+                continue
+            name = ','.join(parts[:-1]).strip()
+            code = parts[-1].strip()
+            codes[name] = code
+    return codes
 
-            for typ_key, numeric_code in warns.items():
-                # skip non‐numeric or zero
-                if not isinstance(numeric_code, (int, float)) or numeric_code == 0:
-                    continue
 
-                info = CODE_INFO.get(int(numeric_code))
-                # only true "警報" entries
-                if not info or info.get("category") != "warning":
-                    continue
+def load_content_mapping(path='content.txt'):
+    """
+    Load JMA phenomenon mappings (value -> (ja, en)) from a JSON file.
+    Expects an array of sections; finds the one where key == 'elem'.
+    """
+    with open(path, encoding='utf-8') as f:
+        data = json.load(f)
+    for section in data:
+        if section.get('key') == 'elem':
+            return {
+                v['value']: (v.get('name'), v.get('enName'))
+                for v in section.get('values', [])
+            }
+    return {}
 
-                # human labels
-                ja_label = info["name"]
-                en_label = info.get("enName", ja_label)
 
-                uid = f"jma|{pref_code}|{area_code}|{numeric_code}|{published}"
-                entries.append({
-                    "id":          uid,
-                    "region":      area_code,
-                    "code":        numeric_code,
-                    "label_ja":    ja_label,
-                    "label_en":    en_label,
-                    "description": f"{ja_label} in {area_code}",
-                    "link":        url,
-                    "published":   published,
-                })
+def fetch_warnings(area_code):
+    """
+    Retrieve the raw GeoJSON warning data for a given area code.
+    """
+    url = f'https://www.jma.go.jp/bosai/warning/data/warning/{area_code}.json'
+    resp = requests.get(url)
+    resp.raise_for_status()
+    return resp.json().get('features', [])
 
-    return {
-        "alerts": { feed_key: entries },
-        "source":  conf,
-    }
+
+def parse_warnings(features, mapping):
+    """
+    From a list of GeoJSON features, extract only those with level == 'Warning',
+    mapping the phenomenon code to Japanese and English names.
+    Returns a list of dicts: time, area, phenomenon_ja, phenomenon_en, level.
+    """
+    warnings = []
+    for feat in features:
+        props = feat.get('properties', {})
+        level = props.get('level')
+        if level != 'Warning':  # filter out advisories, watches, etc.
+            continue
+        ph = props.get('phenomenon')
+        ja, en = mapping.get(ph, (ph, ph))
+        area = props.get('areaName') or props.get('area', '')
+        time = props.get('time')
+        warnings.append({
+            'time': time,
+            'area': area,
+            'phenomenon_ja': ja,
+            'phenomenon_en': en,
+            'level': level,
+        })
+    return warnings
+
+
+def get_all_warnings(area_codes_path='areacode.txt', content_path='content.txt'):
+    """
+    Load all area codes and phenomenon mappings, fetch and parse warnings for each,
+    and return a dict mapping region names to lists of warning entries.
+    """
+    codes = load_area_codes(area_codes_path)
+    mapping = load_content_mapping(content_path)
+    output = {}
+    for region, code in codes.items():
+        feats = fetch_warnings(code)
+        ws = parse_warnings(feats, mapping)
+        if ws:
+            output[region] = ws
+    return output
+
+
+if __name__ == '__main__':
+    # Quick CLI: prints all current warnings
+    warnings = get_all_warnings()
+    for region, items in warnings.items():
+        for w in items:
+            print(f"{w['time']} — {region} — {w['phenomenon_en']} [{w['level']}]  {w['phenomenon_ja']}")
