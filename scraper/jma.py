@@ -1,83 +1,85 @@
-# scraper/jma.py
-
 import json
-from dateutil import parser
-from datetime import timezone
-from typing import Any, Dict
-from aiohttp import ClientResponse
+import logging
+from datetime import datetime
+from typing import Any, Dict, List
+
 
 async def scrape_jma_async(conf: Dict[str, Any], client) -> Dict[str, Any]:
     """
-    Scrape the JMA warnings feed (map.json), map area codes to names and numeric codes
-    to phenomenon keys, and return only active warnings per region.
+    Fetches the JMA warning map JSON, extracts the latest report, and returns only active warnings
+    in a human-readable format.
+    Expects conf to include:
+    - url: URL to JMA map.json
+    - area_codes: dict of area code -> {name, enName, ...}
+    - weather: list (from weather.json) containing one item with key "elem" and its values array
     """
     url = conf.get("url")
     if not url:
         raise ValueError("Missing 'url' in JMA config")
 
-    # 1) Fetch the JMA JSON
-    resp: ClientResponse
-    async with client.get(url) as resp:
+    try:
+        # client.get returns a coroutine; await it directly rather than using async with
+        resp = await client.get(url)
         data = await resp.json()
+    except Exception as e:
+        logging.warning(f"[JMA FETCH ERROR] {e}")
+        return {}
 
-    # 2) Parse and humanize the report time (to UTC)
-    report_dt = parser.isoparse(data["reportDatetime"])
-    report_utc = report_dt.astimezone(timezone.utc)
-    report_str = report_utc.strftime("%Y-%m-%d %H:%M UTC")
+    # Ensure we have a list of entries
+    data_list = data if isinstance(data, list) else [data]
 
-    # 3) Flatten your area_codes JSON into a code → enName map
-    raw_areas = conf["area_codes"]
-    flat_areas: Dict[str, str] = {}
-    for category in ("centers", "offices", "class20s"):
-        for code, info in raw_areas.get(category, {}).items():
-            flat_areas[code] = info.get("enName", code)
+    # Filter only entries that contain a reportDatetime
+    entries = [item for item in data_list if isinstance(item, dict) and item.get("reportDatetime")]
+    if not entries:
+        logging.warning("[JMA FETCH ERROR] no reportDatetime entries")
+        return {}
 
-    # 4) Build weather_map: phenomenon key → English name
-    weather_map: Dict[str, str] = {}
-    for group in conf["weather"]:
-        if group.get("key") == "elem":
-            for v in group.get("values", []):
-                weather_map[v["value"]] = v["enName"]
+    # Select the latest report by datetime
+    def _parse_dt(item: Dict[str, Any]) -> datetime:
+        return datetime.fromisoformat(item["reportDatetime"])
 
-    # 5) Numeric JMA warning codes → your phenomenon keys
-    PHENOMENON_CODE_MAP = {
-        "10": "inundation",  # 大雨（浸水）
-        "15": "landslide",   # 大雨（土砂災害）
-        "14": "flood",       # 洪水
-        "20": "wave",        # 波浪
-        "19": "tide",        # 高潮
-        # add more mappings here as needed...
-    }
+    latest = max(entries, key=_parse_dt)
+    report_dt = _parse_dt(latest)
+    report_time = report_dt.strftime("%Y-%m-%d %H:%M %z")
 
-    # 6) Collect only active warnings per region
-    items = []
-    for area_group in data.get("areaTypes", []):
-        for area in area_group.get("areas", []):
-            code = area.get("code")
-            region = flat_areas.get(code)
-            if not region:
-                continue
+    # Build mapping from numeric warning code to phenomenon name
+    # weather.json provides mapping of phenomena values; numeric codes start at 10 for index 1
+    phenomenon_map: Dict[str, str] = {}
+    for item in conf.get("weather", []):
+        if item.get("key") == "elem":
+            for idx, phen in enumerate(item.get("values", [])):
+                # skip the 'all' entry at index 0 if present
+                code = str(idx + 9)
+                phenomenon_map[code] = phen.get("enName")
 
-            active_warns = []
+    # Load area code mapping
+    area_codes = conf.get("area_codes", {})
+
+    warnings_list: List[Dict[str, str]] = []
+    # Iterate through each area in the latest report
+    for area_type in latest.get("areaTypes", []):
+        for area in area_type.get("areas", []):
+            area_code = area.get("code")
+            area_info = area_codes.get(area_code, {})
+            # Prefer English name if available
+            area_name = area_info.get("enName") or area_info.get("name") or area_code
+
             for w in area.get("warnings", []):
                 status = w.get("status")
-                # only include 初回発表 or 継続
-                if status not in ("発表", "継続"):
+                w_code = w.get("code")
+                # Only include if warning is currently active
+                if status not in ("継続", "発表"):
                     continue
-
-                ph_code = w.get("code")
-                key = PHENOMENON_CODE_MAP.get(ph_code)
-                name = weather_map.get(key) if key else None
-                if name and name not in active_warns:
-                    active_warns.append(name)
-
-            if active_warns:
-                items.append({
-                    "region": region,
-                    "warnings": active_warns
+                phenomenon = phenomenon_map.get(w_code, w_code)
+                warnings_list.append({
+                    "area": area_name,
+                    "phenomenon": phenomenon,
+                    "status": status
                 })
 
     return {
-        "title": f"JMA Warnings ({report_str})",
-        "items": items
+        "title": "JMA Warnings",
+        "url": url,
+        "time": report_time,
+        "warnings": warnings_list
     }
