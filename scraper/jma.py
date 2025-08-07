@@ -1,85 +1,108 @@
+import os
 import json
-from typing import Any, Dict
-from datetime import datetime
-
+import logging
+from datetime import datetime, timezone
+from typing import Any, Dict, List
 
 async def scrape_jma_async(conf: Dict[str, Any], client) -> Dict[str, Any]:
     """
-    Scrapes JMA warnings from their map.json, extracts warning levels for specified phenomena,
-    and returns a feed-like dict for weathermonitor.
+    Fetch JMA warning map JSON and produce a small feed with only the eight warning
+    phenomena (Heavy Rain (Inundation), Heavy Rain (Landslide), Flood, Storm/Gale,
+    High Wave, Storm Surge, Thunderstorm, Dense Fog), filtering out non‐warning levels.
     """
-    # Configuration provides mappings from area codes to names and phenomena definitions
-    area_codes: Dict[str, str] = conf.get('area_codes', {})
-    content: Dict[str, Any] = conf.get('content', {})
+    # 1) Get the URL
+    url = conf.get("url")
+    if not url:
+        logging.warning("[JMA FETCH ERROR] Missing 'url' in JMA config")
+        return {}
 
-    # Extract list of phenomenon mappings (value -> English name)
-    values = content.get('values') or content.get('phenomena') or []
-    ph_map = {item['value']: item['enName'] for item in values}
+    # 2) Fetch the live map.json
+    try:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        logging.warning(f"[JMA FETCH ERROR] {e}")
+        return {}
 
-    # URL for JMA warning map
-    url = 'https://www.jma.go.jp/bosai/warning/data/warning/map.json'
-    resp = await client.get(url)
-    data = await resp.json()
+    # 3) Load local data files
+    base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+    try:
+        with open(os.path.join(base, "areacode.json"), encoding="utf-8") as f:
+            area_data = json.load(f)
+        with open(os.path.join(base, "weather.json"), encoding="utf-8") as f:
+            weather_sections = json.load(f)
+    except Exception as e:
+        logging.warning(f"[JMA FETCH ERROR] loading local JSONs: {e}")
+        return {}
 
-    # Determine report/update time
-    rep_time = data.get('reportDatetime')
-    if not rep_time and 'timeSeries' in data:
-        ts = data['timeSeries'][0].get('timeDefines', [])
-        rep_time = ts[0] if ts else None
-    if rep_time:
-        dt = datetime.fromisoformat(rep_time)
-        updated = dt.strftime('%H:%M UTC %B %d')
-    else:
-        updated = ''
+    # 4) Build a map of class10 (prefecture) and class15 (region)
+    class10 = area_data.get("class10s", {})
+    class15 = area_data.get("class15s", {})
+    area_map: Dict[str, str] = {}
+    for code, region_name in class15.items():
+        pref_code = code[:2] + "0000"
+        pref_name = class10.get(pref_code, "").strip()
+        area_map[code] = f"{pref_name}: {region_name}" if pref_name else region_name
 
-    # JMA may use key 'warnings' or 'warning'
-    warns = data.get('warnings') or data.get('warning') or []
+    # 5) Extract the flat list of phenomena (in order) and an English lookup
+    phenomenon_order: List[str] = []
+    weather_map: Dict[str, str] = {}
+    for section in weather_sections:
+        if section.get("key") == "elem":
+            for item in section.get("values", []):
+                val = item.get("value")
+                en = item.get("enName")
+                phenomenon_order.append(val)
+                weather_map[val] = en
+            break
 
-    # Phenomena of interest for warnings
-    interested = {
-        'inundation',  # Heavy Rain (Inundation)
-        'landslide',   # Heavy Rain (Landslide)
-        'flood',       # Flood
-        'wind',        # Storm/Gale
-        'wave',        # High Wave
-        'tide',        # Storm Surge
-        'thunder',     # Thunderstorm
-        'fog'          # Dense Fog
+    # 6) Define which codes are “warnings” and the severity→color mapping
+    WARNING_PHENOMENA = {
+        "inundation", "landslide", "flood", "wind",
+        "wave", "tide", "thunder", "fog",
+    }
+    SEVERITY_COLOR = {
+        2: "Yellow",   # Advisory
+        3: "Orange",   # Warning
+        4: "Red",      # Heavy Warning
     }
 
-    items = []
-    for warn in warns:
-        code = warn.get('code') or warn.get('value')
-        if code not in interested:
-            continue
-        level = warn.get('level')
-        # Skip if no active warning
-        if not level or level == '0':
-            continue
-        # Map numeric level to labels/colors
-        if level == '2':
-            lvl = 'Orange'
-        elif level in ('3', '4'):
-            lvl = 'Red'
-        else:
-            lvl = 'Yellow'
-        ph = ph_map.get(code, code)
+    # 7) Parse the issued‐at time
+    time_str = data.get("time")
+    try:
+        dt_local = datetime.fromisoformat(time_str)
+        dt_utc = dt_local.astimezone(timezone.utc)
+        updated = dt_utc.strftime("%H:%M UTC %B %d")
+    except Exception:
+        updated = time_str or ""
 
-        for area in warn.get('areas', []):
-            # Area may be dict with code/name or plain code
-            if isinstance(area, dict):
-                area_code = area.get('code')
-            else:
-                area_code = area
-            name = area_codes.get(area_code) or area_code
-            items.append({
-                'title': f'{name}: {ph}',
-                'level': lvl,
-            })
+    # 8) Build your list of items
+    items: List[str] = []
+    for area_entry in data.get("areas", []):
+        # area_entry is [ areaCode, lvl0, lvl1, lvl2, ... ]
+        area_code = area_entry[0]
+        levels = area_entry[1:]
+        area_label = area_map.get(area_code)
+        if not area_label:
+            continue
+
+        for idx, lvl in enumerate(levels):
+            # skip “no warning” or unknown
+            if lvl not in SEVERITY_COLOR:
+                continue
+            phen = phenomenon_order[idx]
+            if phen not in WARNING_PHENOMENA:
+                continue
+            color = SEVERITY_COLOR[lvl]
+            name = weather_map.get(phen)
+            if not name:
+                continue
+
+            items.append(f"● [{color}] {area_label} – {name}")
 
     return {
-        'title': 'JMA Warnings',
-        'url': url,
-        'updated': updated,
-        'items': items
+        "title": "JMA Warnings",
+        "updated": updated,
+        "items": items,
     }
