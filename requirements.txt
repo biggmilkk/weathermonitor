@@ -8,9 +8,7 @@ httpx==0.28.1
 nest_asyncio==1.6.0
 psutil==7.0.0
 pandas==2.2.3
+python-dateutil==2.9.0.post0
 
-# Make Py 3.13 happy:
-greenlet==3.2.4
-
-# Playwright (we’ll keep your scraper working)
-playwright==1.45.0
+# Headless browser for JMA scraper
+playwright>=1.54.0
