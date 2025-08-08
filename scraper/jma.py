@@ -128,7 +128,7 @@ def _iter_area_blocks(doc: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
         if isinstance(areas, list):
             yield pub, areas
 
-async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]]:
+async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
     """
     conf required:
       - office_codes: list[str] (e.g., ["020000","050000","460100", ...])
