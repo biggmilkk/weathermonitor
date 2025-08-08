@@ -8,29 +8,24 @@ import httpx
 OFFICE_JSON = "https://www.jma.go.jp/bosai/warning/data/warning/{office}.json"
 OFFICE_PAGE = "https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code={office}"
 
-# Human-readable phenomenon names (base)
+# Only the phenomena you asked to keep
+ALLOWED_CODES: Set[str] = {"04", "10", "18", "19"}  # Flood, Heavy Rain (+variants), Storm Surge
+
 PHENOMENON = {
     "04": "Flood",
     "10": "Heavy Rain",               # will expand to (Inundation/Landslide)
-    "14": "Thunder Storm",
-    "15": "High Wave",
-    "19": "Storm Surge",
-    "20": "Dense Fog",
-    # Occasionally seen as an explicit inundation hazard in some offices:
     "18": "Heavy Rain (Inundation)",
+    "19": "Storm Surge",
 }
-
-# Codes that are typically *warnable* (not just advisory-only),
-# used alongside the status text to decide if "継続/発表" should count as Warning.
-WARNABLE_CODES = {"04", "10", "15", "18", "19"}  # 14/20 usually advisory unless explicitly 警報
 
 def _status_to_level(status: str) -> Optional[str]:
     """
-    Map JMA status (JP) to the levels we keep.
-    - 緊急... => Emergency
-    - 特別警報 => Alert
-    - 注意報 / 解除 / 警報から注意報 => drop
-    - 発表 / 継続 / (contains 警報) => Warning
+    Map JMA status (JP) to the levels we keep, STRICT:
+      - 緊急...        -> Emergency
+      - 特別警報       -> Alert
+      - Anything with '注意報' / '解除' / '警報から注意報' -> drop
+      - Only treat as Warning if the text actually contains '警報'
+        (i.e., don't promote plain '発表' or '継続' anymore).
     """
     if not status:
         return None
@@ -38,57 +33,30 @@ def _status_to_level(status: str) -> Optional[str]:
         return "Emergency"
     if "特別警報" in status:
         return "Alert"
-    if "注意報" in status:
+    if "注意報" in status or "解除" in status or "警報から注意報" in status:
         return None
-    if "解除" in status:
-        return None
-    if "警報から注意報" in status:
-        return None
-    if "発表" in status or "継続" in status or "警報" in status:
+    if "警報" in status:
         return "Warning"
     return None
-
-def _is_warnable_for_code(code: str, status: str, level: str) -> bool:
-    """
-    Additional guard so we don't mistakenly promote advisory-only phenomena.
-    - Thunder Storm (14) & Dense Fog (20) are usually advisories.
-      Keep them ONLY if the status text clearly indicates a 警報 (or Alert/Emergency).
-    - For other codes, allow if they’re in WARNABLE_CODES.
-    """
-    code = str(code)
-    if level in ("Alert", "Emergency"):
-        return True
-    if code in ("14", "20"):
-        # require explicit 警報 in the status text to treat as Warning
-        return "警報" in status
-    return code in WARNABLE_CODES
 
 def _utc_pub(jst_iso: str) -> str:
     """Convert '+09:00' ISO string to 'Fri, 08 Aug 2025 06:27 UTC'."""
     if not jst_iso:
         return ""
-    try:
-        dt = datetime.fromisoformat(jst_iso)
-        dt_utc = dt.astimezone(timezone.utc)
-        return dt_utc.strftime("%a, %d %b %Y %H:%M UTC")
-    except Exception:
-        # Fallback: try replacing trailing 'Z' if present
+    for s in (jst_iso, jst_iso.replace("Z", "+00:00")):
         try:
-            dt = datetime.fromisoformat(jst_iso.replace("Z", "+00:00"))
-            dt_utc = dt.astimezone(timezone.utc)
-            return dt_utc.strftime("%a, %d %b %Y %H:%M UTC")
+            dt = datetime.fromisoformat(s)
+            return dt.astimezone(timezone.utc).strftime("%a, %d %b %Y %H:%M UTC")
         except Exception:
-            return jst_iso
+            pass
+    return jst_iso
 
 def _load_region_map(path: str) -> Tuple[Dict[str, str], Set[str]]:
     """
-    Load your curated region map.
-    Supports either:
+    Load curated region map. Accepts either:
       { "Hokkaido: Kushiro Region": "014010", ... }  (name -> code)
-    or
       { "014010": "Hokkaido: Kushiro Region", ... }  (code -> name)
-    Returns:
-      code_to_name, allowed_codes
+    Returns (code_to_name, allowed_codes)
     """
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -97,23 +65,17 @@ def _load_region_map(path: str) -> Tuple[Dict[str, str], Set[str]]:
         logging.warning(f"[JMA DEBUG] Failed to load region map '{path}': {e}")
         return {}, set()
 
-    # Detect direction by peeking at a key
     if not raw:
         return {}, set()
 
-    # Heuristic: codes are all digits; names are not (contain letters/colon/space)
     sample_key = next(iter(raw.keys()))
     if str(sample_key).isdigit():
-        # Already code -> name
         code_to_name = {str(k): str(v) for k, v in raw.items()}
-        allowed_codes = set(code_to_name.keys())
     else:
-        # name -> code; invert
-        name_to_code = {str(k): str(v) for k, v in raw.items()}
-        code_to_name = {code: name for name, code in name_to_code.items()}
-        allowed_codes = set(code_to_name.keys())
+        # invert name -> code
+        code_to_name = {str(v): str(k) for k, v in raw.items()}
 
-    return code_to_name, allowed_codes
+    return code_to_name, set(code_to_name.keys())
 
 async def _fetch_office(client: httpx.AsyncClient, office: str) -> Optional[Dict[str, Any]]:
     url = OFFICE_JSON.format(office=office)
@@ -126,10 +88,6 @@ async def _fetch_office(client: httpx.AsyncClient, office: str) -> Optional[Dict
         return None
 
 def _heavy_rain_variant_from_warning(w: Dict[str, Any]) -> Optional[str]:
-    """
-    Use 'attentions' to resolve Heavy Rain variant.
-    e.g., ["土砂災害注意","浸水注意"]
-    """
     vals = w.get("attentions")
     if isinstance(vals, list):
         joined = " ".join(str(v) for v in vals)
@@ -140,9 +98,6 @@ def _heavy_rain_variant_from_warning(w: Dict[str, Any]) -> Optional[str]:
     return None
 
 def _heavy_rain_variant_from_levels(w: Dict[str, Any]) -> Optional[str]:
-    """
-    Use 'levels' -> [{ "type": "土砂災害危険度" / "浸水害危険度", ...}] to resolve variant.
-    """
     levels = w.get("levels")
     if not isinstance(levels, list):
         return None
@@ -155,18 +110,14 @@ def _heavy_rain_variant_from_levels(w: Dict[str, Any]) -> Optional[str]:
     return None
 
 def _phenomenon_name(code: str, w: Dict[str, Any]) -> Optional[str]:
-    """
-    Return display name for a warning code, resolving Heavy Rain variants.
-    If we cannot resolve Heavy Rain to (Inundation/Landslide), skip it to avoid ambiguity.
-    """
     code = str(code)
+    if code not in ALLOWED_CODES:
+        return None
     if code == "10":
         variant = _heavy_rain_variant_from_warning(w) or _heavy_rain_variant_from_levels(w)
         if not variant:
-            return None
+            return None  # skip ambiguous plain "Heavy Rain"
         return f"Heavy Rain ({variant})"
-    if code == "18":
-        return "Heavy Rain (Inundation)"
     return PHENOMENON.get(code)
 
 def _iter_area_blocks(doc: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
@@ -180,7 +131,7 @@ def _iter_area_blocks(doc: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
 async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
     """
     conf required:
-      - office_codes: list[str] of office codes (e.g., ["020000","050000","460100", ...])
+      - office_codes: list[str] office codes (e.g., ["020000","050000","460100", ...])
       - region_map_file: path to curated region code map (either name->code or code->name)
     """
     office_codes: List[str] = conf.get("office_codes") or []
@@ -208,8 +159,6 @@ async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
 
             for area in areas:
                 area_code = str(area.get("code", ""))
-
-                # Only parse areas the user cares about
                 if area_code not in allowed_codes:
                     continue
 
@@ -221,16 +170,15 @@ async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
                 for w in warnings:
                     code = str(w.get("code", ""))
                     status = str(w.get("status", "") or "").strip()
+
+                    # Only keep our allowed phenomena + true warning/alert/emergency
                     level = _status_to_level(status)
                     if level is None:
-                        continue  # skip advisories/clears/downgrades
-
-                    if not _is_warnable_for_code(code, status, level):
-                        continue  # drop advisory-only types unless explicitly a warning
+                        continue
 
                     pheno = _phenomenon_name(code, w)
                     if not pheno:
-                        continue  # skip if no valid phenomenon resolution
+                        continue
 
                     key = (area_code, pheno, level)
                     if key in dedupe:
@@ -239,10 +187,10 @@ async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
 
                     entries.append({
                         "title": f"{level} – {pheno}",
-                        "region": region_name,                    # "Pref: Region" from your map
+                        "region": region_name,
                         "type": pheno,
                         "level": level,
-                        "link": OFFICE_PAGE.format(office=office), # JMA UI page
+                        "link": OFFICE_PAGE.format(office=office),
                         "published": published_str,
                     })
 
