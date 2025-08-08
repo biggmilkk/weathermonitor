@@ -243,7 +243,7 @@ if active:
                     "<div style='height:4px;background:red;margin:8px 0;'></div>",
                     unsafe_allow_html=True,
                 )
-            (RENDERERS.get(conf["type"]) or RENDERERS["json"])(item, conf)
+            RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
 
     # Snapshot last seen timestamps or alerts
     pkey = f"{active}_pending_seen_time"
