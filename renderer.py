@@ -2,6 +2,7 @@ import streamlit as st
 from dateutil import parser as dateparser
 from collections import OrderedDict
 import time
+from datetime import timezone
 
 # ---------- Generic JSON/NWS renderer ----------
 
@@ -26,11 +27,9 @@ def render_json(item, conf):
     published = item.get('published')
     if published:
         try:
-            # Parse with dateparser to handle timezone offsets
             dt_obj = dateparser.parse(published)
             if dt_obj:
-                # Convert to UTC
-                dt_obj_utc = dt_obj.astimezone(datetime.timezone.utc)
+                dt_obj_utc = dt_obj.astimezone(timezone.utc)
                 published_str = dt_obj_utc.strftime("%a, %d %b %y %H:%M:%S UTC")
                 st.caption(f"Published: {published_str}")
             else:
@@ -39,7 +38,7 @@ def render_json(item, conf):
             st.caption(f"Published: {published}")
 
     st.markdown('---')
-
+    
 # ---------- EC renderer ----------
 
 def render_ec(item, conf):
