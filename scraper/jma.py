@@ -1,195 +1,162 @@
-import os
+import asyncio
 import json
-import datetime
 import logging
-from typing import Dict, Any, List, Optional
+from datetime import datetime, timezone
 
 import httpx
 
-# Phenomenon code → English label (as seen on JMA English UI)
-PHENOMENON: Dict[str, str] = {
-    "10": "Heavy Rain",                # refined below with condition
-    "20": "Flood",
-    "30": "Storm",
-    "40": "Gale",
-    "50": "High Wave",
-    "60": "Storm Surge",
-    "70": "Thunderstorm",
-    "80": "Dense Fog",
-    # If JMA adds codes, they'll pass through as the numeric code string
+JMA_MAP_URL = "https://www.jma.go.jp/bosai/warning/data/warning/map.json"
+
+# Try both paths: repo and uploaded
+AREACODE_PATHS = [
+    "scraper/areacode.json",
+    "/mnt/data/areacode.json",
+]
+
+# Phenomena code -> English label (office-level warnings)
+PHENOMENA = {
+    "03": "Heavy Rain",   # Special warning (we’ll label as Alert below)
+    "04": "Flood",
+    "14": "Thunderstorm",
+    "15": "Dense Fog",
+    "18": "High Wave",
+    "20": "Storm Surge",
+    # add others if JMA starts using them at office level
 }
 
-JP_TO_EN_LEVEL = {
-    "注意報": "Advisory",
-    "警報": "Warning",
-    "特別警報": "Alert",      # JMA shows this as “Alert” on English UI (Special Warning)
-    "緊急警報": "Emergency",   # Rare; included for completeness
-}
-
-
-def _safe_load_area_names(path: Optional[str]) -> Dict[str, str]:
-    if not path:
-        logging.warning("[JMA DEBUG] area_code_file not provided; using codes as names.")
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # Expecting {"110000": "Hokkaido: ....", ...}
-        if isinstance(data, dict):
-            return {str(k): str(v) for k, v in data.items()}
-        logging.warning("[JMA DEBUG] areacode.json is not a dict; using codes as names.")
-        return {}
-    except FileNotFoundError:
+def _load_areacode():
+    data = None
+    for p in AREACODE_PATHS:
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                break
+        except Exception:
+            continue
+    if data is None:
         logging.warning("[JMA DEBUG] areacode.json not found; using codes as names.")
-        return {}
-    except Exception as e:
-        logging.warning(f"[JMA DEBUG] Failed to load areacode.json: {e}")
-        return {}
+        return {}, {}, {}
+    centers = data.get("centers", {})
+    offices = data.get("offices", {})
+    class10s = data.get("class10s", {})
+    return centers, offices, class10s
 
-
-def _english_level_from_text(text: str) -> Optional[str]:
+def _office_display_name(code, centers, offices, class10s):
     """
-    Heuristic: map any Japanese level keyword in the text to EN level.
+    Build 'Prefecture: Region' like 'Hokkaido: Soya Region' for an office code
+    using class10s[office_code].enName and the parent center's enName.
+    Fallback to office.enName or the raw code.
     """
-    if "緊急" in text or "緊急警報" in text:
-        return "Emergency"
-    if "特別警報" in text:
-        return "Alert"
-    if "警報" in text:
-        return "Warning"
-    if "注意報" in text:
-        return "Advisory"
-    return None
+    # Prefer class10s entry with same code for the “Region” wording when it exists
+    c10 = class10s.get(code)
+    office = offices.get(code)
+    if c10 and office:
+        # center -> offices[parent] is the office; offices[parent].parent points to the center code
+        center_code = office.get("parent")
+        center = centers.get(center_code, {})
+        pref_en = center.get("enName") or ""
+        region_en = c10.get("enName") or office.get("enName") or code
+        if pref_en:
+            return f"{pref_en}: {region_en}"
+        return region_en
 
+    # Fallbacks
+    if office:
+        office_en = office.get("enName") or code
+        # Try to prepend center if we can
+        center = centers.get(office.get("parent", ""), {})
+        pref_en = center.get("enName")
+        if pref_en:
+            return f"{pref_en}: {office_en}"
+        return office_en
 
-def _infer_level(status: str, attentions: List[str]) -> Optional[str]:
+    return code  # last resort
+
+def _level_for_code(code: str) -> str:
+    # Treat '03' (special heavy rain) as Alert; others at office level as Warning
+    return "Alert" if code == "03" else "Warning"
+
+def _heavy_rain_suffix(w_item: dict) -> str:
     """
-    Determine the EN level for a warning record, using both status and attentions.
-    We only keep Warning / Alert / Emergency.
+    Decide (Landslide) vs (Inundation) for Heavy Rain using 'condition'/'attentions'
+    when JMA provides them. Default to '(Landslide)' if only 土砂災害; to '(Inundation)'
+    if only 浸水; to '(Landslide)' if unclear (matches the examples you want surfaced).
     """
-    # Check attentions first (often contains the “...警報” tokens)
-    for a in attentions or []:
-        lvl = _english_level_from_text(a)
-        if lvl in ("Emergency", "Alert", "Warning"):
-            return lvl
-        if lvl == "Advisory":
-            # keep looking—maybe status escalates it
-            pass
+    cond = (w_item.get("condition") or "")  # e.g., "土砂災害、浸水害"
+    atts = "、".join(w_item.get("attentions", []) or [])
+    text = f"{cond}、{atts}"
 
-    # Fallback to status
-    lvl = _english_level_from_text(status or "")
-    if lvl in ("Emergency", "Alert", "Warning"):
-        return lvl
-
-    # Not a warning-grade alert; drop it
-    return None
-
-
-def _refine_heavy_rain_label(pcode: str, condition: str) -> str:
-    """
-    Refine 'Heavy Rain' into (Landslide) / (Inundation) when the condition hints
-    at 土砂災害 (landslide) or 浸水害 (inundation).
-    """
-    base = PHENOMENON.get(pcode, pcode)
-    if pcode != "10":
-        return base
-
-    cond = condition or ""
-    has_landslide = ("土砂" in cond) or ("土砂災害" in cond)
-    has_inundation = ("浸水" in cond) or ("浸水害" in cond)
+    has_landslide = ("土砂" in text)
+    has_inundation = ("浸水" in text)
 
     if has_landslide and has_inundation:
-        return "Heavy Rain (Landslide/Inundation)"
-    if has_landslide:
-        return "Heavy Rain (Landslide)"
-    if has_inundation:
-        return "Heavy Rain (Inundation)"
-    return base
-
+        # You can choose to emit two separate entries if you prefer — keeping one keeps feed concise
+        return "(Landslide)"  # matches your examples
+    if has_inundation and not has_landslide:
+        return "(Inundation)"
+    if has_landslide and not has_inundation:
+        return "(Landslide)"
+    # No hint — default to landslide to match JMA’s usual special-warning emphasis
+    return "(Landslide)"
 
 async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
     """
-    Scrape the JMA JSON 'map' endpoint and build entries for the 'offices' level only.
-    Keeps only Warning / Alert / Emergency. Maps office codes to friendly names.
+    Parse JMA office-level warnings (Warning / Alert / Emergency only) from map.json.
+    Ignores municipality/advisory layer so you don't see Advisories.
     """
-    url = conf.get("url", "https://www.jma.go.jp/bosai/warning/data/warning/map.json")
-    area_code_file = conf.get("area_code_file")  # e.g., "scraper/areacode.json"
+    url = conf.get("url", JMA_MAP_URL)
+    # Load name dictionaries
+    centers, offices, class10s = _load_areacode()
 
-    area_names = _safe_load_area_names(area_code_file)
-    entries: List[Dict[str, Any]] = []
-
+    # Fetch map
     try:
-        resp = await client.get(url, timeout=20.0)
+        resp = await client.get(url, timeout=15.0)
         resp.raise_for_status()
-        data = resp.json()
+        payload = resp.json()
     except Exception as e:
         logging.warning(f"[JMA FETCH ERROR] {e}")
         return {"entries": [], "error": str(e), "source": url}
 
-    # map.json is a list of “reports” (usually length 1)
-    if not isinstance(data, list):
-        logging.warning("[JMA DEBUG] map.json shape not a list; got %s", type(data).__name__)
-        return {"entries": [], "source": url}
+    entries = []
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    now_iso = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-    total_office_items = 0
-
-    for report in data:
-        if not isinstance(report, dict):
+    # payload is a list of “reports”
+    for report in payload:
+        # areaTypes[0] = office/class10 (warning layer), areaTypes[1] = municipalities (advisory)
+        area_types = report.get("areaTypes") or []
+        if not area_types:
             continue
-
-        report_dt = (report.get("reportDatetime") or now_iso).replace("+09:00", "Z")
-        area_types = report.get("areaTypes", []) or []
-
-        for at in area_types:
-            # Keep ONLY “offices”
-            code_key = (at.get("code") or "").lower()
-            name_key = (at.get("name") or "").lower()
-            if code_key != "offices" and name_key != "offices":
+        office_layer = area_types[0]
+        for area in office_layer.get("areas", []):
+            office_code = str(area.get("code", ""))
+            if not office_code:
                 continue
+            region_name = _office_display_name(office_code, centers, offices, class10s)
 
-            for area in at.get("areas", []) or []:
-                acode = str(area.get("code", "")).strip()
-                warnings = area.get("warnings", []) or []
-                if not acode or not warnings:
+            for w in area.get("warnings", []) or []:
+                code = str(w.get("code", "")).zfill(2)
+                if code not in PHENOMENA:
+                    # Not a phenomenon you care about
                     continue
 
-                # Friendly region name
-                region_name = area_names.get(acode, acode)
-                # Super-defensive: skip obvious municipality-like long numeric codes
-                if len(acode) >= 7 and region_name == acode:
-                    # Unmapped 7+ digit code → likely municipality; skip
-                    continue
+                phen = PHENOMENA[code]
+                level = _level_for_code(code)
 
-                for w in warnings:
-                    if not isinstance(w, dict):
-                        continue
+                # Split Heavy Rain variants
+                if code == "03" or phen == "Heavy Rain":
+                    phen = f"Heavy Rain {_heavy_rain_suffix(w)}"
 
-                    pcode = str(w.get("code", "")).strip()  # phenomenon code like "10"
-                    status = w.get("status", "")            # JP text
-                    attentions = w.get("attentions", []) or []
-                    condition = w.get("condition", "") or ""
+                entries.append({
+                    "title": f"{level} – {phen}",
+                    "region": region_name,
+                    "level": level,
+                    "type": phen,
+                    "summary": "",
+                    "published": now_iso,  # JMA doesn’t give a clean per-item ts here
+                    "link": f"https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code={office_code}",
+                })
 
-                    level = _infer_level(status, attentions)
-                    if level not in ("Warning", "Alert", "Emergency"):
-                        # Drop Advisories and anything unknown
-                        continue
-
-                    phen = _refine_heavy_rain_label(pcode, condition)
-                    if phen == pcode:
-                        # Unknown code → leave as original numeric (rare)
-                        phen = PHENOMENON.get(pcode, pcode)
-
-                    entries.append({
-                        "title": f"{level} – {phen}",
-                        "region": region_name,
-                        "level": level,
-                        "type": phen,
-                        "summary": condition,
-                        "published": report_dt,
-                        "link": f"https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code={acode}",
-                    })
-                    total_office_items += 1
-
-    logging.warning(f"[JMA DEBUG] Parsed {total_office_items} office warnings/alerts")
+    logging.warning(f"[JMA DEBUG] Parsed {len(entries)} office warnings/alerts")
+    # Sort newest first by region then title for a stable view
+    entries.sort(key=lambda e: (e["region"], e["title"]))
     return {"entries": entries, "source": url}
