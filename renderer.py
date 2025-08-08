@@ -258,13 +258,10 @@ def _fmt_utc(ts: float) -> str:
 def render_jma_grouped(entries, conf):
     """
     Group JMA items by region and list warnings under the region header.
-    Expects each entry to have: title, region, link, published.
-    Accepts either a list[dict] or a single dict and coerces appropriately.
+    Show [NEW] in front of titles that have any entry newer than last_seen_time.
     """
     if not entries:
         return
-
-    feed_key = conf.get("key", "jma")
 
     # Coerce single dict → list[dict]
     if isinstance(entries, dict):
@@ -280,19 +277,20 @@ def render_jma_grouped(entries, conf):
         e["timestamp"] = e_ts
     entries.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    # 2) mark new vs last seen
-    last_seen = st.session_state.get(f"{feed_key}_last_seen_time") or 0.0
+    # 2) mark new vs last seen (per entry)
+    last_seen = st.session_state.get(f"{conf['key']}_last_seen_time") or 0.0
     for e in entries:
         e["is_new"] = e["timestamp"] > last_seen
 
     # 3) group by region
-    groups: OrderedDict[str, list] = OrderedDict()
+    groups = OrderedDict()
     for e in entries:
-        region = (e.get("region") or "").strip() or "(Unknown Region)"
+        region = e.get("region", "").strip() or "(Unknown Region)"
         groups.setdefault(region, []).append(e)
 
-    # 4) render each region with deduped warning titles
+    # 4) render each region with de-duped titles, but keep "new if any"
     for region, alerts in groups.items():
+        # red bar if any new in this region
         if any(a.get("is_new") for a in alerts):
             st.markdown(
                 "<div style='height:4px;background:red;margin:8px 0;'></div>",
@@ -301,31 +299,32 @@ def render_jma_grouped(entries, conf):
 
         st.markdown(f"## {region}")
 
-        # De-dupe titles preserving order
-        seen_titles = set()
-        deduped = []
+        # Build ordered mapping: title -> is_new_any
+        title_new_map = OrderedDict()
         for a in alerts:
-            t = (a.get("title") or "").strip()
-            if t and t not in seen_titles:
-                seen_titles.add(t)
-                deduped.append(t)
+            t = a.get("title", "").strip()
+            if not t:
+                continue
+            is_new_any = title_new_map.get(t, False) or bool(a.get("is_new"))
+            title_new_map[t] = is_new_any
 
-        # List warnings (plain lines)
-        for t in deduped:
-            st.markdown(t)
+        # List warnings with [NEW] where appropriate
+        for t, is_new_any in title_new_map.items():
+            prefix = "[NEW] " if is_new_any else ""
+            st.markdown(f"{prefix}{t}")
 
         # Use newest alert in this region for published/link
         newest = alerts[0]
         ts = newest.get("timestamp", 0.0)
         if ts:
-            st.caption(f"Published: {_fmt_utc(ts)}")
+            st.caption(time.strftime("%a, %d %b %y %H:%M:%S UTC", time.gmtime(ts)))
         if newest.get("link"):
             st.markdown(f"[Read more]({newest['link']})")
 
         st.markdown("---")
 
-    # 5) snapshot last seen time
-    st.session_state[f"{feed_key}_last_seen_time"] = time.time()
+    # 5) snapshot last seen time so subsequent refreshes only mark newer
+    st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
 # ---------- Renderer Registry ----------
 RENDERERS = {
