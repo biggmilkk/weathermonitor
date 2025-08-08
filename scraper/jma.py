@@ -1,170 +1,198 @@
-# scraper/jma.py
-import asyncio
-import datetime as dt
-import logging
-from typing import Dict, Any, List, Optional
-from bs4 import BeautifulSoup
+import httpx
+import datetime
+from dateutil import parser as dateparser
 
-try:
-    # playwright is optional at install time; import inside so the app still boots without it
-    from playwright.async_api import async_playwright, TimeoutError as PWTimeout
-except Exception:  # pragma: no cover
-    async_playwright = None
-    PWTimeout = Exception
+# JMA JSON feed (English names are included in this feed).
+JMA_MAP_URL = "https://www.jma.go.jp/bosai/warning/data/warning/map.json"
 
-_ALLOWED_LEVELS = ("Warning", "Emergency", "Alert")  # keep only these
-_JMA_ROOT = "https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices"
+# Keep only these levels (as shown on the English site)
+# Advisory is shown on UI but the user wants Warning/Alert/Emergency only.
+ACCEPT_LEVELS = {"Warning", "Alert", "Emergency"}
 
-async def _extract_until_for_area(page, area_url: str, timeout_ms: int = 10000) -> Optional[str]:
+# Normalize Japanese status, just in case the feed uses JP in some branches.
+JP_TO_EN_LEVEL = {
+    "注意報": "Advisory",
+    "警報": "Warning",
+    "特別警報": "Alert",  # JMA shows this as "Alert" on the English UI
+    "緊急警報": "Emergency",  # rarely used; included for completeness
+}
+
+# Phenomenon normalization: map a few known alternates to the exact UI labels.
+# (We only show the nine the user listed)
+PHENOMENON_NORMALIZE = {
+    "Heavy Rain (Inundation)": "Heavy Rain (Inundation)",
+    "Heavy Rain (Landslide)": "Heavy Rain (Landslide)",
+    "Flood": "Flood",
+    "Storm": "Storm",
+    "Gale": "Gale",
+    "High Wave": "High Wave",
+    "Storm Surge": "Storm Surge",
+    "Thunder Storm": "Thunder Storm",
+    "Thunderstorm": "Thunder Storm",  # normalize alternate spacing
+    "Dense Fog": "Dense Fog",
+}
+
+def _norm_level(level: str) -> str:
+    if not level:
+        return ""
+    level = level.strip()
+    if level in ACCEPT_LEVELS or level == "Advisory":
+        return level
+    return JP_TO_EN_LEVEL.get(level, level)
+
+def _norm_phenomenon(name: str) -> str:
+    if not name:
+        return ""
+    name = name.strip()
+    return PHENOMENON_NORMALIZE.get(name, name)
+
+def _office_link(area_code: str) -> str:
+    # Link that opens the office/region panel on the English UI
+    return f"https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code={area_code}"
+
+async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
     """
-    Navigate to a specific area page and try to extract the "active until" text, if present.
-    Returns a human-readable string or None.
+    Parse JMA warning JSON (map.json) and emit entries for Warning/Alert/Emergency.
+    Each entry is per (region, phenomenon, level), with a 'from' timestamp if present.
     """
+    url = conf.get("url", JMA_MAP_URL)
     try:
-        await page.goto(area_url, wait_until="networkidle", timeout=timeout_ms)
-        html = await page.content()
-        soup = BeautifulSoup(html, "html.parser")
+        resp = await client.get(url, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as ex:
+        # Mirror your other scrapers' failure pattern
+        return {"entries": [], "error": str(ex), "source": url}
 
-        # The English page typically includes phrasing like "… will be active until at least …"
-        # Be flexible: scan visible text blobs for "until".
-        text_chunks: List[str] = []
-        for el in soup.find_all(["p", "div", "li", "span"]):
-            t = el.get_text(" ", strip=True)
-            if not t:
+    entries = []
+    now_iso = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+    # The structure in map.json is nested. We’ll be defensive and walk it:
+    # Top-level likely has an "offices" (or similar) dict keyed by office code.
+    # Each office has a name and a list of phenomena with status and times.
+    # Because JMA occasionally tweaks field names, we probe keys safely.
+
+    # Try common containers that have office-level records
+    candidates = []
+    if isinstance(data, dict):
+        for key in ("offices", "areas", "features", "centers", "list", "items", "data"):
+            val = data.get(key)
+            if isinstance(val, dict):
+                candidates.append(val)
+            elif isinstance(val, list):
+                # Convert list of office-like objects into dict-like iteration
+                candidates.append({str(i): v for i, v in enumerate(val)})
+
+    # If nothing matched, maybe the top-level itself is office-like
+    if not candidates:
+        if isinstance(data, dict):
+            candidates = [data]
+        else:
+            candidates = []
+
+    def iter_offices(container):
+        # Yield tuples: (area_code, office_obj)
+        if isinstance(container, dict):
+            for k, v in container.items():
+                if isinstance(v, dict):
+                    yield k, v
+
+    seen = set()  # de-dup (area_code, region, phenomenon, level, from_time)
+
+    for container in candidates:
+        for area_code, office in iter_offices(container):
+            # Office/region name
+            region = (
+                office.get("name_en")
+                or office.get("nameEn")
+                or office.get("name")
+                or office.get("enName")
+                or ""
+            )
+            # Some feeds have "officeName", etc.
+            if not region and isinstance(office.get("officeName"), str):
+                region = office["officeName"]
+
+            # Find phenomena lists. Common keys to probe:
+            phen_lists = []
+            for k in ("types", "phenomena", "warnings", "items", "list"):
+                v = office.get(k)
+                if isinstance(v, list) and v:
+                    phen_lists.append(v)
+
+            if not phen_lists:
+                # Some structures nest under "details" or "statusList"
+                for k in ("details", "statusList", "entries"):
+                    v = office.get(k)
+                    if isinstance(v, list) and v:
+                        phen_lists.append(v)
+
+            if not phen_lists:
                 continue
-            if "until" in t.lower() and ("active" in t.lower() or "valid" in t.lower()):
-                text_chunks.append(t)
-        if text_chunks:
-            # pick the first plausible line
-            return text_chunks[0]
 
-        # Fallback: grab any table cell that looks like validity/period
-        for td in soup.select("table td"):
-            t = td.get_text(" ", strip=True)
-            if "until" in t.lower():
-                return t
-    except PWTimeout:
-        logging.warning("[JMA DEBUG] Timeout while opening area page: %s", area_url)
-    except Exception as e:  # be resilient, just skip the 'until'
-        logging.warning("[JMA DEBUG] Failed to parse 'until' on %s: %s", area_url, e)
-    return None
+            # Flatten one level
+            phen_items = [item for sub in phen_lists for item in (sub or []) if isinstance(sub, list)]
 
-
-async def scrape_jma_async(conf: Dict[str, Any], client=None) -> Dict[str, Any]:
-    """
-    Scrape JMA warning table (English UI).
-
-    Produces entries with:
-      - title: "<Region>: <Level> – <Phenomenon>"
-      - region
-      - level
-      - type: phenomenon
-      - until: optional "active until" string if we can find it on the area page
-      - link: area-specific URL if available else the root listing
-      - published: ISO timestamp (UTC)
-
-    Optional conf keys:
-      - fetch_until: bool (default True) — whether to open each area page to grab "until"
-      - max_regions: int (default None) — cap how many rows we enrich with "until" to keep it fast
-      - headless: bool (default True)
-      - root_url: str (debug override)
-    """
-    if async_playwright is None:
-        logging.warning("[JMA DEBUG] Playwright not available; JMA scraper disabled.")
-        return {"entries": [], "source": _JMA_ROOT}
-
-    root_url = conf.get("root_url", _JMA_ROOT)
-    fetch_until: bool = conf.get("fetch_until", True)
-    max_regions: Optional[int] = conf.get("max_regions")  # e.g., 20 to cap enrichment
-    headless: bool = conf.get("headless", True)
-
-    entries: List[Dict[str, Any]] = []
-    now_iso = dt.datetime.utcnow().isoformat() + "Z"
-
-    # Safety args for sandboxed environments
-    launch_args = {
-        "headless": headless,
-        "args": [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-        ],
-    }
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(**launch_args)
-        try:
-            page = await browser.new_page()
-            await page.goto(root_url, wait_until="networkidle", timeout=30000)
-
-            html = await page.content()
-            soup = BeautifulSoup(html, "html.parser")
-
-            # The list is a table; keep selectors generic so minor DOM tweaks don't break us
-            rows = soup.select("table tr")
-            for row in rows:
-                tds = row.find_all("td")
-                if len(tds) < 3:
+            for item in phen_items:
+                if not isinstance(item, dict):
                     continue
 
-                # Heuristic: first three columns are Region | Phenomenon | Level
-                region = tds[0].get_text(strip=True)
-                phenomenon = tds[1].get_text(strip=True)
-                level = tds[2].get_text(strip=True)
+                # Phenomenon English label
+                phenomenon = (
+                    item.get("phenomenon_en")
+                    or item.get("phenomenonEn")
+                    or item.get("name_en")
+                    or item.get("nameEn")
+                    or item.get("phenomenon")
+                    or item.get("name")
+                    or ""
+                )
+                phenomenon = _norm_phenomenon(phenomenon)
 
-                # Keep only Warning/Emergency/Alert
-                if not level or not any(l in level for l in _ALLOWED_LEVELS):
+                # Status / level
+                level = (
+                    item.get("status_en")
+                    or item.get("statusEn")
+                    or item.get("status")
+                    or ""
+                )
+                level = _norm_level(level)
+
+                if level not in ACCEPT_LEVELS:
+                    continue
+                if phenomenon not in PHENOMENON_NORMALIZE.values():
+                    # Keep only the 9 the UI shows
                     continue
 
-                # Try to get a region-specific link (so we can fetch "until")
-                area_href = None
-                a = tds[0].find("a", href=True)
-                if a:
-                    # Make absolute if needed; JMA uses hash URLs with area_code param
-                    if a["href"].startswith("http"):
-                        area_href = a["href"]
-                    else:
-                        # normalize relative/hash to absolute root
-                        area_href = "https://www.jma.go.jp" + a["href"] if a["href"].startswith("/") else _JMA_ROOT
+                # Start time (if provided)
+                start_raw = (
+                    item.get("from")
+                    or item.get("startTime")
+                    or item.get("issued")
+                    or item.get("reportDatetime")
+                    or ""
+                )
+                start_iso = ""
+                if start_raw:
+                    try:
+                        start_iso = dateparser.parse(start_raw).replace(microsecond=0).isoformat() + "Z"
+                    except Exception:
+                        start_iso = ""
+
+                key = (area_code, region, phenomenon, level, start_iso)
+                if key in seen:
+                    continue
+                seen.add(key)
 
                 entries.append({
-                    "title": f"{region}: {level} – {phenomenon}" if phenomenon else f"{region}: {level}",
-                    "region": region,
-                    "level": level,
-                    "type": phenomenon,
-                    "summary": "",
-                    "published": now_iso,
-                    "link": area_href or root_url,
-                    # placeholder, may be filled below
-                    "until": None,
+                    "title": f"{level} – {phenomenon}",
+                    "region": region or area_code,
+                    "province": "",  # unused in your renderer, but keep shape consistent
+                    "level": level,  # Alert / Warning / Emergency
+                    "type": phenomenon,  # e.g., "Heavy Rain (Landslide)"
+                    "summary": f"From {start_iso or now_iso}",
+                    "published": start_iso or now_iso,
+                    "link": _office_link(area_code),
                 })
 
-            # Optionally enrich with "until" by visiting area pages
-            if fetch_until and entries:
-                # Reuse one tab for speed
-                detail_page = await browser.new_page()
-                tasks = 0
-                for item in entries:
-                    if not item.get("link"):
-                        continue
-                    if max_regions is not None and tasks >= max_regions:
-                        break
-                    # Only try if it's an area URL with area_code
-                    if "area_code=" not in item["link"]:
-                        continue
-
-                    tasks += 1
-                    try:
-                        until_text = await _extract_until_for_area(detail_page, item["link"])
-                        if until_text:
-                            item["until"] = until_text
-                    except Exception as e:
-                        logging.warning("[JMA DEBUG] Enrich 'until' failed on %s: %s", item["link"], e)
-
-                await detail_page.close()
-
-        finally:
-            await browser.close()
-
-    logging.warning("[JMA DEBUG] Async parsed %d alerts (filtered to Warning/Alert/Emergency)", len(entries))
-    return {"entries": entries, "source": root_url}
+    return {"entries": entries, "source": url}
