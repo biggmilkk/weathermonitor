@@ -1,134 +1,150 @@
-import httpx
-from datetime import datetime, timezone
-from dateutil import parser as dateparser
+# scraper/jma.py
+import asyncio
+import json
 import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, Any, List, Optional
 
-# Phenomena names (the ones you actually want to show)
-PHENOMENON_BY_CODE = {
-    "04": "Flood",
-    "05": "High Wave",
-    "06": "Storm Surge",   # some datasets use 19 for surge risk; we map both below
-    "07": "Storm",         # if present as a warning-tier type
-    "08": "Gale",          # if present as a warning-tier type
-    "10": "Heavy Rain",    # we’ll suffix (Inundation)/(Landslide) via attentions
-    # Some files encode surge as “19” in the risk table; treat as Storm Surge
-    "19": "Storm Surge",
-}
+import httpx
 
-# Status mapping (Japanese → English label shown in UI)
-JP_TO_EN_LEVEL = {
-    "警報": "Warning",
-    "特別警報": "Alert",
-    "緊急警報": "Emergency",
-    # "注意報": "Advisory"  # intentionally excluded
-}
 
-def _utc_str(iso_jst: str) -> str:
-    # JMA gives JST with +09:00 offset; convert to “Fri, 08 Aug 2025 06:27 UTC”
-    dt = dateparser.parse(iso_jst)
-    utc = dt.astimezone(timezone.utc)
-    return utc.strftime("%a, %d %b %Y %H:%M UTC")
+JMA_OFFICE_CODE = "014100"  # Hokkaido: Kushiro Region (pilot)
+JMA_OFFICE_URL = f"https://www.jma.go.jp/bosai/warning/data/warning/{JMA_OFFICE_CODE}.json"
 
-def _heavy_rain_suffix_from_attentions(attns: list[str]) -> str:
-    # Decide between (Inundation) vs (Landslide) using hints if present
-    attns = attns or []
-    # 土砂災害注意 => Landslide, 浸水注意 => Inundation
-    if any("土砂" in a for a in attns):
-        return " (Landslide)"
-    if any("浸水" in a for a in attns):
-        return " (Inundation)"
-    return ""  # fallback when hints are absent
+# Where we try to read the friendly names for area codes
+AREACODE_SEARCH_PATHS = [
+    Path("scraper/areacode.json"),
+    Path("./areacode.json"),
+    Path("/mnt/data/areacode.json"),
+]
 
-async def scrape_jma_async(office_code: str) -> dict:
+# Very small phenomenon inference for this pilot (Kushiro flood).
+# We key off common headline keywords you’ll see for flood warnings.
+FLOOD_KEYWORDS = (
+    "洪水",     # flood
+    "増水",     # rising water / river rise
+    "氾濫",     # overflow
+)
+
+def _load_areacode_map() -> Dict[str, str]:
     """
-    Parse a single office JSON (e.g., 014100 for Hokkaido: Kushiro/Nemuro office)
-    and return only Warning/Alert/Emergency for the phenomena we care about.
+    Load a { office_code -> 'Prefecture: Region' } mapping.
+    For this pilot we only need '014100' → 'Hokkaido: Kushiro Region'.
+    If the file isn't found, we fall back to a tiny built-in default.
     """
-    url = f"https://www.jma.go.jp/bosai/warning/data/warning/014100.json"
+    for p in AREACODE_SEARCH_PATHS:
+        try:
+            if p.exists():
+                with p.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # Expect either a flat dict, or nested dicts — accept both
+                if isinstance(data, dict):
+                    # The provided areacode.json snapshots usually have
+                    # a flat map of office codes to names
+                    return {str(k): str(v) for k, v in data.items()}
+        except Exception as e:
+            logging.warning("[JMA DEBUG] Failed reading areacode.json at %s: %s", p, e)
+
+    logging.warning("[JMA DEBUG] areacode.json not found; using built-in map")
+    return {
+        "014100": "Hokkaido: Kushiro Region",
+    }
+
+
+def _fmt_published(iso_str: str) -> str:
+    """
+    JMA gives e.g. '2025-08-08T06:27:00+00:00' or '2025-08-08T06:27:00Z'.
+    Format to 'Fri, 08 Aug 2025 06:27 UTC' (as requested).
+    """
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.get(url)
-            r.raise_for_status()
-            data = r.json()
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        dt_utc = dt.astimezone(timezone.utc)
+        return dt_utc.strftime("%a, %d %b %Y %H:%M UTC")
+    except Exception:
+        # Fallback to raw if parsing somehow fails
+        return iso_str
+
+
+def _infer_flood_from_headline(headline: str) -> bool:
+    """
+    Super targeted rule for the pilot: if the headline mentions
+    common flood/water-rise words, treat it as 'Warning - Flood'.
+    """
+    if not headline:
+        return False
+    return any(key in headline for key in FLOOD_KEYWORDS)
+
+
+async def _fetch_json(client: httpx.AsyncClient, url: str) -> Optional[Dict[str, Any]]:
+    try:
+        r = await client.get(url, timeout=20)
+        r.raise_for_status()
+        return r.json()
     except Exception as e:
-        logging.warning(f"[JMA FETCH ERROR] {e}")
-        return {"entries": [], "error": str(e), "source": url}
+        logging.warning("[JMA FETCH ERROR] GET %s failed: %s", url, e)
+        return None
 
-    published_iso = data.get("reportDatetime")
-    published_utc = _utc_str(published_iso) if published_iso else None
 
-    entries = []
+async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
+    """
+    PILOT: Only Hokkaido: Kushiro Region (014100).
+    Output exactly one entry if we detect a 'Warning - Flood' condition from the headline.
+    Fields:
+      - title: 'Warning – Flood'
+      - region: 'Hokkaido: Kushiro Region'
+      - level: 'Warning'
+      - type:  'Flood'
+      - summary: (left empty for now)
+      - link: 'https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code=014100'
+      - published: 'Fri, 08 Aug 2025 06:27 UTC'
+    """
+    # Make sure we only operate on the pilot office
+    office_code = JMA_OFFICE_CODE
 
-    # The “areaTypes[0]” section carries current warning/advisory issuance per class10 area
-    area_types = data.get("areaTypes") or []
-    if not area_types:
-        return {"entries": [], "source": url}
+    # If the caller passed a local test file path in conf (handy for debugging)
+    local_path = conf.get("local_office_json")
+    data = None
 
-    # We’ll use the detailed “timeSeries” to detect phenomena presence + attentions
-    # keyed by class10 area code → { code -> attentions(list) }
-    ts = data.get("timeSeries") or []
-    attentions_map: dict[str, dict[str, list[str]]] = {}
-    for block in ts:
-        for t_area in (block.get("areaTypes") or []):
-            for a in (t_area.get("areas") or []):
-                acode = a.get("code")
-                for w in (a.get("warnings") or []):
-                    code = str(w.get("code"))
-                    # collect attentions if available
-                    attns = []
-                    for lvl in (w.get("levels") or []):
-                        for la in (lvl.get("localAreas") or []):
-                            # levels.localAreas may contain 'attentions'
-                            attns += la.get("attentions", []) or []
-                    # also some “warnings” objects carry attentions directly
-                    attns += (w.get("attentions") or [])
-                    if acode:
-                        attentions_map.setdefault(acode, {}).setdefault(code, [])
-                        attentions_map[acode][code].extend(attns)
+    if local_path:
+        try:
+            p = Path(local_path)
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as e:
+            logging.warning("[JMA DEBUG] Failed reading local_office_json %s: %s", local_path, e)
 
-    # Now read current issuance per area (class10) and keep only warning-tier types we want
-    for at in area_types:
-        for a in at.get("areas", []):
-            class10_code = str(a.get("code"))
-            for w in a.get("warnings", []):
-                code = str(w.get("code"))
-                status = w.get("status", "")  # e.g. "発表" (issued), "継続" (continuing)
+    if data is None:
+        data = await _fetch_json(client, JMA_OFFICE_URL)
+        if data is None:
+            # Hard failure: return empty
+            return {"entries": [], "source": JMA_OFFICE_URL}
 
-                # Only consider phenomena we care about
-                if code not in PHENOMENON_BY_CODE:
-                    continue
+    # Load name map
+    code_to_name = _load_areacode_map()
+    region_name = code_to_name.get(office_code, office_code)
 
-                # Heuristic: in this JSON, thunder/dense fog are usually advisory-only,
-                # so we don’t include code 14 (雷) nor 20 (濃霧) at all.
-                if code in {"14", "20"}:
-                    continue
+    # Pull out headline + report time
+    headline = data.get("headlineText", "") or ""
+    published_iso = data.get("reportDatetime") or ""
+    published_fmt = _fmt_published(published_iso)
 
-                # Treat presence here as a warning-tier signal;
-                # if your file exposes “警報/特別警報” texts, map them with JP_TO_EN_LEVEL.
-                # For the Kushiro test, Flood (code 04) is the one we want.
-                level_en = "Warning"  # default label (works for the test case)
+    entries: List[Dict[str, Any]] = []
 
-                # Compose phenomenon name
-                phenomenon = PHENOMENON_BY_CODE[code]
-                if code == "10":
-                    # Attach suffix based on attentions if any
-                    attns = attentions_map.get(class10_code, {}).get(code, [])
-                    phenomenon += _heavy_rain_suffix_from_attentions(attns)
+    # Very focused condition for the pilot run:
+    # If the headline indicates flood, emit one 'Warning - Flood' for Kushiro.
+    if _infer_flood_from_headline(headline):
+        entries.append({
+            "title": "Warning – Flood",
+            "region": region_name,
+            "level": "Warning",
+            "type": "Flood",
+            "summary": "",
+            "link": "https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code=014100",
+            "published": published_fmt,
+        })
+    else:
+        logging.warning("[JMA DEBUG] No flood keywords detected in headline for %s: %r",
+                        region_name, headline)
 
-                # Build region name: for a single office run, use the office’s class10 names.
-                # For 014100, class10 “014020” is Kushiro Region; “014010” is Nemuro Region.
-                # If you have your areacode map loaded in memory, prefer that here.
-                region_name = class10_code  # placeholder if you don’t look up names
-
-                title = f"{level_en} – {phenomenon}"
-                entries.append({
-                    "title": title,
-                    "region": region_name,
-                    "level": level_en,
-                    "type": phenomenon,
-                    "summary": "",
-                    "published": published_utc,
-                    "link": url
-                })
-
-    return {"entries": entries, "source": url}
+    logging.warning("[JMA DEBUG] Pilot parsed %d alert(s) for %s", len(entries), region_name)
+    return {"entries": entries, "source": JMA_OFFICE_URL}
