@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 set -e
 
-echo "Installing Playwright Chromium browser..."
-python -m playwright install chromium
+# Try to install Chromium only if the playwright module is importable
+python - <<'PY'
+import sys, subprocess
+try:
+    import playwright  # type: ignore
+except Exception:
+    print("playwright not installed yet; skipping browser install")
+else:
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False)
+PY
 
-# Start your Streamlit app
+# Start Streamlit
 streamlit run weathermonitor.py --server.port $PORT --server.address 0.0.0.0
-
-chmod +x startup.sh
