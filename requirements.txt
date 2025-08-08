@@ -9,6 +9,3 @@ nest_asyncio==1.6.0
 psutil==7.0.0
 pandas==2.2.3
 python-dateutil==2.9.0.post0
-
-# Headless browser for JMA scraper
-playwright>=1.54.0
