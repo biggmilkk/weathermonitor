@@ -151,7 +151,7 @@ async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
     allowed_code_to_name = _build_code_to_name(region_map)
 
     office_codes: List[str] = conf.get("office_codes", [])
-    sem = asyncio.Semaphore(8)  # limit JMA concurrency
+    sem = asyncio.Semaphore(24)  # limit JMA concurrency
 
     tasks = [
         _fetch_office_json(client, office, allowed_code_to_name, sem)
