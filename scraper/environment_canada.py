@@ -163,7 +163,7 @@ async def scrape_ec_async(sources: List[Dict[str, Any]], client: httpx.AsyncClie
     """
     try:
         entries = await _scrape_async_httpx(sources, client=client)
-        logging.warning(f"[EC DEBUG] Parsed {len(entries)} alerts (async, concurrent)")
+        logging.warning(f"[EC DEBUG] Aync parsed {len(entries)} alerts")
         return {"entries": entries, "source": "Environment Canada"}
     except Exception as e:
         logging.warning(f"[EC ERROR] Async fetch failed: {e}")
