@@ -37,16 +37,48 @@ Output shape:
     }, ...
   ]
 }
+
+Adapter for your feeds pipeline:
+  await scrape_jma_headless_feed(conf={"lang": "en"}) -> {"articles": [...], "meta": {"issued": ...}}
 """
 
-async def scrape_warning_table_headless(lang: str = "en",
-                                        url: Optional[str] = None,
-                                        headless: bool = True,
-                                        timeout_ms: int = 60000) -> Dict[str, Any]:
+
+# ------------------------------ Utilities ------------------------------
+
+def _ensure_playwright_chromium_installed() -> None:
+    """Best-effort install for Chromium in ephemeral hosts (e.g., Streamlit Cloud).
+    No-op if already installed.
+    """
+    try:
+        import subprocess, sys
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium", "--with-deps"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        # Ignore; we'll fail later with a clearer message if Chromium truly isn't available.
+        pass
+
+
+# ------------------------------ Core Scraper ------------------------------
+
+async def scrape_warning_table_headless(
+    lang: str = "en",
+    url: Optional[str] = None,
+    headless: bool = True,
+    timeout_ms: int = 60000,
+    auto_install_browser: bool = False,
+) -> Dict[str, Any]:
     """Return the rendered JMA warning table as structured data using Playwright.
 
     Requires `pip install playwright` and `playwright install chromium`.
+    If `auto_install_browser=True`, attempts a best-effort install of Chromium.
     """
+    if auto_install_browser:
+        _ensure_playwright_chromium_installed()
+
     try:
         from playwright.async_api import async_playwright
     except Exception as e:
@@ -66,11 +98,17 @@ async def scrape_warning_table_headless(lang: str = "en",
         selector_table = "div#warning-table-japan .contents-wide-table-scroll table.warning-table"
         await page.wait_for_selector(selector_table, state="visible", timeout=timeout_ms)
 
-        # Issued timestamp (best-effort)
-        issued_text = None
+        # Issued timestamp (robust: pick the header cell that contains "Issued")
+        issued_text: Optional[str] = None
         try:
-            issued_text = await page.locator("#warning-table-japan .contents-header th").nth(0).inner_text()
-            issued_text = issued_text.strip()
+            headers = await page.locator("#warning-table-japan .contents-header th").all_inner_texts()
+            for t in headers:
+                t = (t or "").strip()
+                if t.lower().startswith("issued"):
+                    issued_text = t
+                    break
+            if not issued_text and headers:
+                issued_text = (headers[-1] or "").strip()
         except Exception:
             pass
 
@@ -124,17 +162,76 @@ async def scrape_warning_table_headless(lang: str = "en",
         return {"issued": issued_text, "groups": groups}
 
 
-# Small CLI for quick checks
+# ------------------------------ Feed Adapter ------------------------------
+
+async def scrape_jma_headless_feed(conf: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Adapter that turns the headless page scrape into a list of 'articles'
+    so it plugs into the existing feeds/renderers pipeline.
+
+    Returns:
+      {
+        "articles": [
+          {
+            "title": "Kagoshima: Satsuma Region",
+            "region": "Kagoshima: Satsuma Region",
+            "area_group": "Southern Kyushu and Amami",
+            "issued": "Issued at ...",
+            "hazards": {"Heavy Rain (Inundation)": "Warning", ...},
+            "summary": "Heavy Rain (Inundation): Warning; ...",
+            "source": "JMA Warning Table (headless)",
+          }, ...
+        ],
+        "meta": {"issued": "Issued at ..."}
+      }
+    """
+    lang = (conf or {}).get("lang", "en")
+    data = await scrape_warning_table_headless(lang=lang, headless=True)
+
+    articles: List[Dict[str, Any]] = []
+    for g in data.get("groups", []):
+        area = g.get("area")
+        headers = g.get("headers", [])
+        for r in g.get("rows", []):
+            cols: Dict[str, str] = r.get("cols", {})
+            # Stable order summary using table headers
+            ordered_pairs = [(h, cols.get(h, "—")) for h in headers]
+            summary = "; ".join(f"{k}: {v}" for k, v in ordered_pairs if v and v != "—")
+            articles.append({
+                "title": r.get("region"),
+                "region": r.get("region"),
+                "area_group": area,
+                "issued": data.get("issued"),
+                "hazards": cols,
+                "summary": summary or "—",
+                "source": "JMA Warning Table (headless)",
+            })
+
+    return {"articles": articles, "meta": {"issued": data.get("issued")}}
+
+
+# ------------------------------ CLI ------------------------------
+
 if __name__ == "__main__":
     import argparse, asyncio
     parser = argparse.ArgumentParser(description="Scrape JMA warning table via Playwright headless browser")
     parser.add_argument("--lang", default="en")
     parser.add_argument("--headful", action="store_true", help="Run Chromium non-headless for debugging")
     parser.add_argument("--demo", action="store_true", help="Print Kagoshima: Satsuma Region row")
+    parser.add_argument("--feed", action="store_true", help="Print feed-adapter JSON")
+    parser.add_argument("--auto-install", action="store_true", help="Attempt a best-effort Chromium install before scraping")
     args = parser.parse_args()
 
     async def _run():
-        res = await scrape_warning_table_headless(lang=args.lang, headless=(not args.headful))
+        if args.feed:
+            res = await scrape_jma_headless_feed({"lang": args.lang})
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+            return
+
+        res = await scrape_warning_table_headless(
+            lang=args.lang,
+            headless=(not args.headful),
+            auto_install_browser=args.auto_install,
+        )
         if args.demo:
             block = next((g for g in res.get('groups', []) if g.get('area','').startswith('Southern Kyushu and Amami')), None)
             if block:
@@ -146,10 +243,10 @@ if __name__ == "__main__":
     asyncio.run(_run())
 
 
-# --- Streamlit demo helper (uses the existing async scraper) ---
+# ------------------------------ Streamlit Demo ------------------------------
 
 def run_streamlit_demo(default_area: str = "Southern Kyushu and Amami"):
-    import streamlit as st, asyncio, subprocess, sys, os
+    import streamlit as st, asyncio
     import pandas as pd
 
     st.set_page_config(page_title="JMA Warnings", layout="wide")
@@ -158,10 +255,7 @@ def run_streamlit_demo(default_area: str = "Southern Kyushu and Amami"):
     @st.cache_data(ttl=300, show_spinner=False)
     def fetch():
         # Ensure Playwright browser is available (no-op if already installed)
-        try:
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-        except Exception:
-            pass
+        _ensure_playwright_chromium_installed()
         return asyncio.run(scrape_warning_table_headless(lang="en", headless=True))
 
     data = fetch()
