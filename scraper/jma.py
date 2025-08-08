@@ -50,22 +50,14 @@ def _status_to_level(status: str) -> Optional[str]:
 
 def _is_warnable_for_code(code: str, status: str, level: str) -> bool:
     """
-    Strict rule:
-      - If Alert/Emergency -> keep.
-      - For Flood(04), Heavy Rain(10/18): allow on 発表/継続 (already mapped to 'Warning' by _status_to_level).
-      - For Thunder Storm(14), High Wave(15), Storm Surge(19), Dense Fog(20): 
-        require explicit '警報' in status (or Alert/Emergency).
+    Keep only when:
+      - level is Alert/Emergency, or
+      - status text contains '警報' (explicit warning).
+    We no longer treat plain '発表'/'継続' as Warning for any code.
     """
-    code = str(code)
     if level in ("Alert", "Emergency"):
         return True
-
-    # Codes allowed with plain 発表/継続:
-    if code in {"04", "10", "18"}:
-        return True
-
-    # Everything else needs explicit 警報 wording to count as a Warning
-    return "警報" in status
+    return "警報" in (status or "")
 
 def _utc_pub(jst_iso: str) -> str:
     """Convert '+09:00' ISO to 'Fri, 08 Aug 2025 06:27 UTC'."""
@@ -190,25 +182,17 @@ def _heavy_rain_variant_from_row(w: Dict[str, Any]) -> Optional[str]:
         return "Inundation"
     return None
 
-def _phenomenon_name(code: str, w: Dict[str, Any], ts_variants: Optional[Set[str]]) -> Optional[str]:
-    """
-    Return display name for a warning code, resolving Heavy Rain variants.
-    If we cannot resolve Heavy Rain to (Inundation/Landslide), skip it to avoid ambiguity.
-    """
+def _phenomenon_name(code: str, w: Dict[str, Any]) -> Optional[str]:
     code = str(code)
     if code == "10":
-        # Try the row, then fallback to any variant we learned from timeSeries for this area
-        v = _heavy_rain_variant_from_row(w)
-        if not v and ts_variants:
-            if "Landslide" in ts_variants:
-                v = "Landslide"
-            elif "Inundation" in ts_variants:
-                v = "Inundation"
-        if not v:
+        # Only label heavy rain if we can resolve the variant
+        variant = _heavy_rain_variant_from_warning(w) or _heavy_rain_variant_from_levels(w)
+        if not variant:
             return None
-        return f"Heavy Rain ({v})"
+        return f"Heavy Rain ({variant})"
     if code == "18":
-        return "Heavy Rain (Inundation)"
+        # Treat as Flood-type hazard, not “Heavy Rain (Inundation)”
+        return "Flood"
     return PHENOMENON.get(code)
 
 def _iter_area_blocks(doc: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
