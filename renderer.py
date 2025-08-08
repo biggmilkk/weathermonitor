@@ -129,28 +129,37 @@ def render_ec_grouped(entries, conf):
 
 # ---------- CMA renderer ----------
 
-CMA_COLORS = {'Orange':'#FF7F00','Red':'#E60026'}
+CMA_COLORS = {'Orange': '#FF7F00', 'Red': '#E60026'}
+
 def render_cma(item, conf):
-    level = item.get('level','Orange')
-    color = CMA_COLORS.get(level,'#888')
+    level = item.get('level', 'Orange')
+    color = CMA_COLORS.get(level, '#888')
+
     st.markdown(
         f"<div style='margin-bottom:8px;'>"
         f"<span style='color:{color};font-size:18px;'>&#9679;</span> "
         f"<strong>{item.get('title','')}</strong></div>",
         unsafe_allow_html=True
     )
-    region = item.get('region','')
+
+    region = item.get('region', '')
     if region:
         st.caption(f"Region: {region}")
-    st.markdown(item.get('summary',''))
+
+    st.markdown(item.get('summary', ''))
+
     link = item.get('link')
     if link:
         st.markdown(f"[Read more]({link})")
+
     published = item.get('published')
     if published:
-        st.caption(f"Published: {published}")
-    st.markdown('---')
+        # Normalize +0000 → UTC
+        published_display = published.replace('+0000', 'UTC')
+        st.caption(f"Published: {published_display}")
 
+    st.markdown('---')
+    
 # ---------- Meteoalarm renderer ----------
 
 def render_meteoalarm(item, conf):
