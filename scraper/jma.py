@@ -20,22 +20,21 @@ PHENOMENON = {
 }
 
 def _status_to_level(status: str) -> Optional[str]:
-    """Keep only Warning / Alert / Emergency. Skip advisories/clears/downgrades."""
-    if not status:
+    s = (status or "").strip()
+    if not s:
         return None
-    if "緊急" in status:                      # Emergency
+    # Highest severities first
+    if "緊急" in s:
         return "Emergency"
-    if "特別警報" in status:                   # Special warning (JMA English UI shows "Alert")
+    if "特別警報" in s:
         return "Alert"
-    if "注意報" in status:                     # Advisory → skip
+    # Anything advisory/cleared/downgraded -> skip
+    if "注意報" in s or "解除" in s or "警報から注意報" in s:
         return None
-    if "解除" in status:                       # Cleared → skip
-        return None
-    if "警報から注意報" in status:               # Downgraded to advisory → skip
-        return None
-    # Common: "発表"(issued) / "継続"(continues) / anything with "警報" → Warning
-    if "発表" in status or "継続" in status or "警報" in status:
+    # Keep only explicit warnings
+    if "警報" in s:
         return "Warning"
+    # If it's just "継続" / "発表" without 警報, skip (likely advisory continuity)
     return None
 
 def _utc_pub(jst_iso: str) -> str:
