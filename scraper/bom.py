@@ -1,4 +1,3 @@
-# scraper/bom.py
 import asyncio
 import streamlit as st
 import httpx
@@ -19,6 +18,12 @@ HEADERS = {
     "Referer": "https://www.bom.gov.au/",
 }
 
+_WHITESPACE = re.compile(r"\s+")
+
+def _clean(s: str) -> str:
+    # Collapse newlines/tabs/multiple spaces to a single space
+    return _WHITESPACE.sub(" ", s or "").strip()
+
 def _parse_feed(content: bytes, state: str) -> list[dict]:
     """
     Use feedparser to parse raw XML bytes and tag with state,
@@ -27,17 +32,23 @@ def _parse_feed(content: bytes, state: str) -> list[dict]:
     parsed = feedparser.parse(content)
     entries = []
     for e in parsed.entries:
-        title = getattr(e, "title", "").strip()
+        raw_title = getattr(e, "title", "")
+        title = _clean(raw_title)
+
         # filter out cancellations & finals
         if re.search(r"\b(cancellation|final)\b", title, re.IGNORECASE):
             continue
 
+        summary = _clean(getattr(e, "summary", ""))
+        link = _clean(getattr(e, "link", ""))  # defensive
+        published = getattr(e, "published", "").strip()
+
         entries.append({
             "state":     state,
-            "title":     title,
-            "summary":   getattr(e, "summary", "").strip(),
-            "link":      getattr(e, "link", "").strip(),
-            "published": getattr(e, "published", "").strip(),
+            "title":     title,      # single-line, safe for Markdown links
+            "summary":   summary,
+            "link":      link,
+            "published": published,
         })
     return entries
 
@@ -66,12 +77,13 @@ def scrape_bom_multi(conf: dict) -> dict:
 async def scrape_bom_multi_async(conf: dict, client: httpx.AsyncClient) -> dict:
     """
     Asynchronous fetch & parse of all BOM state feeds.
-    Fetches all state feeds concurrently with asyncio.gather (unbounded).
+    Fetches all state feeds concurrently with asyncio.gather.
     """
     urls   = conf.get("urls", [])
     states = conf.get("states", [])
     entries: list[dict] = []
 
+    # Unbounded for 7 feeds is fine; keep an opt-in cap if ever needed.
     async def fetch_one(url: str, state: str) -> list[dict]:
         try:
             resp = await client.get(
@@ -83,11 +95,13 @@ async def scrape_bom_multi_async(conf: dict, client: httpx.AsyncClient) -> dict:
             logging.warning(f"[BOM FETCH ERROR] async {state} {url}: {e}")
             return []
 
-    tasks = [fetch_one(url, state) for url, state in zip(urls, states)]
-    results = await asyncio.gather(*tasks, return_exceptions=False)
+    results = await asyncio.gather(
+        *[fetch_one(url, state) for url, state in zip(urls, states)],
+        return_exceptions=False
+    )
 
     for lst in results:
         entries.extend(lst)
 
-    logging.warning(f"[BOM DEBUG] Async parsed {len(entries)} alerts across {len(states)} states (concurrent, unbounded)")
+    logging.warning(f"[BOM DEBUG] Async parsed {len(entries)} alerts across {len(states)} states (concurrent)")
     return {"entries": entries, "source": "Australia BOM"}
