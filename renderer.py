@@ -8,20 +8,36 @@ import time
 def render_json(item, conf):
     title = item.get('title') or item.get('headline') or '(no title)'
     st.markdown(f"**{title}**")
-    region = item.get('region','')
-    province = item.get('province','')
+
+    region = item.get('region', '')
+    province = item.get('province', '')
     if region or province:
         parts = [r for r in [region, province] if r]
         st.caption(f"Region: {', '.join(parts)}")
+
     body = item.get('summary') or item.get('description') or ''
     if body:
         st.markdown(body)
+
     link = item.get('link')
     if link:
         st.markdown(f"[Read more]({link})")
+
     published = item.get('published')
     if published:
-        st.caption(f"Published: {published}")
+        try:
+            # Parse with dateparser to handle timezone offsets
+            dt_obj = dateparser.parse(published)
+            if dt_obj:
+                # Convert to UTC
+                dt_obj_utc = dt_obj.astimezone(datetime.timezone.utc)
+                published_str = dt_obj_utc.strftime("%a, %d %b %y %H:%M:%S UTC")
+                st.caption(f"Published: {published_str}")
+            else:
+                st.caption(f"Published: {published}")
+        except Exception:
+            st.caption(f"Published: {published}")
+
     st.markdown('---')
 
 # ---------- EC renderer ----------
