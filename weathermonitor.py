@@ -14,16 +14,6 @@ from computation import compute_counts
 from renderer import RENDERERS
 import httpx
 import psutil
-import os, sys, subprocess, pathlib
-
-def _ensure_playwright_chromium():
-    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.expanduser("~/.cache/ms-playwright"))
-    cache = pathlib.Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])
-    has_chromium = any(cache.glob("chromium_headless_shell-*/chrome-linux/headless_shell"))
-    if not has_chromium:
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False)
-
-_ensure_playwright_chromium()
 
 # Allow nested asyncio loops under Streamlit
 nest_asyncio.apply()
