@@ -72,8 +72,14 @@ def _validate_region_map(region_map: Dict[str, str], area_json: Optional[dict]) 
     return out
 
 
-def _office_url(office_code: str) -> str:
+def _office_json_url(office_code: str) -> str:
     return f"{JMA_WARNING_BASE}/{office_code}.json"
+
+
+def _office_frontend_url(office_code: str) -> str:
+    # Example:
+    # https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code=050000
+    return f"https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code={office_code}"
 
 
 def _parse_heavy_rain_conditions(cond_text: Optional[str]) -> List[str]:
@@ -152,9 +158,9 @@ async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
     entries: List[dict] = []
 
     for office in office_codes:
-        url = _office_url(office)
+        json_url = _office_json_url(office)
         try:
-            r = await client.get(url, timeout=25)
+            r = await client.get(json_url, timeout=25)
             r.raise_for_status()
             data = r.json()
         except Exception as e:
@@ -162,7 +168,7 @@ async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
             continue
 
         report_dt = data.get("reportDatetime") or data.get("reportDateTime") or ""
-        publishing_office = data.get("publishingOffice", "")
+        # publishing_office = data.get("publishingOffice", "")  # unused, but available
 
         # We only need the "prefecture-level" areas block: it sits in areaTypes[0]["areas"]
         # (The second block in areaTypes is municipality-level; we ignore that.)
@@ -170,6 +176,9 @@ async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
         if not area_types:
             continue
         pref_block = area_types[0]
+        # Use the human-facing frontend link for this office
+        frontend_url = _office_frontend_url(office)
+
         for area in pref_block.get("areas", []):
             code = str(area.get("code", ""))
             if code not in allowed_code_to_name:
@@ -187,12 +196,12 @@ async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
                 entries.append({
                     "title": f"Warning – {msg}",
                     "region": region_name,
-                    "summary": "",  # keep clean; message is in title
-                    "link": url,
+                    "summary": "",
+                    "link": frontend_url,  # <- human-friendly page
                     "published": report_dt,
                 })
 
-    # Sort newest first by published timestamp string (they're ISO; string sort is fine)
+    # Sort newest first by published timestamp string (ISO sorts fine as string)
     entries.sort(key=lambda x: x.get("published", ""), reverse=True)
     logging.warning(f"[JMA DEBUG] Async parsed {len(entries)} alerts")
     return {"entries": entries, "source": "JMA (office JSONs)"}
