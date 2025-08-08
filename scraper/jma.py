@@ -1,17 +1,19 @@
-# scraper/jma.py
 import json
 import logging
 from typing import Dict, List, Tuple, Optional, Set
+import asyncio
 import httpx
 
 JMA_AREA_JSON = "https://www.jma.go.jp/bosai/common/const/area.json"
 JMA_WARNING_BASE = "https://www.jma.go.jp/bosai/warning/data/warning"
 
-INCLUDE_CODES = {"03", "04"}  # Heavy Rain, Flood
+# Only show these hazards
+INCLUDE_CODES = {"03", "04"}  # 03 = Heavy Rain (split by condition), 04 = Flood
 
+# English messages
 HEAVY_RAIN_INUNDATION = "Heavy Rain (Inundation)"
-HEAVY_RAIN_LANDSLIDE = "Heavy Rain (Landslide)"
-FLOOD = "Flood"
+HEAVY_RAIN_LANDSLIDE  = "Heavy Rain (Landslide)"
+FLOOD                 = "Flood"
 
 
 def _load_region_map_from_file(path: str) -> Dict[str, str]:
@@ -39,16 +41,13 @@ def _valid_class10_codes(area_json: dict) -> Set[str]:
 def _validate_region_map(region_map: Dict[str, str], area_json: Optional[dict]) -> Dict[str, str]:
     if not area_json:
         return region_map
-    valid_codes = _valid_class10_codes(area_json)
-    out = {}
-    dropped = []
+    valid = _valid_class10_codes(area_json)
+    out: Dict[str, str] = {}
     for name, code in region_map.items():
-        if code in valid_codes:
+        if code in valid:
             out[name] = code
         else:
-            dropped.append((name, code))
-    for name, code in dropped:
-        logging.warning(f"[JMA VALIDATION] Dropping '{name}' (unknown code {code}) per area.json")
+            logging.warning(f"[JMA VALIDATION] Dropping '{name}' (unknown code {code}) per area.json")
     return out
 
 
@@ -61,7 +60,7 @@ def _office_frontend_url(office_code: str) -> str:
 
 
 def _parse_heavy_rain_conditions(cond_text: Optional[str]) -> List[str]:
-    out = []
+    out: List[str] = []
     if not cond_text:
         return out
     if "浸水" in cond_text:
@@ -72,13 +71,14 @@ def _parse_heavy_rain_conditions(cond_text: Optional[str]) -> List[str]:
 
 
 def _warnings_for_area(area_obj: dict) -> List[Tuple[str, dict]]:
-    results = []
+    results: List[Tuple[str, dict]] = []
     for w in area_obj.get("warnings", []):
         code = str(w.get("code", ""))
         if code not in INCLUDE_CODES:
             continue
         if w.get("status", "") not in ("発表", "継続"):
             continue
+
         if code == "03":
             for msg in _parse_heavy_rain_conditions(w.get("condition")):
                 results.append((msg, w))
@@ -96,6 +96,7 @@ async def _fetch_office_json(
     office: str,
     allowed_code_to_name: Dict[str, str],
 ) -> List[dict]:
+    """Fetch and parse a single office JSON; return normalized entries."""
     url = _office_json_url(office)
     try:
         r = await client.get(url, timeout=25)
@@ -111,7 +112,9 @@ async def _fetch_office_json(
         return []
 
     frontend_url = _office_frontend_url(office)
-    office_entries = []
+    entries: List[dict] = []
+
+    # Prefecture-level block is areaTypes[0]
     for area in area_types[0].get("areas", []):
         code = str(area.get("code", ""))
         if code not in allowed_code_to_name:
@@ -121,18 +124,38 @@ async def _fetch_office_json(
             continue
         region_name = allowed_code_to_name[code]
         for msg, _w in msgs:
-            office_entries.append({
-                "title": f"Warning – {msg}",
-                "region": region_name,
-                "summary": "",
-                "link": frontend_url,
+            entries.append({
+                "title":     f"Warning – {msg}",
+                "region":    region_name,
+                "summary":   "",
+                "link":      frontend_url,   # human-friendly page
                 "published": report_dt,
             })
-    return office_entries
+    return entries
 
 
 async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
+    """
+    Fetch all JMA office JSONs concurrently (unbounded) and return normalized entries.
+    Returns: {"entries": [...], "source": "..."}  <-- important for weathermonitor.py
+    """
     try:
         region_map = _load_region_map_from_file(conf["region_map_file"])
     except Exception as e:
-        logging.warni
+        logging.warning(f"[JMA] Failed to load region_map_file: {e}")
+        return {"entries": [], "error": str(e), "source": conf}
+
+    area_json = await _fetch_area_json(client)
+    region_map = _validate_region_map(region_map, area_json)
+    allowed_code_to_name = _build_code_to_name(region_map)
+
+    office_codes: List[str] = conf.get("office_codes", [])
+    tasks = [_fetch_office_json(client, office, allowed_code_to_name) for office in office_codes]
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+
+    # Flatten & sort newest first by published string (ISO-like)
+    entries = [e for sub in results for e in sub]
+    entries.sort(key=lambda x: x.get("published", ""), reverse=True)
+
+    logging.warning(f"[JMA DEBUG] Parsed {len(entries)} alerts")
+    return {"entries": entries, "source": "JMA (office JSONs)"}
