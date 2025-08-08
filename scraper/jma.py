@@ -142,8 +142,8 @@ async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
     results = await asyncio.gather(*tasks)
 
    for office_code, office_json in results:
-    if not office_json:
-        continue
+       if not office_json:
+           continue
 
     # --- Normalize office_json to a dict called "root" ---
     # Some JMA office endpoints return a list (often length 1).
