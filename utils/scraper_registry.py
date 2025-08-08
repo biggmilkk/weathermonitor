@@ -62,8 +62,7 @@ SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
 
     # Environment Canada RSS feeds
     "ec_async": ScraperEntry(
-        "environment_canada", "scrape_ec_async", loader=_load_ec_conf
-    ),
+        "environment_canada", "scrape_ec_async", loader=_load_ec_conf),
 
     # MeteoAlarm countries
     "rss_meteoalarm": ScraperEntry("meteoalarm", "scrape_meteoalarm_async"),
@@ -75,7 +74,5 @@ SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
     "rss_bom_multi": ScraperEntry("bom", "scrape_bom_multi_async"),
 
     # Japan Meteorological Agency warnings (only warning levels)
-    "rss_jma": ScraperEntry(
-        "jma", "scrape_jma_async"
-    ),
+    "rss_jma": ScraperEntry("jma", "scrape_jma_async", loader=_load_jma_conf),
 }
