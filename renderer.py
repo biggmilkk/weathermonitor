@@ -285,19 +285,15 @@ def render_bom_grouped(entries, conf):
 
 # ---------- JMA grouped renderer ----------
 
+JMA_COLORS = {'Warning': '#FF7F00', 'Emergency': '#E60026'}
+
 def _fmt_utc(ts: float) -> str:
-    # Fri, 08 Aug 25 13:09:00 UTC
     return time.strftime("%a, %d %b %y %H:%M:%S UTC", time.gmtime(ts))
 
 def render_jma_grouped(entries, conf):
-    """
-    Group JMA items by region and list warnings under the region header.
-    Show [NEW] in front of titles that have any entry newer than last_seen_time.
-    """
     if not entries:
         return
 
-    # Coerce single dict → list[dict]
     if isinstance(entries, dict):
         entries = [entries]
 
@@ -322,43 +318,46 @@ def render_jma_grouped(entries, conf):
         region = e.get("region", "").strip() or "(Unknown Region)"
         groups.setdefault(region, []).append(e)
 
-    # 4) render each region with de-duped titles, but keep "new if any"
+    # 4) render each region with deduped titles + colored bullets
     for region, alerts in groups.items():
-        # red bar if any new in this region
         if any(a.get("is_new") for a in alerts):
             st.markdown(
                 "<div style='height:4px;background:red;margin:8px 0;'></div>",
                 unsafe_allow_html=True
             )
-
         st.markdown(f"## {region}")
 
-        # Build ordered mapping: title -> is_new_any
+        # title -> is_new_any
         title_new_map = OrderedDict()
         for a in alerts:
             t = a.get("title", "").strip()
             if not t:
                 continue
-            is_new_any = title_new_map.get(t, False) or bool(a.get("is_new"))
-            title_new_map[t] = is_new_any
+            title_new_map[t] = title_new_map.get(t, False) or bool(a.get("is_new"))
 
-        # List warnings with [NEW] where appropriate
         for t, is_new_any in title_new_map.items():
+            # Color by level keyword in the title
+            level = "Emergency" if "Emergency" in t else ("Warning" if "Warning" in t else None)
+            color = JMA_COLORS.get(level, "#888")
             prefix = "[NEW] " if is_new_any else ""
-            st.markdown(f"{prefix}{t}")
+            st.markdown(
+                f"<div style='margin-bottom:4px;'>"
+                f"<span style='color:{color};font-size:16px;'>&#9679;</span> {prefix}{t}"
+                f"</div>",
+                unsafe_allow_html=True
+            )
 
-        # Use newest alert in this region for published/link
         newest = alerts[0]
         ts = newest.get("timestamp", 0.0)
         if ts:
-            st.caption(f"Published: {time.strftime('%a, %d %b %y %H:%M:%S UTC', time.gmtime(ts))}")
+            st.caption(f"Published: {_fmt_utc(ts)}")
         if newest.get("link"):
             st.markdown(f"[Read more]({newest['link']})")
 
         st.markdown("---")
 
-    # 5) snapshot last seen time so subsequent refreshes only mark newer
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
+
 
 # ---------- Renderer Registry ----------
 RENDERERS = {
