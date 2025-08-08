@@ -336,7 +336,7 @@ def render_jma_grouped(entries, conf):
         newest = alerts[0]
         ts = newest.get("timestamp", 0.0)
         if ts:
-            st.caption(time.strftime("%a, %d %b %y %H:%M:%S UTC", time.gmtime(ts)))
+            st.caption(f"Published: {time.strftime('%a, %d %b %y %H:%M:%S UTC', time.gmtime(ts))}")
         if newest.get("link"):
             st.markdown(f"[Read more]({newest['link']})")
 
