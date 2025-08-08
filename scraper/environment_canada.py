@@ -112,7 +112,7 @@ async def _scrape_async_httpx(sources: List[Dict[str, Any]], client: Optional[ht
     """
     # Sensible defaults; can be overridden by adding these keys into any source dict if needed
     timeout = 12.0
-    max_conc = 200  # EC has many feeds; keep it polite
+    max_conc = 250  # EC has many feeds; keep it polite
 
     sem = asyncio.Semaphore(max_conc)
 
