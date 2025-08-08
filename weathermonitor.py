@@ -191,21 +191,24 @@ if active:
     entries = st.session_state[f"{active}_data"]
     data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
 
+    # --- BOM ---
     if conf["type"] == "rss_bom_multi":
-        # BOM
         RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
 
+    # --- EC ---
     elif conf["type"] == "ec_async":
-        # Environment Canada: grouped & ordered renderer
         RENDERERS["ec_grouped"](entries, {**conf, "key": active})
 
+    # --- Meteoalarm ---
     elif conf["type"] == "rss_meteoalarm":
-        # MeteoAlarm rendering
         seen_ids = st.session_state[f"{active}_last_seen_alerts"]
         for country in data_list:
             for alerts in country.get("alerts", {}).values():
                 for e in alerts:
                     e["is_new"] = alert_id(e) not in seen_ids
+    # --- JMA ---
+    elif conf["type"] == "rss_jma":
+        RENDERERS["rss_jma"](entries, {**conf, "key": active})
 
         # red-bar + render
         for country in data_list:
