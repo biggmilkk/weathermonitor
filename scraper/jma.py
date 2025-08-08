@@ -141,105 +141,146 @@ async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
     tasks = [_fetch_office(client, code) for code in office_list]
     results = await asyncio.gather(*tasks)
 
-    for office_code, office_json in results:
-        if not office_json:
+   for office_code, office_json in results:
+    if not office_json:
+        continue
+
+    # --- Normalize office_json to a dict called "root" ---
+    # Some JMA office endpoints return a list (often length 1).
+    if isinstance(office_json, list):
+        if office_json and isinstance(office_json[0], dict):
+            root = office_json[0]
+        else:
+            logging.warning(f"[JMA] office {office_code} returned unexpected list shape")
+            continue
+    elif isinstance(office_json, dict):
+        root = office_json
+    else:
+        logging.warning(f"[JMA] office {office_code} returned {type(office_json)}")
+        continue
+
+    # Try to get a report/update time for this office (fallback for "From …")
+    office_updated = None
+    for key in ("reportDatetime", "reportTime", "targetDateTime", "updateTime", "publishingDatetime"):
+        val = root.get(key)
+        if isinstance(val, str):
+            try:
+                office_updated = dt.datetime.fromisoformat(val.replace("Z", "+00:00"))
+                break
+            except Exception:
+                pass
+    if office_updated is None:
+        office_updated = dt.datetime.now(dt.timezone.utc)
+
+    # Office/prefecture display name
+    office_name = (
+        root.get("officeNameEn")
+        or root.get("officeName")
+        or root.get("publishingOfficeEn")
+        or root.get("publishingOffice")
+        or ""
+    )
+
+    # Pull area/timeSeries blocks in a tolerant way
+    time_series = root.get("timeSeries")
+    if not isinstance(time_series, list):
+        # Some files embed areas at the root or under "areaTypes"
+        time_series = [root]
+
+    for block in time_series:
+        areas = []
+        if isinstance(block, dict):
+            # Try common locations for area arrays
+            if isinstance(block.get("areas"), list):
+                areas = block["areas"]
+            elif isinstance(block.get("areaTypes"), list):
+                # some shapes: areaTypes -> [{ "areas": [...] }, ...]
+                for t in block["areaTypes"]:
+                    if isinstance(t, dict) and isinstance(t.get("areas"), list):
+                        areas.extend(t["areas"])
+
+        if not areas:
             continue
 
-        # Try to get a "report/update" time for this office (fallback for "From …")
-        # Common fields seen: "reportDatetime", "reportTime", "publishingOffice" etc.
-        office_updated = None
-        for key in ("reportDatetime", "reportTime", "targetDateTime", "updateTime", "publishingDatetime"):
-            val = office_json.get(key)
-            if isinstance(val, str):
-                try:
-                    office_updated = dt.datetime.fromisoformat(val.replace("Z", "+00:00"))
-                    break
-                except Exception:
-                    pass
-        if office_updated is None:
-            office_updated = dt.datetime.now(dt.timezone.utc)
+        normalized_areas = []
+        for a in areas:
+            if not isinstance(a, dict):
+                continue
+            # Pull area name/code from a few likely keys
+            area_name = (
+                a.get("nameEn")
+                or a.get("name")
+                or (a.get("area") or {}).get("nameEn")
+                or (a.get("area") or {}).get("name")
+                or a.get("areaName")
+                or ""
+            )
+            area_code = (
+                a.get("code")
+                or a.get("areaCode")
+                or (a.get("area") or {}).get("code")
+                or ""
+            )
 
-        # Build the pretty region prefix like "Hokkaido: Soya Region"
-        # We usually have an "office name" (prefecture-level) + per-area names under it.
-        office_name = office_json.get("officeNameEn") or office_json.get("officeName") or ""
-        # some JSONs have only JP officeName; that's fine
+            # Warnings can hide under different keys
+            warnings_list = (
+                a.get("warnings")
+                or a.get("warning")
+                or a.get("warningCodes")
+                or a.get("kinds")               # some shapes use 'kinds' array with status/name
+                or []
+            )
+            normalized_areas.append({
+                "name": area_name,
+                "code": area_code,
+                "warnings": warnings_list,
+                "raw": a,
+            })
 
-        # The data tree tends to have one or more "timeSeries" blocks with areas[] each carrying warnings[]
-        time_series = office_json.get("timeSeries")
-        if not isinstance(time_series, list):
-            # fallback: some files use "areaTypes" → blocks → "areas" with warnings inline
-            time_series = [office_json]  # try to treat the root as a single block
+        for a in normalized_areas:
+            reg_label = a["name"] or ""
+            region_display = f"{office_name}: {reg_label}" if office_name and reg_label else (reg_label or office_name)
 
-        for block in time_series:
-            areas = []
-            if isinstance(block, dict):
-                areas = block.get("areas") or block.get("areaTypes") or []
-            if not isinstance(areas, list):
+            warns = a["warnings"]
+            if not isinstance(warns, list):
                 continue
 
-            # normalize areas list to iterable of dicts with name/code and warnings
-            normalized_areas = []
-            for a in areas:
-                if not isinstance(a, dict):
+            for w in warns:
+                if not isinstance(w, dict):
                     continue
-                # try typical keys
-                area_name = a.get("nameEn") or a.get("name") or a.get("areaName") or ""
-                area_code = a.get("code") or a.get("areaCode") or ""
-                warnings = a.get("warnings") or a.get("warningCodes") or a.get("warning") or []
-                normalized_areas.append({
-                    "name": area_name,
-                    "code": area_code,
-                    "warnings": warnings,
-                    "raw": a,
+
+                # Level: typical keys: status/level; sometimes under 'status' inside 'kinds'
+                level_jp = w.get("status") or w.get("level") or w.get("category") or ""
+                level_en = JP_TO_EN_LEVEL.get(level_jp, level_jp)
+                if level_en not in KEEP_LEVELS:
+                    continue
+
+                # Phenomenon: try event+kind, then name; some shapes: w["name"] = "大雨（土砂災害）"
+                event_parts = []
+                for k in ("event", "kind", "name"):
+                    v = w.get(k)
+                    if isinstance(v, str) and v:
+                        event_parts.append(v)
+                event_jp = "".join(event_parts).strip() if event_parts else ""
+                phenomenon_en = _normalize_phenomenon(event_jp)
+
+                # Start time: try the block/area warning’s timeSeries first; else office_updated
+                start_time = _best_start_time(block, office_updated)
+                published_iso = _iso_utc(start_time)
+                from_str = _fmt_from_utc(start_time)
+
+                link = f"https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code={office_code}"
+                title = f"{level_en} - {phenomenon_en} – {region_display}" if region_display else f"{level_en} - {phenomenon_en}"
+
+                entries.append({
+                    "title": title,
+                    "region": region_display or "Unknown",
+                    "level": level_en,
+                    "type": phenomenon_en,
+                    "summary": from_str,
+                    "published": published_iso,
+                    "link": link,
                 })
-
-            for a in normalized_areas:
-                reg_label = a["name"] or ""
-                # Compose "Prefecture: Region" if office_name looks like a prefecture name
-                region_display = f"{office_name}: {reg_label}" if office_name and reg_label else (reg_label or office_name)
-
-                # "warnings" can be a list of dicts, each with something like:
-                #   {"status": "警報", "event": "大雨", "kind": "土砂災害"} OR merged "event" string
-                warns = a.get("warnings") or []
-                if not isinstance(warns, list):
-                    continue
-
-                for w in warns:
-                    if not isinstance(w, dict):
-                        continue
-
-                    # Resolve level
-                    level_jp = w.get("status") or w.get("level") or ""
-                    level_en = JP_TO_EN_LEVEL.get(level_jp, level_jp)
-                    if level_en not in KEEP_LEVELS:
-                        continue
-
-                    # Resolve phenomenon
-                    # Sometimes "event" is just "大雨", and subtype is under "kind" (e.g., "土砂災害")
-                    event_jp = (w.get("event") or "") + (w.get("kind") or "")
-                    event_jp = event_jp.strip() or w.get("name") or ""
-                    phenomenon_en = _normalize_phenomenon(event_jp)
-
-                    # Pick a start time
-                    start_time = _best_start_time(w, office_updated)
-                    published_iso = _iso_utc(start_time)
-                    from_str = _fmt_from_utc(start_time)
-
-                    # Build link to the office
-                    link = f"https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code={office_code}"
-
-                    # Compose title
-                    title = f"{level_en} - {phenomenon_en} – {region_display}" if region_display else f"{level_en} - {phenomenon_en}"
-
-                    entries.append({
-                        "title": title,
-                        "region": region_display or "Unknown",
-                        "level": level_en,
-                        "type": phenomenon_en,
-                        "summary": from_str,
-                        "published": published_iso,
-                        "link": link,
-                    })
 
     # Sort newest first (by published time string)
     entries.sort(key=lambda e: e.get("published", ""), reverse=True)
