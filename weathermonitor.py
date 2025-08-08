@@ -40,15 +40,9 @@ rss  = proc.memory_info().rss
 
 # Nudge concurrency based on memory
 if rss > MEMORY_HIGH_WATER:
-    # memory too high → back off
-    st.session_state["concurrency"] = max(
-        MIN_CONC, st.session_state["concurrency"] - STEP
-    )
+    st.session_state["concurrency"] = max(MIN_CONC, st.session_state["concurrency"] - STEP)
 elif rss < MEMORY_LOW_WATER:
-    # memory comfortably low → can push it up
-    st.session_state["concurrency"] = min(
-        MAX_CONC, st.session_state["concurrency"] + STEP
-    )
+    st.session_state["concurrency"] = min(MAX_CONC, st.session_state["concurrency"] + STEP)
 
 # Use this dynamic value everywhere you used MAX_CONCURRENCY
 MAX_CONCURRENCY = st.session_state["concurrency"]
@@ -72,14 +66,13 @@ for key, conf in FEED_CONFIG.items():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
     st.session_state.setdefault(f"{key}_last_seen_time", 0.0)
-    # Keep the pending key, but we won't ever commit None
     st.session_state.setdefault(f"{key}_pending_seen_time", None)
     if conf["type"] == "rss_meteoalarm":
         st.session_state.setdefault(f"{key}_last_seen_alerts", set())
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
 
-# Unique ID for MeteoAlarm
+# Unique ID for MeteoAlarm items
 def alert_id(e):
     return f"{e['level']}|{e['type']}|{e['from']}|{e['until']}"
 
@@ -105,10 +98,7 @@ def run_async(coro):
 
 # Refresh stale feeds
 now = time.time()
-to_fetch = {
-    k: v for k, v in FEED_CONFIG.items()
-    if now - st.session_state[f"{k}_last_fetch"] > FETCH_TTL
-}
+to_fetch = {k: v for k, v in FEED_CONFIG.items() if now - st.session_state[f"{k}_last_fetch"] > FETCH_TTL}
 if to_fetch:
     results = run_async(_fetch_all_feeds(to_fetch))
     for key, raw in results:
@@ -156,9 +146,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     )
     _, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
     with cols[i]:
-        clicked = st.button(
-            conf["label"], key=f"btn_{key}_{i}", use_container_width=True
-        )
+        clicked = st.button(conf["label"], key=f"btn_{key}_{i}", use_container_width=True)
         if new_count > 0:
             st.markdown(
                 "<span style='margin-left:8px;padding:2px 6px;"
@@ -191,39 +179,38 @@ if active:
     entries = st.session_state[f"{active}_data"]
     data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
 
-    # --- BOM ---
+    # --- BOM grouped ---
     if conf["type"] == "rss_bom_multi":
         RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
 
-    # --- EC ---
+    # --- Environment Canada grouped ---
     elif conf["type"] == "ec_async":
         RENDERERS["ec_grouped"](entries, {**conf, "key": active})
 
-    # --- Meteoalarm ---
+    # --- Meteoalarm (country objects) ---
     elif conf["type"] == "rss_meteoalarm":
         seen_ids = st.session_state[f"{active}_last_seen_alerts"]
+        # Mark new vs seen
         for country in data_list:
             for alerts in country.get("alerts", {}).values():
                 for e in alerts:
                     e["is_new"] = alert_id(e) not in seen_ids
-    # --- JMA ---
-    elif conf["type"] == "rss_jma":
-        RENDERERS["rss_jma"](entries, {**conf, "key": active})
-
-        # red-bar + render
+        # Red-bar + render per country
         for country in data_list:
-            alerts_flat = [
-                e for alerts in country.get("alerts", {}).values() for e in alerts
-            ]
+            alerts_flat = [e for alerts in country.get("alerts", {}).values() for e in alerts]
             if any(e.get("is_new") for e in alerts_flat):
                 st.markdown(
                     "<div style='height:4px;background:red;margin:8px 0;'></div>",
                     unsafe_allow_html=True,
                 )
-            RENDERERS.get(conf["type"], lambda i, c: None)(country, conf)
+            RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
+
+    # --- JMA grouped (region headers with deduped warnings) ---
+    elif conf["type"] == "rss_jma":
+        RENDERERS["rss_jma"](entries, {**conf, "key": active})
 
     else:
-        # Generic rendering
+        # Generic item-per-row renderer
         seen = st.session_state.get(f"{active}_last_seen_time") or 0.0
         for item in data_list:
             pub = item.get("published")
@@ -251,9 +238,7 @@ if active:
         }
         st.session_state[f"{active}_last_seen_alerts"] = snap
     else:
-        # Only commit if we actually captured a timestamp
         if pending is not None:
             st.session_state[f"{active}_last_seen_time"] = float(pending)
 
-    # Always clear the pending key to avoid stale Nones lingering
     st.session_state.pop(pkey, None)
