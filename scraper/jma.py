@@ -1,240 +1,198 @@
-# jma.py
-# Async scraper for JMA warnings (class-10 regional layer), filtered to user-defined regions.
-# Expected in conf (merged by loader):
-#   conf["area_codes"] : contents of areacode.json (centers/offices/class10s/...)
-#   conf["weather"]    : optional (not required here)
-#   conf["region_map"] : dict[str name -> str class10_code]  # your master list of regions
-#
-# It fetches:
-#   https://www.jma.go.jp/bosai/warning/data/warning/map.json
-# then the needed office JSONs e.g.:
-#   https://www.jma.go.jp/bosai/warning/data/warning/050000.json
-
-import asyncio
+# scraper/jma.py
+import json
 import logging
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Tuple, Optional, Set
+from pathlib import Path
+
 import httpx
 
-BASE = "https://www.jma.go.jp/bosai/warning/data/warning"
-MAP_URL = f"{BASE}/map.json"
+JMA_AREA_JSON = "https://www.jma.go.jp/bosai/common/const/area.json"
+JMA_WARNING_BASE = "https://www.jma.go.jp/bosai/warning/data/warning"
 
-# Allowed JMA "code" values at class-10 layer
-ALLOWED_CODES = {"03", "04"}  # 03=Heavy Rain, 04=Flood
+# Only show these hazards
+INCLUDE_CODES = {"03", "04"}  # 03 = Heavy Rain (split by condition), 04 = Flood
+# Ignore "Thunderstorm" (14), "洪水害危険度 outlook" (18), etc.
 
-# Render labels
-LABEL_HEAVY_RAIN_LANDSLIDE = "Warning - Heavy Rain (Landslide)"
-LABEL_HEAVY_RAIN_INUNDATION = "Warning - Heavy Rain (Inundation)"
-LABEL_FLOOD = "Warning - Flood"
+# English messages we want to show
+HEAVY_RAIN_INUNDATION = "Heavy Rain (Inundation)"
+HEAVY_RAIN_LANDSLIDE = "Heavy Rain (Landslide)"
+FLOOD = "Flood"
 
-# Japanese keywords we key off for Heavy Rain conditions
-KW_LANDSLIDE = "土砂災害"
-KW_INUNDATION = "浸水害"
+# Simple, generic shape expected by the app:
+# [{"title": "...", "region": "...", "summary": "...", "link": "...", "published": "..."}]
 
-# Fallback keywords sometimes appear in attentions (less strict)
-ATTN_LANDSLIDE = "土砂"
-ATTN_INUNDATION = "浸水"
-ATTN_FLOOD = "洪水"
 
-def _codes_from_region_map(region_map: Dict[str, str]) -> Set[str]:
+def _load_region_map_from_file(path: str) -> Dict[str, str]:
+    """Load your master region map (name -> class10 code)."""
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+async def _fetch_area_json(client: httpx.AsyncClient) -> Optional[dict]:
+    """Fetch JMA area.json for optional validation."""
+    try:
+        r = await client.get(JMA_AREA_JSON, timeout=20)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logging.warning(f"[JMA VALIDATION] Could not fetch area.json: {e}")
+        return None
+
+
+def _valid_class10_codes(area_json: dict) -> Set[str]:
+    """Return the set of valid class10 codes from area.json."""
+    try:
+        class10s = area_json.get("class10s", {})
+        return set(class10s.keys())
+    except Exception:
+        return set()
+
+
+def _validate_region_map(region_map: Dict[str, str], area_json: Optional[dict]) -> Dict[str, str]:
     """
-    Return the set of class-10 codes the user cares about, taken from their master region map.
-    region_map format: { "Aomori: Tsugaru": "020010", ... }
+    Keep your names exactly as-is.
+    If area_json is available, drop any entries whose code no longer exists.
+    (We do not try to invent or rename anything.)
     """
-    return {str(v).strip() for v in (region_map or {}).values() if str(v).strip()}
+    if not area_json:
+        # No validation available; keep as-is
+        return region_map
 
-def _class10_to_display(region_map: Dict[str, str]) -> Dict[str, str]:
-    """
-    Reverse mapping: class10 code -> display name.
-    Keeps user's names as source of truth.
-    """
-    rev = {}
-    for display, code in (region_map or {}).items():
-        if code:
-            rev[str(code).strip()] = display
-    return rev
+    valid_codes = _valid_class10_codes(area_json)
+    out = {}
+    dropped = []
+    for name, code in region_map.items():
+        if code in valid_codes:
+            out[name] = code
+        else:
+            dropped.append((name, code))
+    if dropped:
+        for name, code in dropped:
+            logging.warning(f"[JMA VALIDATION] Dropping '{name}' (unknown code {code}) per area.json")
+    return out
 
-def _offices_covering_codes(area_codes: dict, target_class10: Set[str]) -> Dict[str, List[str]]:
-    """
-    Build office -> [class10 codes under that office that we care about].
-    Uses areacode.json structure (offices -> children (class10s)).
-    """
-    wanted_by_office: Dict[str, List[str]] = {}
-    offices = (area_codes or {}).get("offices", {})
-    class10s = (area_codes or {}).get("class10s", {})
 
-    # Build parent office map for class10 codes we care about
-    for code in target_class10:
-        cinfo = class10s.get(code)
-        if not cinfo:
+def _office_url(office_code: str) -> str:
+    return f"{JMA_WARNING_BASE}/{office_code}.json"
+
+
+def _parse_heavy_rain_conditions(cond_text: Optional[str]) -> List[str]:
+    """
+    cond_text examples:
+      - "土砂災害、浸水害"
+      - "土砂災害"
+      - None
+    We map:
+      - contains '浸水' -> Heavy Rain (Inundation)
+      - contains '土砂' -> Heavy Rain (Landslide)
+    If both present, return both (two entries).
+    """
+    out = []
+    if not cond_text:
+        return out
+    if "浸水" in cond_text:
+        out.append(HEAVY_RAIN_INUNDATION)
+    if "土砂" in cond_text:
+        out.append(HEAVY_RAIN_LANDSLIDE)
+    return out
+
+
+def _warnings_for_area(area_obj: dict) -> List[Tuple[str, dict]]:
+    """
+    From an 'area' item:
+      {"code":"050010", "warnings":[ {...}, {...} ]}
+    return a list of (msg, warning_dict) for included hazards.
+    """
+    results: List[Tuple[str, dict]] = []
+    for w in area_obj.get("warnings", []):
+        code = str(w.get("code", ""))
+        if code not in INCLUDE_CODES:
             continue
-        office = cinfo.get("parent")  # office code like "050000"
-        if not office:
-            continue
-        wanted_by_office.setdefault(office, []).append(code)
-    return wanted_by_office
-
-def _extract_labels_from_warning(w: dict) -> Set[str]:
-    """
-    From a single JMA warning object at class-10 level, return label set we should emit.
-    Handles:
-      - code "03": Heavy Rain -> split by condition (inundation / landslide)
-      - code "04": Flood
-    Ignores everything else.
-    """
-    labels: Set[str] = set()
-    code = str(w.get("code", "")).strip()
-
-    if code not in ALLOWED_CODES:
-        return labels
-
-    if code == "04":
-        # Flood warning
-        labels.add(LABEL_FLOOD)
-        return labels
-
-    if code == "03":
-        # Heavy Rain: split by condition; fallback to attentions
-        cond = w.get("condition", "") or ""
-        atts = w.get("attentions") or []
-
-        has_landslide = (KW_LANDSLIDE in cond) or any(ATTN_LANDSLIDE in a for a in atts)
-        has_inundation = (KW_INUNDATION in cond) or any(ATTN_INUNDATION in a for a in atts)
-
-        if has_landslide:
-            labels.add(LABEL_HEAVY_RAIN_LANDSLIDE)
-        if has_inundation:
-            labels.add(LABEL_HEAVY_RAIN_INUNDATION)
-
-        # If neither keyword found, don't emit a vague "Heavy Rain" — stay precise.
-        return labels
-
-    return labels
-
-def _parse_office_payload(payload: dict,
-                          wanted_codes: Set[str],
-                          code_to_display: Dict[str, str]) -> Tuple[List[dict], str]:
-    """
-    Given one office JSON payload, return entries list and reportDatetime string.
-    Only considers areaTypes[0].areas (class-10).
-    Produces one entry per (region, label) pair.
-    """
-    entries: List[dict] = []
-    report_dt = payload.get("reportDatetime", "")
-
-    area_types = payload.get("areaTypes") or []
-    if not area_types:
-        return entries, report_dt
-
-    # class-10 slice should be first
-    class10_block = area_types[0]
-    areas = class10_block.get("areas") or []
-
-    # Aggregate per region
-    per_region: Dict[str, Set[str]] = {}
-
-    for a in areas:
-        code = str(a.get("code", "")).strip()
-        if not code or code not in wanted_codes:
+        # Only show if status is "発表" (issued) or "継続" (continuing)
+        status = w.get("status", "")
+        if status not in ("発表", "継続"):
             continue
 
-        display = code_to_display.get(code)
-        if not display:
-            # If user didn't supply a name for this code, skip (names are master)
-            continue
+        if code == "03":  # Heavy Rain -> split by condition
+            # condition like "土砂災害、浸水害", "土砂災害", ...
+            for msg in _parse_heavy_rain_conditions(w.get("condition")):
+                results.append((msg, w))
+        elif code == "04":  # Flood
+            results.append((FLOOD, w))
+    return results
 
-        for w in (a.get("warnings") or []):
-            labels = _extract_labels_from_warning(w)
-            if not labels:
-                continue
-            per_region.setdefault(display, set()).update(labels)
 
-    # Build entries: one per (region, label)
-    for region_name, labels in per_region.items():
-        for label in sorted(labels):
-            entries.append({
-                "title": label.replace(" - ", " – "),  # typographic dash to match your UI
-                "region": region_name,
-                "summary": "",
-                "link": "",   # could deep-link to JMA if you want
-                "published": report_dt,
-            })
+def _build_code_to_name(region_map: Dict[str, str]) -> Dict[str, str]:
+    """Invert your region map: code -> name (names remain authoritative)."""
+    return {code: name for name, code in region_map.items()}
 
-    return entries, report_dt
-
-async def _fetch_json(client: httpx.AsyncClient, url: str) -> dict:
-    r = await client.get(url, timeout=20.0)
-    r.raise_for_status()
-    return r.json()
 
 async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
     """
-    Main entry — called by scraper_registry via loader that injects:
-      - conf["area_codes"] (areacode.json)
-      - conf["region_map"] (your master names -> codes)
-    Returns: {"entries": [...], "source": {...}} compatible with the app.
+    Async scraper entry point (wired in scraper_registry as 'rss_jma').
+
+    Expected in conf:
+      - office_codes: List[str] (prefecture office codes like '050000', '460100', ...)
+      - region_map_file: str (path to scraper/region_area_codes.json)
+      - optionally: area_codes (already-loaded area.json content) -> not required
     """
+    # 1) Load your master list (names -> class10 codes)
     try:
-        area_codes = conf.get("area_codes") or {}
-        region_map = conf.get("region_map") or {}
-
-        # Master list of class10 codes (from the user's region_map)
-        wanted_class10: Set[str] = _codes_from_region_map(region_map)
-        code_to_display = _class10_to_display(region_map)
-
-        if not wanted_class10:
-            # Nothing to look for
-            return {"entries": [], "source": {"map": MAP_URL, "offices": []}}
-
-        # Map which offices we need to query
-        by_office = _offices_covering_codes(area_codes, wanted_class10)
-        if not by_office:
-            return {"entries": [], "source": {"map": MAP_URL, "offices": []}}
-
-        # Use map.json to ensure the office is currently active/present
-        try:
-            map_json = await _fetch_json(client, MAP_URL)
-        except Exception as e:
-            logging.warning(f"[JMA] map.json fetch failed: {e}")
-            map_json = {}
-
-        present_offices = set(str(k) for k in (map_json or {}).keys()) if isinstance(map_json, dict) else set()
-        offices_to_fetch = [o for o in by_office.keys() if (not present_offices) or (o in present_offices)]
-
-        # Fetch all office payloads concurrently
-        async def fetch_office(office_code: str):
-            url = f"{BASE}/{office_code}.json"
-            try:
-                data = await _fetch_json(client, url)
-                return office_code, data, None
-            except Exception as ex:
-                return office_code, None, ex
-
-        results = await asyncio.gather(*[fetch_office(o) for o in offices_to_fetch])
-
-        entries: List[dict] = []
-        for office_code, payload, err in results:
-            if err or not payload:
-                logging.warning(f"[JMA] fetch {office_code} failed: {err}")
-                continue
-            # Narrow wanted codes under this office to speed filtering
-            wanted_here = set(by_office.get(office_code, []))
-            if not wanted_here:
-                continue
-            office_entries, _ = _parse_office_payload(payload, wanted_here, code_to_display)
-            entries.extend(office_entries)
-
-        # Sort newest first by published (ISO-like string compare OK here)
-        entries.sort(key=lambda x: x.get("published", ""), reverse=True)
-
-        return {
-            "entries": entries,
-            "source": {
-                "map": MAP_URL,
-                "offices": offices_to_fetch,
-                "filtered_codes": sorted(list(wanted_class10)),
-            },
-        }
-
+        region_map = _load_region_map_from_file(conf["region_map_file"])
     except Exception as e:
-        logging.warning(f"[JMA] fatal error: {e}")
-        return {"entries": [], "error": str(e), "source": {"map": MAP_URL}}
+        logging.warning(f"[JMA] Failed to load region_map_file: {e}")
+        return {"entries": [], "error": str(e), "source": conf}
+
+    # 2) Optionally validate codes against live area.json
+    area_json = await _fetch_area_json(client)
+    region_map = _validate_region_map(region_map, area_json)
+    allowed_code_to_name = _build_code_to_name(region_map)
+
+    office_codes: List[str] = conf.get("office_codes", [])
+    entries: List[dict] = []
+
+    for office in office_codes:
+        url = _office_url(office)
+        try:
+            r = await client.get(url, timeout=25)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            logging.warning(f"[JMA FETCH ERROR] {office}: {e}")
+            continue
+
+        report_dt = data.get("reportDatetime") or data.get("reportDateTime") or ""
+        publishing_office = data.get("publishingOffice", "")
+
+        # We only need the "prefecture-level" areas block: it sits in areaTypes[0]["areas"]
+        # (The second block in areaTypes is municipality-level; we ignore that.)
+        area_types = data.get("areaTypes", [])
+        if not area_types:
+            continue
+        pref_block = area_types[0]
+        for area in pref_block.get("areas", []):
+            code = str(area.get("code", ""))
+            if code not in allowed_code_to_name:
+                # Not in your interest list
+                continue
+
+            # Map warnings -> messages (split heavy rain)
+            msgs = _warnings_for_area(area)
+            if not msgs:
+                continue
+
+            region_name = allowed_code_to_name[code]
+            # One entry per (region, message) so the UI prints them on separate lines
+            for msg, _w in msgs:
+                entries.append({
+                    "title": f"Warning – {msg}",
+                    "region": region_name,
+                    "summary": "",  # keep clean; message is in title
+                    "link": url,
+                    "published": report_dt,
+                })
+
+    # Sort newest first by published timestamp string (they're ISO; string sort is fine)
+    entries.sort(key=lambda x: x.get("published", ""), reverse=True)
+    logging.warning(f"[JMA DEBUG] FINAL parsed entries={len(entries)}")
+    return {"entries": entries, "source": "JMA (office JSONs)"}
