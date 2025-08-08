@@ -3,7 +3,8 @@ from dateutil import parser as dateparser
 from collections import OrderedDict
 import time
 
-# Generic JSON/NWS renderer
+# ---------- Generic JSON/NWS renderer ----------
+
 def render_json(item, conf):
     title = item.get('title') or item.get('headline') or '(no title)'
     st.markdown(f"**{title}**")
@@ -23,8 +24,8 @@ def render_json(item, conf):
         st.caption(f"Published: {published}")
     st.markdown('---')
 
+# ---------- EC renderer ----------
 
-# Environment Canada simple per-item renderer
 def render_ec(item, conf):
     st.markdown(f"**{item.get('title','')}**")
     region = item.get('region','')
@@ -39,7 +40,6 @@ def render_ec(item, conf):
     if published:
         st.caption(f"Published: {published}")
     st.markdown('---')
-
 
 # Map 2-letter codes → full names for EC grouping
 _PROVINCE_NAMES = {
@@ -124,8 +124,8 @@ def render_ec_grouped(entries, conf):
     # 5) snapshot last seen
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
+# ---------- CMA renderer ----------
 
-# CMA China renderer
 CMA_COLORS = {'Orange':'#FF7F00','Red':'#E60026'}
 def render_cma(item, conf):
     level = item.get('level','Orange')
@@ -148,8 +148,8 @@ def render_cma(item, conf):
         st.caption(f"Published: {published}")
     st.markdown('---')
 
+# ---------- Meteoalarm renderer ----------
 
-# MeteoAlarm renderer
 def render_meteoalarm(item, conf):
     st.markdown(f"<h3 style='margin-bottom:4px'>{item.get('title','')}</h3>",
                 unsafe_allow_html=True)
@@ -182,8 +182,8 @@ def render_meteoalarm(item, conf):
         st.caption(f"Published: {published}")
     st.markdown('---')
 
+# ---------- BOM grouped renderer ----------
 
-# BOM grouped multi-state renderer
 _BOM_ORDER = [
     "NSW & ACT",
     "Northern Territory",
@@ -244,20 +244,80 @@ def render_bom_grouped(entries, conf):
     # 5) snapshot last seen
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
-# JMA
-def render_jma(item, conf):
-    st.markdown(f"**{item['title']}**")
-    if item.get("region"):
-        st.caption(f"Region: {item['region']}")
-    if item.get("until"):
-        st.caption(f"{item['until']}")
-    if item.get("link"):
-        st.markdown(f"[Read more]({item['link']})")
-    if item.get("published"):
-        st.caption(f"Published: {item['published']}")
-    st.markdown('---')
+# ---------- JMA grouped renderer ----------
 
-# Renderer registry
+def _fmt_utc(ts: float) -> str:
+    # Fri, 08 Aug 25 13:09:00 UTC
+    return time.strftime("%a, %d %b %y %H:%M:%S UTC", time.gmtime(ts))
+
+def render_jma_grouped(entries, conf):
+    """
+    Group JMA items by region and list warnings under the region header.
+    Expects each entry to have: title, region, link, published.
+    """
+    if not entries:
+        return
+
+    # 1) attach timestamps & sort newest→oldest
+    for e in entries:
+        pub = e.get("published")
+        try:
+            e_ts = dateparser.parse(pub).timestamp() if pub else 0.0
+        except Exception:
+            e_ts = 0.0
+        e["timestamp"] = e_ts
+    entries.sort(key=lambda x: x["timestamp"], reverse=True)
+
+    # 2) mark new vs last seen
+    last_seen = st.session_state.get(f"{conf['key']}_last_seen_time") or 0.0
+    for e in entries:
+        e["is_new"] = e["timestamp"] > last_seen
+
+    # 3) group by region
+    groups: OrderedDict[str, list] = OrderedDict()
+    for e in entries:
+        region = e.get("region", "").strip() or "(Unknown Region)"
+        groups.setdefault(region, []).append(e)
+
+    # 4) render each region with deduped warning titles
+    for region, alerts in groups.items():
+        # red bar if any new in this region
+        if any(a.get("is_new") for a in alerts):
+            st.markdown(
+                "<div style='height:4px;background:red;margin:8px 0;'></div>",
+                unsafe_allow_html=True
+            )
+
+        st.markdown(f"## {region}")
+
+        # De-dupe titles preserving order
+        seen_titles = set()
+        deduped = []
+        for a in alerts:
+            t = a.get("title", "").strip()
+            if t and t not in seen_titles:
+                seen_titles.add(t)
+                deduped.append(t)
+
+        # List warnings (as plain lines, no bullets)
+        for t in deduped:
+            st.markdown(t)
+
+        # Use the newest alert in this region for published/link
+        newest = alerts[0]
+        ts = newest.get("timestamp", 0.0)
+        if ts:
+            st.caption(f"Published: {_fmt_utc(ts)}")
+        if newest.get("link"):
+            st.markdown(f"[Read more]({newest['link']})")
+
+        st.markdown("---")
+
+    # 5) snapshot last seen time (so subsequent refreshes only mark newer)
+    st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
+
+
+# ---------- Renderer Registry ----------
 RENDERERS = {
     'json': render_json,
     'ec_async': render_ec,
@@ -265,5 +325,5 @@ RENDERERS = {
     'rss_cma': render_cma,
     'rss_meteoalarm': render_meteoalarm,
     'rss_bom_multi': render_bom_grouped,
-    'rss_jma': render_json,
+    'rss_jma': render_jma_grouped,
 }
