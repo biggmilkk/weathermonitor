@@ -79,17 +79,19 @@ def render_ec_grouped(entries, conf):
     """
     Grouped, ordered renderer for Environment Canada feeds.
     """
+    feed_key = conf.get("key", "ec")
+
     # 1) attach timestamps & sort
     for e in entries:
         try:
-            e_ts = dateparser.parse(e["published"]).timestamp()
-        except:
+            e_ts = dateparser.parse(e.get("published","")).timestamp()
+        except Exception:
             e_ts = 0.0
         e["timestamp"] = e_ts
     entries.sort(key=lambda x: x["timestamp"], reverse=True)
 
     # 2) mark new vs last seen
-    last_seen = st.session_state.get(f"{conf['key']}_last_seen_time") or 0.0
+    last_seen = st.session_state.get(f"{feed_key}_last_seen_time") or 0.0
     for e in entries:
         e["is_new"] = e["timestamp"] > last_seen
 
@@ -105,24 +107,25 @@ def render_ec_grouped(entries, conf):
         alerts = groups.get(prov, [])
         if not alerts:
             continue
-        if any(a["is_new"] for a in alerts):
+        if any(a.get("is_new") for a in alerts):
             st.markdown(
                 "<div style='height:4px;background:red;margin:8px 0;'></div>",
                 unsafe_allow_html=True
             )
         st.markdown(f"## {prov}")
         for a in alerts:
-            prefix = "[NEW] " if a["is_new"] else ""
-            st.markdown(f"{prefix}**{a['title']}**")
+            prefix = "[NEW] " if a.get("is_new") else ""
+            st.markdown(f"{prefix}**{a.get('title','')}**")
             if a.get("region"):
                 st.caption(f"Region: {a['region']}")
-            st.caption(f"Published: {a['published']}")
+            if a.get("published"):
+                st.caption(f"Published: {a['published']}")
             if a.get("link"):
                 st.markdown(f"[More details]({a['link']})")
         st.markdown("---")
 
     # 5) snapshot last seen
-    st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
+    st.session_state[f"{feed_key}_last_seen_time"] = time.time()
 
 # ---------- CMA renderer ----------
 
@@ -162,8 +165,8 @@ def render_meteoalarm(item, conf):
                 try:
                     dt1 = dateparser.parse(e['from']).strftime('%H:%M UTC %B %d')
                     dt2 = dateparser.parse(e['until']).strftime('%H:%M UTC %B %d')
-                except:
-                    dt1, dt2 = e['from'], e['until']
+                except Exception:
+                    dt1, dt2 = e.get('from',''), e.get('until','')
                 color = {'Orange':'#FF7F00','Red':'#E60026'}.get(
                     e.get('level',''), '#888'
                 )
@@ -198,17 +201,19 @@ def render_bom_grouped(entries, conf):
     """
     Grouped renderer for BOM multi-state feed.
     """
+    feed_key = conf.get("key", "bom")
+
     # 1) attach timestamps & sort
     for e in entries:
         try:
             e_ts = dateparser.parse(e.get("published","")).timestamp()
-        except:
+        except Exception:
             e_ts = 0.0
         e["timestamp"] = e_ts
     entries.sort(key=lambda x: x["timestamp"], reverse=True)
 
     # 2) mark new vs last seen
-    last_seen = st.session_state.get(f"{conf['key']}_last_seen_time") or 0.0
+    last_seen = st.session_state.get(f"{feed_key}_last_seen_time") or 0.0
     for e in entries:
         e["is_new"] = e["timestamp"] > last_seen
 
@@ -223,18 +228,18 @@ def render_bom_grouped(entries, conf):
         alerts = groups.get(state, [])
         if not alerts:
             continue
-        if any(a["is_new"] for a in alerts):
+        if any(a.get("is_new") for a in alerts):
             st.markdown(
                 "<div style='height:4px;background:red;margin:8px 0;'></div>",
                 unsafe_allow_html=True
             )
         st.markdown(f"## {state}")
         for a in alerts:
-            prefix = "[NEW] " if a["is_new"] else ""
+            prefix = "[NEW] " if a.get("is_new") else ""
             if a.get("link"):
-                st.markdown(f"{prefix}**[{a['title']}]({a['link']})**")
+                st.markdown(f"{prefix}**[{a.get('title','')}]({a['link']})**")
             else:
-                st.markdown(f"{prefix}**{a['title']}**")
+                st.markdown(f"{prefix}**{a.get('title','')}**")
             if a.get("summary"):
                 st.write(a["summary"])
             if a.get("published"):
@@ -242,7 +247,7 @@ def render_bom_grouped(entries, conf):
         st.markdown("---")
 
     # 5) snapshot last seen
-    st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
+    st.session_state[f"{feed_key}_last_seen_time"] = time.time()
 
 # ---------- JMA grouped renderer ----------
 
@@ -259,10 +264,10 @@ def render_jma_grouped(entries, conf):
     if not entries:
         return
 
+    feed_key = conf.get("key", "jma")
+
     # Coerce single dict → list[dict]
     if isinstance(entries, dict):
-        # If someone accidentally passed a dict (e.g., generic renderer path),
-        # turn it into a 1-element list so iteration uses dicts, not keys.
         entries = [entries]
 
     # 1) attach timestamps & sort newest→oldest
@@ -276,19 +281,18 @@ def render_jma_grouped(entries, conf):
     entries.sort(key=lambda x: x["timestamp"], reverse=True)
 
     # 2) mark new vs last seen
-    last_seen = st.session_state.get(f"{conf['key']}_last_seen_time") or 0.0
+    last_seen = st.session_state.get(f"{feed_key}_last_seen_time") or 0.0
     for e in entries:
         e["is_new"] = e["timestamp"] > last_seen
 
     # 3) group by region
     groups: OrderedDict[str, list] = OrderedDict()
     for e in entries:
-        region = e.get("region", "").strip() or "(Unknown Region)"
+        region = (e.get("region") or "").strip() or "(Unknown Region)"
         groups.setdefault(region, []).append(e)
 
     # 4) render each region with deduped warning titles
     for region, alerts in groups.items():
-        # red bar if any new in this region
         if any(a.get("is_new") for a in alerts):
             st.markdown(
                 "<div style='height:4px;background:red;margin:8px 0;'></div>",
@@ -301,16 +305,16 @@ def render_jma_grouped(entries, conf):
         seen_titles = set()
         deduped = []
         for a in alerts:
-            t = a.get("title", "").strip()
+            t = (a.get("title") or "").strip()
             if t and t not in seen_titles:
                 seen_titles.add(t)
                 deduped.append(t)
 
-        # List warnings (as plain lines, no bullets)
+        # List warnings (plain lines)
         for t in deduped:
             st.markdown(t)
 
-        # Use the newest alert in this region for published/link
+        # Use newest alert in this region for published/link
         newest = alerts[0]
         ts = newest.get("timestamp", 0.0)
         if ts:
@@ -320,9 +324,8 @@ def render_jma_grouped(entries, conf):
 
         st.markdown("---")
 
-    # 5) snapshot last seen time (so subsequent refreshes only mark newer)
-    st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
-
+    # 5) snapshot last seen time
+    st.session_state[f"{feed_key}_last_seen_time"] = time.time()
 
 # ---------- Renderer Registry ----------
 RENDERERS = {
