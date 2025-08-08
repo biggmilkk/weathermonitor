@@ -50,17 +50,22 @@ def _status_to_level(status: str) -> Optional[str]:
 
 def _is_warnable_for_code(code: str, status: str, level: str) -> bool:
     """
-    Guard so we don't mistakenly promote advisory-only phenomena.
-    - Thunder Storm (14) & Dense Fog (20) are usually advisories.
-      Keep them ONLY if the status text clearly indicates a 警報 (or Alert/Emergency).
-    - For other codes, allow if they’re in WARNABLE_CODES.
+    Strict rule:
+      - If Alert/Emergency -> keep.
+      - For Flood(04), Heavy Rain(10/18): allow on 発表/継続 (already mapped to 'Warning' by _status_to_level).
+      - For Thunder Storm(14), High Wave(15), Storm Surge(19), Dense Fog(20): 
+        require explicit '警報' in status (or Alert/Emergency).
     """
     code = str(code)
     if level in ("Alert", "Emergency"):
         return True
-    if code in ("14", "20"):
-        return "警報" in status
-    return code in WARNABLE_CODES
+
+    # Codes allowed with plain 発表/継続:
+    if code in {"04", "10", "18"}:
+        return True
+
+    # Everything else needs explicit 警報 wording to count as a Warning
+    return "警報" in status
 
 def _utc_pub(jst_iso: str) -> str:
     """Convert '+09:00' ISO to 'Fri, 08 Aug 2025 06:27 UTC'."""
