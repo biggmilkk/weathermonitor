@@ -254,9 +254,16 @@ def render_jma_grouped(entries, conf):
     """
     Group JMA items by region and list warnings under the region header.
     Expects each entry to have: title, region, link, published.
+    Accepts either a list[dict] or a single dict and coerces appropriately.
     """
     if not entries:
         return
+
+    # Coerce single dict → list[dict]
+    if isinstance(entries, dict):
+        # If someone accidentally passed a dict (e.g., generic renderer path),
+        # turn it into a 1-element list so iteration uses dicts, not keys.
+        entries = [entries]
 
     # 1) attach timestamps & sort newest→oldest
     for e in entries:
