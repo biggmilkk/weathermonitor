@@ -66,24 +66,19 @@ def scrape_bom_multi(conf: dict) -> dict:
 async def scrape_bom_multi_async(conf: dict, client: httpx.AsyncClient) -> dict:
     """
     Asynchronous fetch & parse of all BOM state feeds.
-    Fetches all state feeds concurrently with asyncio.gather.
+    Fetches all state feeds concurrently with asyncio.gather (unbounded).
     """
     urls   = conf.get("urls", [])
     states = conf.get("states", [])
     entries: list[dict] = []
 
-    # Optional internal limiter (probably overkill for 7 states, but harmless)
-    max_conc = conf.get("max_state_concurrency", 10)
-    sem = asyncio.Semaphore(max_conc)
-
     async def fetch_one(url: str, state: str) -> list[dict]:
         try:
-            async with sem:
-                resp = await client.get(
-                    url, headers=HEADERS, timeout=10, follow_redirects=True
-                )
-                resp.raise_for_status()
-                return _parse_feed(resp.content, state)
+            resp = await client.get(
+                url, headers=HEADERS, timeout=10, follow_redirects=True
+            )
+            resp.raise_for_status()
+            return _parse_feed(resp.content, state)
         except Exception as e:
             logging.warning(f"[BOM FETCH ERROR] async {state} {url}: {e}")
             return []
@@ -94,5 +89,5 @@ async def scrape_bom_multi_async(conf: dict, client: httpx.AsyncClient) -> dict:
     for lst in results:
         entries.extend(lst)
 
-    logging.warning(f"[BOM DEBUG] Async parsed {len(entries)} alerts across {len(states)} states (concurrent)")
+    logging.warning(f"[BOM DEBUG] Async parsed {len(entries)} alerts across {len(states)} states (concurrent, unbounded)")
     return {"entries": entries, "source": "Australia BOM"}
