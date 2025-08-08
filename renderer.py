@@ -84,7 +84,7 @@ def render_ec_grouped(entries, conf):
     # 1) attach timestamps & sort
     for e in entries:
         try:
-            e_ts = dateparser.parse(e.get("published","")).timestamp()
+            e_ts = dateparser.parse(e.get("published", "")).timestamp()
         except Exception:
             e_ts = 0.0
         e["timestamp"] = e_ts
@@ -119,7 +119,12 @@ def render_ec_grouped(entries, conf):
             if a.get("region"):
                 st.caption(f"Region: {a['region']}")
             if a.get("published"):
-                st.caption(f"Published: {a['published']}")
+                try:
+                    dt_obj = dateparser.parse(a['published'])
+                    published_display = dt_obj.strftime("%a, %d %b %y %H:%M:%S UTC")
+                except Exception:
+                    published_display = a['published']
+                st.caption(f"Published: {published_display}")
             if a.get("link"):
                 st.markdown(f"[More details]({a['link']})")
         st.markdown("---")
