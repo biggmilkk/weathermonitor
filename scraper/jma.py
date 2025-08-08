@@ -151,7 +151,7 @@ async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
     allowed_code_to_name = _build_code_to_name(region_map)
 
     office_codes: List[str] = conf.get("office_codes", [])
-    sem = asyncio.Semaphore(24)  # limit JMA concurrency
+    sem = asyncio.Semaphore(32)  # limit JMA concurrency
 
     tasks = [
         _fetch_office_json(client, office, allowed_code_to_name, sem)
@@ -162,5 +162,5 @@ async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
     # flatten and sort
     entries = [e for sub in results for e in sub]
     entries.sort(key=lambda x: x.get("published", ""), reverse=True)
-    logging.warning(f"[JMA DEBUG] Async parsed {len(entries)} alerts across {len(office_codes)} offices")
+    logging.warning(f"[JMA DEBUG] Parsed {len(entries)} alerts")
     return {"entries": entries, "source": "JMA (office JSONs)"}
