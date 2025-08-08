@@ -128,10 +128,10 @@ def _iter_area_blocks(doc: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
         if isinstance(areas, list):
             yield pub, areas
 
-async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
+async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]]:
     """
     conf required:
-      - office_codes: list[str] office codes (e.g., ["020000","050000","460100", ...])
+      - office_codes: list[str] (e.g., ["020000","050000","460100", ...])
       - region_map_file: path to curated region code map (either name->code or code->name)
     """
     office_codes: List[str] = conf.get("office_codes") or []
@@ -142,6 +142,18 @@ async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
         return {"entries": [], "source": "JMA offices"}
 
     code_to_name, allowed_codes = _load_region_map(region_map_path)
+
+    logging.warning(f"[JMA DEBUG] region_map_file='{region_map_path}' "
+                    f"loaded {len(code_to_name)} mappings; allowed_codes={len(allowed_codes)}")
+    # Show a few examples so we know the direction is right
+    try:
+        sample_codes = list(sorted(allowed_codes))[:10]
+        logging.warning(f"[JMA DEBUG] sample allowed codes: {sample_codes}")
+        for sc in sample_codes[:5]:
+            logging.warning(f"[JMA DEBUG] {sc} -> {code_to_name.get(sc)}")
+    except Exception:
+        pass
+
     if not allowed_codes:
         logging.warning("[JMA DEBUG] Region map empty; nothing will match.")
         return {"entries": [], "source": "JMA offices"}
@@ -152,8 +164,27 @@ async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
     for office in office_codes:
         doc = await _fetch_office(client, office)
         if not doc:
+            logging.warning(f"[JMA DEBUG] skipped office {office} (fetch failed)")
             continue
 
+        # Gather area codes present in the JSON for this office for visibility
+        present_codes: Set[str] = set()
+        total_area_rows = 0
+        for _, areas in _iter_area_blocks(doc):
+            for a in areas:
+                total_area_rows += 1
+                ac = str(a.get("code", ""))
+                if ac:
+                    present_codes.add(ac)
+
+        logging.warning(f"[JMA DEBUG] office {office}: present area rows={total_area_rows}, "
+                        f"unique area codes={len(present_codes)}")
+        # Intersection we actually try to parse
+        intersect = present_codes & allowed_codes
+        logging.warning(f"[JMA DEBUG] office {office}: intersects allowed={len(intersect)}; "
+                        f"examples={list(sorted(intersect))[:10]}")
+
+        # Now do the real parse pass
         for pub_iso, areas in _iter_area_blocks(doc):
             published_str = _utc_pub(pub_iso) or _utc_pub(doc.get("reportDatetime") or "")
 
@@ -168,12 +199,13 @@ async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
                     continue
 
                 for w in warnings:
-                    code = str(w.get("code", ""))
+                    code = str(w.get("code", "")).strip()
                     status = str(w.get("status", "") or "").strip()
 
-                    # Only keep our allowed phenomena + true warning/alert/emergency
                     level = _status_to_level(status)
                     if level is None:
+                        continue
+                    if not _is_warnable_for_code(code, status, level):
                         continue
 
                     pheno = _phenomenon_name(code, w)
@@ -194,5 +226,7 @@ async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
                         "published": published_str,
                     })
 
-    logging.warning(f"[JMA DEBUG] Parsed {len(entries)} filtered warnings/alerts")
+        logging.warning(f"[JMA DEBUG] office {office}: added so far={len(entries)}")
+
+    logging.warning(f"[JMA DEBUG] FINAL parsed entries={len(entries)}")
     return {"entries": entries, "source": "JMA offices"}
