@@ -1,13 +1,11 @@
-# scraper/jma.py
 import logging
 import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Tuple, Optional
 import httpx
 
-# ---- config ----
 MAP_URL = "https://www.jma.go.jp/bosai/warning/data/warning/map.json"
 
-# Codes to KEEP (warning-or-higher). Advisory (e.g. "10") is excluded.
+# Keep only warning-or-higher. Advisory (e.g. "10") is excluded.
 WARNING_OR_HIGHER = {"03","04","14","18","19","20","21"}
 
 PHENOMENA = {
@@ -18,22 +16,13 @@ PHENOMENA = {
     "19": "Gale",
     "20": "High Wave",
     "21": "Storm Surge",
-    # If JMA ever publishes Thunderstorm/Dense Fog as WARNING with distinct codes, add them here.
 }
 
 def _load_areacode_from_conf(conf: dict) -> Optional[Dict[str, Any]]:
-    """
-    Try to load areacode.json either from explicit conf path or default 'scraper/areacode.json'.
-    """
     import json, os
-    paths = []
-    if "area_code_file" in conf and conf["area_code_file"]:
-        paths.append(conf["area_code_file"])
-    # default fallback (your repo structure)
-    paths.append("scraper/areacode.json")
-    paths.append("areacode.json")
-
-    for p in paths:
+    for p in [conf.get("area_code_file"), "scraper/areacode.json", "areacode.json"]:
+        if not p:
+            continue
         try:
             if os.path.exists(p):
                 with open(p, "r", encoding="utf-8") as f:
@@ -43,107 +32,105 @@ def _load_areacode_from_conf(conf: dict) -> Optional[Dict[str, Any]]:
     logging.warning("[JMA DEBUG] areacode.json not found; will show raw codes.")
     return None
 
-
-def _pref_and_region_from_code(class10_code: str, ac: Dict[str, Any]) -> (str, str):
-    """
-    Given a class10 code (e.g., '014010'), return:
-      - left: Prefecture (or 'Hokkaido')
-      - right: '<... Region>' name (class10.enName)
-    """
-    # class10 node
+def _pref_and_region_from_code(class10_code: str, ac: Dict[str, Any]) -> Tuple[str, str]:
     class10 = ac.get("class10s", {}).get(class10_code, {})
     region_en = class10.get("enName", class10_code)
 
-    office_code = class10.get("parent")  # e.g., '014100' (Kushiro Nemuro) or '020000' (Aomori)
+    office_code = class10.get("parent")
     offices = ac.get("offices", {})
     centers = ac.get("centers", {})
 
-    pref_left = office_code or ""
     if office_code in offices:
         office = offices[office_code]
-        # If the center of this office is Hokkaido, we show 'Hokkaido'
-        center_code = office.get("parent")
-        center = centers.get(center_code, {}) if center_code else {}
-        center_en = center.get("enName")
-        office_en = office.get("enName", office_code)
-
-        if center_en == "Hokkaido":
-            left = "Hokkaido"
-        else:
-            # For non-Hokkaido prefectures, the office name is already the prefecture (e.g., Aomori)
-            left = office_en
+        center = centers.get(office.get("parent", ""), {})
+        # If the center of this office is Hokkaido, show "Hokkaido"
+        left = "Hokkaido" if center.get("enName") == "Hokkaido" else office.get("enName", office_code)
     else:
-        # Fallback: try to infer Hokkaido vs others by code
-        left = "Hokkaido" if class10_code.startswith("01") else office_code or "Unknown"
+        left = "Hokkaido" if class10_code.startswith("01") else "Unknown"
 
     return left, region_en
 
-
 async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
-    """
-    Parse JMA warning map JSON and emit only Warning/Alert/Emergency-level phenomena
-    with the desired naming:
-      '<Prefecture or Hokkaido>: <Region>'
-      '<Level> – <Phenomenon>'
-    """
     ac = _load_areacode_from_conf(conf)
 
     # fetch map.json
     try:
         resp = await client.get(conf.get("url", MAP_URL), timeout=20)
         resp.raise_for_status()
-        data = resp.json()
+        data = resp.json()  # list of reports
     except Exception as e:
         logging.warning(f"[JMA FETCH ERROR] {e}")
         return {"entries": [], "error": str(e), "source": conf.get("url", MAP_URL)}
 
     entries: List[Dict[str, Any]] = []
-    now_iso = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    seen_pairs: set = set()  # (class10_code, wcode)
     link = "https://www.jma.go.jp/bosai/warning/#lang=en"
 
-    # The file is a list of reports; each has areaTypes -> areas
-    # Each `areas` item has 'code' and a list of 'warnings' [{code, status, ...}]
+    # Iterate reports
     for report in data:
+        # stable published time from JMA, not "now"
+        rep_dt = report.get("reportDatetime")
+        try:
+            # Normalize to UTC Z (it’s already UTC ISO, but ensure format)
+            published_iso = (
+                datetime.datetime.fromisoformat(rep_dt.replace("Z", "+00:00"))
+                .replace(tzinfo=datetime.timezone.utc, microsecond=0)
+                .isoformat()
+                .replace("+00:00","Z")
+            ) if rep_dt else datetime.datetime.utcnow().replace(microsecond=0).isoformat()+"Z"
+        except Exception:
+            published_iso = datetime.datetime.utcnow().replace(microsecond=0).isoformat()+"Z"
+
         area_types = report.get("areaTypes", [])
+        # Find only the class10 layer
+        class10_block = None
         for at in area_types:
-            for area in at.get("areas", []):
-                area_code = str(area.get("code"))
-                for w in area.get("warnings", []):
-                    wcode = str(w.get("code"))
-                    if wcode not in WARNING_OR_HIGHER:
-                        # drop advisories and anything not in our keep-set
-                        continue
+            # Many dumps label this layer as "class10s"
+            if str(at.get("name") or at.get("type") or "").lower() == "class10s":
+                class10_block = at
+                break
+        if not class10_block:
+            continue
 
-                    phen = PHENOMENA.get(wcode)
-                    if not phen:
-                        # Unknown/unsupported warning type; skip
-                        continue
+        for area in class10_block.get("areas", []):
+            area_code = str(area.get("code", ""))
+            # Only consider class10 codes that look like 6-digit region codes and exist in our areacode map
+            if not (len(area_code) == 6 and (not ac or area_code in ac.get("class10s", {}))):
+                continue
 
-                    # Determine class10 code to label the Region exactly
-                    # map.json sometimes lists class10 codes (e.g., '014010'), sometimes municipality codes (7 digits).
-                    # We only want class10 region rows. Those are 6-digit strings and should exist in areacode.class10s.
-                    # If areacode missing, just print the raw code.
-                    if ac and len(area_code) == 6 and ac.get("class10s", {}).get(area_code):
-                        left, region = _pref_and_region_from_code(area_code, ac)
-                        region_label = f"{left}: {region}"
-                    else:
-                        # Fallback: we can't confidently format; show code
-                        region_label = area_code
+            for w in area.get("warnings", []):
+                wcode = str(w.get("code", ""))
+                if wcode not in WARNING_OR_HIGHER:
+                    continue  # drop advisories and anything else
 
-                    # Level wording: JMA English UI uses “Alert” for 特別警報; our keep-set here is all warnings-or-higher.
-                    # We don’t have a separate flag for 特別警報 in map.json sample you shared, so default to "Warning".
-                    # If you later add a separate SPECIAL set, you can flip to "Alert" as needed.
-                    level_text = "Warning"
+                if (area_code, wcode) in seen_pairs:
+                    continue  # dedupe within this refresh
+                seen_pairs.add((area_code, wcode))
 
-                    entries.append({
-                        "title": f"{level_text} – {phen}",
-                        "region": region_label,
-                        "level": level_text,
-                        "type": phen,
-                        "summary": "",
-                        "published": now_iso,   # map.json has per-report time; using 'now' keeps it simple in the UI
-                        "link": link
-                    })
+                phen = PHENOMENA.get(wcode)
+                if not phen:
+                    continue
+
+                # Label "Prefecture (or Hokkaido): Region"
+                if ac and area_code in ac.get("class10s", {}):
+                    left, region = _pref_and_region_from_code(area_code, ac)
+                    region_label = f"{left}: {region}"
+                else:
+                    region_label = area_code
+
+                # Map to a level string. We default to "Warning" because these codes are warning-or-higher.
+                # If you later want to split Special Warning as "Alert", we can add a SPECIAL set and switch here.
+                level_text = "Warning"
+
+                entries.append({
+                    "title": f"{level_text} – {phen}",
+                    "region": region_label,
+                    "level": level_text,
+                    "type": phen,
+                    "summary": "",
+                    "published": published_iso,  # stable per JMA report
+                    "link": link,
+                })
 
     logging.warning(f"[JMA DEBUG] Parsed {len(entries)} office warnings/alerts")
     return {"entries": entries, "source": conf.get("url", MAP_URL)}
