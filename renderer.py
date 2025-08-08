@@ -165,19 +165,21 @@ def render_cma(item, conf):
 def render_meteoalarm(item, conf):
     st.markdown(f"<h3 style='margin-bottom:4px'>{item.get('title','')}</h3>",
                 unsafe_allow_html=True)
-    for day in ['today','tomorrow']:
+    for day in ['today', 'tomorrow']:
         alerts = item.get('alerts', {}).get(day, [])
         if alerts:
             st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>",
                         unsafe_allow_html=True)
             for e in alerts:
                 try:
-                    dt1 = dateparser.parse(e['from']).strftime('%H:%M UTC %B %d')
-                    dt2 = dateparser.parse(e['until']).strftime('%H:%M UTC %B %d')
+                    # Format: Aug 07 22:00 UTC
+                    dt1 = dateparser.parse(e['from']).strftime('%b %d %H:%M UTC')
+                    dt2 = dateparser.parse(e['until']).strftime('%b %d %H:%M UTC')
                 except Exception:
-                    dt1, dt2 = e.get('from',''), e.get('until','')
-                color = {'Orange':'#FF7F00','Red':'#E60026'}.get(
-                    e.get('level',''), '#888'
+                    dt1, dt2 = e.get('from', ''), e.get('until', '')
+
+                color = {'Orange': '#FF7F00', 'Red': '#E60026'}.get(
+                    e.get('level', ''), '#888'
                 )
                 prefix = '[NEW] ' if e.get('is_new') else ''
                 text = f"{prefix}[{e.get('level','')}] {e.get('type','')} – {dt1} to {dt2}"
@@ -189,9 +191,12 @@ def render_meteoalarm(item, conf):
     link = item.get('link')
     if link:
         st.markdown(f"[Read more]({link})")
+
     published = item.get('published')
     if published:
-        st.caption(f"Published: {published}")
+        published_display = published.replace('+0000', 'UTC')
+        st.caption(f"Published: {published_display}")
+
     st.markdown('---')
 
 # ---------- BOM grouped renderer ----------
