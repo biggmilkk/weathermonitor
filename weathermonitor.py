@@ -14,6 +14,11 @@ from computation import compute_counts
 from renderer import RENDERERS
 import httpx
 import psutil
+import subprocess, os, shutil
+
+if shutil.which("playwright"):
+    # Install Chromium browser if not already there (no --with-deps on Streamlit Cloud)
+    subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=False)
 
 # Allow nested asyncio loops under Streamlit
 nest_asyncio.apply()
