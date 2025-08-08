@@ -44,7 +44,7 @@ async def scrape_jma_office_async(office_code: str) -> dict:
     Parse a single office JSON (e.g., 014100 for Hokkaido: Kushiro/Nemuro office)
     and return only Warning/Alert/Emergency for the phenomena we care about.
     """
-    url = f"https://www.jma.go.jp/bosai/warning/data/warning/{office_code}.json"
+    url = f"https://www.jma.go.jp/bosai/warning/data/warning/014100.json"
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.get(url)
