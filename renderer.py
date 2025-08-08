@@ -265,5 +265,5 @@ RENDERERS = {
     'rss_cma': render_cma,
     'rss_meteoalarm': render_meteoalarm,
     'rss_bom_multi': render_bom_grouped,
-    'rss_jma': render_jma,
+    'rss_jma': render_json,
 }
