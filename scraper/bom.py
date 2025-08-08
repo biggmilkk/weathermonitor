@@ -25,27 +25,27 @@ def _clean(s: str) -> str:
     return _WHITESPACE.sub(" ", s or "").strip()
 
 def _parse_feed(content: bytes, state: str) -> list[dict]:
-    """
-    Use feedparser to parse raw XML bytes and tag with state,
-    skipping “Cancellation” or “Final” warnings.
-    """
     parsed = feedparser.parse(content)
     entries = []
     for e in parsed.entries:
         raw_title = getattr(e, "title", "")
         title = _clean(raw_title)
 
-        # filter out cancellations & finals
         if re.search(r"\b(cancellation|final)\b", title, re.IGNORECASE):
             continue
 
         summary = _clean(getattr(e, "summary", ""))
-        link = _clean(getattr(e, "link", ""))  # defensive
-        published = getattr(e, "published", "").strip()
+        link = _clean(getattr(e, "link", ""))
+
+        published_raw = getattr(e, "published", "").strip()
+        if published_raw.endswith("GMT"):
+            published = published_raw[:-3] + "UTC"
+        else:
+            published = published_raw
 
         entries.append({
             "state":     state,
-            "title":     title,      # single-line, safe for Markdown links
+            "title":     title,
             "summary":   summary,
             "link":      link,
             "published": published,
