@@ -1,296 +1,271 @@
-# scraper/jma.py
 import json
 import logging
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Tuple
 from datetime import datetime, timezone
+from dateutil import parser as dateparser
+
 import httpx
 
-OFFICE_JSON = "https://www.jma.go.jp/bosai/warning/data/warning/{office}.json"
-OFFICE_PAGE = "https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code={office}"
+# ---- Constants -------------------------------------------------------------
 
-# Human-readable phenomenon names (base)
-PHENOMENON = {
-    "04": "Flood",
-    "10": "Heavy Rain",               # will expand to (Inundation/Landslide)
-    "14": "Thunder Storm",
-    "15": "High Wave",
-    "19": "Storm Surge",
-    "20": "Dense Fog",
-    # Occasionally seen as an explicit inundation hazard in some offices:
-    "18": "Heavy Rain (Inundation)",
+JMA_AREA_JSON = "https://www.jma.go.jp/bosai/common/const/area.json"
+JMA_OFFICE_AREA_JSON = "https://www.jma.go.jp/bosai/warning/data/warning/{office}.json"
+JMA_LINK_FOR_AREA = "https://www.jma.go.jp/bosai/warning/#area_type=class10s&area_code={code}"
+
+# Default minimal weather code mapping (can be overridden by conf["weather"])
+DEFAULT_WEATHER_MAP = {
+    "10": "Heavy Rain (Landslide)",    # 土砂災害
+    "14": "Thunderstorm",              # 雷
+    "18": "Flood",                     # 洪水
+    "19": "Storm Surge",               # 高潮
+    "20": "Dense Fog",                 # 濃霧
+    # Add more if you wish
 }
 
-# Codes that are typically warnable (not just advisory-only),
-# used alongside the status text to decide if 継続/発表 should count as Warning.
-WARNABLE_CODES = {"04", "10", "15", "18", "19"}  # 14/20 usually advisory unless explicitly 警報
+# Status strings in JMA JSON
+STATUS_ACTIVE = {"発表", "継続"}   # issue/continue
+STATUS_CANCEL = {"解除"}          # cancel
 
-def _status_to_level(status: str) -> Optional[str]:
-    """
-    Map JMA status (JP) to the levels we keep.
-    - 緊急... => Emergency
-    - 特別警報 => Alert
-    - 注意報 / 解除 / 警報から注意報 => drop
-    - 発表 / 継続 / (contains 警報) => Warning
-    """
-    if not status:
-        return None
-    if "緊急" in status:
-        return "Emergency"
-    if "特別警報" in status:
-        return "Alert"
-    if "注意報" in status:
-        return None
-    if "解除" in status:
-        return None
-    if "警報から注意報" in status:
-        return None
-    if "発表" in status or "継続" in status or "警報" in status:
-        return "Warning"
-    return None
+# ---- Helpers --------------------------------------------------------------
 
-def _is_warnable_for_code(code: str, status: str, level: str) -> bool:
+def _read_local_region_map(conf: dict) -> Dict[str, str]:
     """
-    Keep only when:
-      - level is Alert/Emergency, or
-      - status text contains '警報' (explicit warning).
-    We no longer treat plain '発表'/'継続' as Warning for any code.
+    Read your static display-name -> code mapping file if provided.
+    Keys (names) are your source of truth.
     """
-    if level in ("Alert", "Emergency"):
-        return True
-    return "警報" in (status or "")
-
-def _utc_pub(jst_iso: str) -> str:
-    """Convert '+09:00' ISO to 'Fri, 08 Aug 2025 06:27 UTC'."""
-    if not jst_iso:
-        return ""
+    path = conf.get("region_map_file")
+    if not path:
+        return {}
     try:
-        dt = datetime.fromisoformat(jst_iso)
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("region_map_file JSON must be an object of {name: code}")
+        return data
+    except Exception as e:
+        logging.warning("[JMA] Failed to read region_map_file '%s': %s", path, e)
+        return {}
+
+
+def _build_live_region_map(area_json: dict) -> Dict[str, str]:
+    """
+    Build a display-name -> class10 code mapping from live area.json
+    to match your local naming style:
+      - Most: "Prefecture: Region"
+      - Special (single-bucket prefectures like Osaka/Kagawa): "Osaka Prefecture"
+    """
+    offices = area_json.get("offices", {})
+    class10s = area_json.get("class10s", {})
+    live_map: Dict[str, str] = {}
+
+    for office_code, office in offices.items():
+        en_office = office.get("enName") or office.get("name") or ""
+        children = office.get("children") or []
+
+        # Some prefectures (e.g., 270000 Osaka, 370000 Kagawa) have a single class10 node equal to office
+        is_single_bucket = (len(children) == 1 and children[0] == office_code)
+
+        if is_single_bucket:
+            # Use "Osaka Prefecture", "Kagawa Prefecture", etc.
+            if en_office:
+                live_map[en_office] = office_code
+            continue
+
+        for c10_code in children:
+            c10 = class10s.get(c10_code, {})
+            en_region = c10.get("enName") or c10.get("name") or ""
+            if not en_office or not en_region:
+                continue
+            display = f"{en_office}: {en_region}"
+            live_map[display] = c10_code
+
+    return live_map
+
+
+def _reconcile_region_codes(local_map: Dict[str, str], live_map: Dict[str, str]) -> Tuple[Dict[str, str], List[Tuple[str, str, str]], List[str], List[str]]:
+    """
+    Keep *exactly* the keys from local_map (your display names).
+    For each key, use the live code if present; otherwise keep the local code.
+    Returns (result_map, changed_pairs, missing_in_live, missing_locally_but_present_live)
+    """
+    result = {}
+    changed: List[Tuple[str, str, str]] = []
+    missing_in_live: List[str] = []
+
+    for name, local_code in local_map.items():
+        live_code = live_map.get(name)
+        if live_code:
+            result[name] = live_code
+            if live_code != local_code:
+                changed.append((name, local_code, live_code))
+        else:
+            # Keep your code, but note mismatch
+            result[name] = local_code
+            missing_in_live.append(name)
+
+    # (Optional) what live knows that you don't track (just for visibility)
+    missing_locally = sorted(set(live_map.keys()) - set(local_map.keys()))
+    return result, changed, missing_in_live, missing_locally
+
+
+def _invert_map(m: Dict[str, str]) -> Dict[str, str]:
+    """Invert {name: code} -> {code: name} (last in wins if duplicates)."""
+    return {v: k for k, v in m.items()}
+
+
+def _fmt_utc(dt_s: str) -> str:
+    """
+    Convert JMA local datetime string (ISO with +09:00) to a friendly UTC stamp like:
+    'Fri, 08 Aug 2025 11:58 UTC'
+    If parsing fails, return the original string.
+    """
+    try:
+        dt = dateparser.parse(dt_s)
+        if not dt.tzinfo:
+            # Assume JST if tz missing
+            dt = dt.replace(tzinfo=timezone.utc)
         dt_utc = dt.astimezone(timezone.utc)
         return dt_utc.strftime("%a, %d %b %Y %H:%M UTC")
     except Exception:
-        try:
-            dt = datetime.fromisoformat(jst_iso.replace("Z", "+00:00"))
-            dt_utc = dt.astimezone(timezone.utc)
-            return dt_utc.strftime("%a, %d %b %Y %H:%M UTC")
-        except Exception:
-            return jst_iso
+        return dt_s
 
-def _load_region_map(path: str) -> Tuple[Dict[str, str], Set[str]]:
+
+def _hazard_title(code: str, weather_map: Dict[str, str]) -> str:
+    return weather_map.get(code, f"Code {code}")
+
+
+def _collect_active_area_warnings(area_obj: dict) -> List[Tuple[str, str]]:
     """
-    Load your curated region map.
-    Supports either:
-      { "Hokkaido: Kushiro Region": "014010", ... }  (name -> code)
-    or
-      { "014010": "Hokkaido: Kushiro Region", ... }  (code -> name)
-    Returns:
-      code_to_name, allowed_codes
+    From an 'area' block, return list of (hazard_code, status) where status is active.
+    Structure example:
+      {"code":"280010","warnings":[{"code":"14","status":"継続"}, ...]}
     """
+    out: List[Tuple[str, str]] = []
+    for w in area_obj.get("warnings", []) or []:
+        code = str(w.get("code", "")).strip()
+        status = (w.get("status") or "").strip()
+        if status in STATUS_ACTIVE:
+            out.append((code, status))
+    return out
+
+
+# ---- Main async scraper ----------------------------------------------------
+
+async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
+    """
+    Fetches JMA warnings per office and returns generic entries for your UI.
+    Respects your region display names as the master list; only codes are reconciled.
+    """
+    # 1) Load weather map (overrides default if provided via loader)
+    weather_map = dict(DEFAULT_WEATHER_MAP)
+    if isinstance(conf.get("weather"), dict):
+        weather_map.update({str(k): v for k, v in conf["weather"].items()})
+
+    # 2) Read your local (display-name -> code) mapping
+    local_map = _read_local_region_map(conf)
+    if not local_map:
+        logging.warning("[JMA] No local region_map_file found or empty; continuing with live only (no filtering by your names).")
+
+    # 3) Fetch live area.json, build live mapping
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
+        resp = await client.get(JMA_AREA_JSON, timeout=20)
+        resp.raise_for_status()
+        area = resp.json()
     except Exception as e:
-        logging.warning(f"[JMA DEBUG] Failed to load region map '{path}': {e}")
-        return {}, set()
+        logging.warning("[JMA] Failed to fetch live area.json: %s", e)
+        area = {}
 
-    if not raw:
-        return {}, set()
+    live_map = _build_live_region_map(area) if area else {}
 
-    # Detect direction (codes are numeric)
-    sample_key = next(iter(raw.keys()))
-    if str(sample_key).isdigit():
-        # Already code -> name
-        code_to_name = {str(k): str(v) for k, v in raw.items()}
+    # 4) Reconcile: keep your names, update codes if live differs
+    if local_map:
+        region_map, changed, missing_in_live, missing_locally = _reconcile_region_codes(local_map, live_map or {})
+        if changed:
+            c0 = changed[0]
+            logging.warning("[JMA] region code updates: %d changed (e.g. %s: %s→%s)", len(changed), c0[0], c0[1], c0[2])
+        if missing_in_live:
+            logging.warning("[JMA] %d local keys not found in live area.json (kept local codes). Examples: %s", len(missing_in_live), missing_in_live[:3])
+        if missing_locally:
+            logging.warning("[JMA] %d live regions not tracked locally (ignored). Examples: %s", len(missing_locally), missing_locally[:3])
     else:
-        # name -> code; invert
-        name_to_code = {str(k): str(v) for k, v in raw.items()}
-        code_to_name = {code: name for name, code in name_to_code.items()}
+        # No local constraints → use full live map (if any). If both are empty, we’ll still parse, but won’t filter.
+        region_map = live_map
 
-    allowed_codes = set(code_to_name.keys())
-    return code_to_name, allowed_codes
+    # Build reverse map for display names
+    code_to_name = _invert_map(region_map)
 
-async def _fetch_office(client: httpx.AsyncClient, office: str) -> Optional[Dict[str, Any]]:
-    url = OFFICE_JSON.format(office=office)
-    try:
-        r = await client.get(url, timeout=20)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        logging.warning(f"[JMA DEBUG] fetch {office} failed: {e}")
-        return None
-
-def _scan_heavy_rain_variants_from_levels(w: Dict[str, Any], out: Set[str]) -> None:
-    """Look at warnings[].levels to infer浸水/土砂 variants."""
-    levels = w.get("levels")
-    if isinstance(levels, list):
-        for lvl in levels:
-            t = str(lvl.get("type", ""))
-            if "浸水" in t:
-                out.add("Inundation")
-            if "土砂" in t:
-                out.add("Landslide")
-            # Sometimes 'attentions' are tucked inside levels/localAreas
-            for la in lvl.get("localAreas", []) or []:
-                atts = la.get("attentions")
-                if isinstance(atts, list):
-                    joined = " ".join(map(str, atts))
-                    if "浸水" in joined:
-                        out.add("Inundation")
-                    if "土砂" in joined:
-                        out.add("Landslide")
-
-def _collect_hr_variants_from_timeseries(doc: Dict[str, Any]) -> Dict[str, Set[str]]:
-    """
-    Build area_code -> set of {'Inundation','Landslide'} from timeSeries.
-    This lets us resolve code==10 at the top-level when the row lacks variant detail.
-    """
-    res: Dict[str, Set[str]] = {}
-    for ts_block in doc.get("timeSeries", []) or []:
-        for area_block in ts_block.get("areaTypes", []) or []:
-            for area in area_block.get("areas", []) or []:
-                a_code = str(area.get("code", ""))
-                if not a_code:
-                    continue
-                for w in area.get("warnings", []) or []:
-                    if str(w.get("code", "")) != "10":
-                        continue
-                    s = res.setdefault(a_code, set())
-                    _scan_heavy_rain_variants_from_levels(w, s)
-    return res
-
-def _heavy_rain_variant_from_row(w: Dict[str, Any]) -> Optional[str]:
-    """
-    Try to resolve Heavy Rain variant from the same warnings[] row (attentions/levels).
-    Prefer Landslide if both found, else Inundation.
-    """
-    found: Set[str] = set()
-
-    # From row-level attentions
-    vals = w.get("attentions")
-    if isinstance(vals, list):
-        joined = " ".join(str(v) for v in vals)
-        if "浸水" in joined:
-            found.add("Inundation")
-        if "土砂" in joined:
-            found.add("Landslide")
-
-    # From row-level levels[].type and possible localAreas attentions
-    _scan_heavy_rain_variants_from_levels(w, found)
-
-    if "Landslide" in found:
-        return "Landslide"
-    if "Inundation" in found:
-        return "Inundation"
-    return None
-
-def _phenomenon_name(code: str, w: Dict[str, Any]) -> Optional[str]:
-    code = str(code)
-    if code == "10":
-        # Only label heavy rain if we can resolve the variant
-        variant = _heavy_rain_variant_from_warning(w) or _heavy_rain_variant_from_levels(w)
-        if not variant:
-            return None
-        return f"Heavy Rain ({variant})"
-    if code == "18":
-        # Treat as Flood-type hazard, not “Heavy Rain (Inundation)”
-        return "Flood"
-    return PHENOMENON.get(code)
-
-def _iter_area_blocks(doc: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
-    """Yield (reportDatetime, areas[]) for each block in areaTypes."""
-    pub = doc.get("reportDatetime", "")
-    for block in doc.get("areaTypes", []) or []:
-        areas = block.get("areas")
-        if isinstance(areas, list):
-            yield pub, areas
-
-async def scrape_jma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
-    """
-    conf required:
-      - office_codes: list[str] of office codes (e.g., ["020000","050000","460100", ...])
-      - region_map_file: path to curated region code map (either name->code or code->name)
-    """
-    office_codes: List[str] = conf.get("office_codes") or []
-    region_map_path: str = conf.get("region_map_file") or "scraper/region_area_codes.json"
-
+    # 5) Decide which office files to fetch
+    office_codes = conf.get("office_codes") or []
     if not office_codes:
-        logging.warning("[JMA DEBUG] No office_codes configured.")
-        return {"entries": [], "source": "JMA offices"}
+        # Fallback: derive offices from the codes we care about
+        office_codes = sorted({c[:6] + "000" for c in region_map.values() if len(c) >= 6})
 
-    code_to_name, allowed_codes = _load_region_map(region_map_path)
-    if not allowed_codes:
-        logging.warning("[JMA DEBUG] Region map empty; nothing will match.")
-        return {"entries": [], "source": "JMA offices"}
-
-    dedupe: Set[Tuple[str, str, str]] = set()  # (area_code, phenomenon, level)
-    entries: List[Dict[str, Any]] = []
+    # 6) Fetch each office’s warning JSON and filter to your regions
+    entries: List[dict] = []
+    total_considered = 0
+    total_kept = 0
 
     for office in office_codes:
-        doc = await _fetch_office(client, office)
-        if not doc:
+        url = JMA_OFFICE_AREA_JSON.format(office=office)
+        try:
+            res = await client.get(url, timeout=20)
+            res.raise_for_status()
+            data = res.json()
+        except Exception as e:
+            logging.warning("[JMA FETCH ERROR] office %s: %s", office, e)
             continue
 
-        # Pre-scan Heavy Rain variants from timeSeries for this office
-        ts_hr_variants = _collect_hr_variants_from_timeseries(doc)
+        report_dt = data.get("reportDatetime") or data.get("reportDatetimeText") or ""
 
-        # Debug: what area codes are present & how many intersect our allowed set
-        present_codes: List[str] = []
-        for _, areas in _iter_area_blocks(doc):
-            present_codes.extend(str(a.get("code", "")) for a in areas if a.get("code") is not None)
-        uniq_present = set(present_codes)
-        inter = uniq_present & allowed_codes
-        logging.warning(
-            f"[JMA DEBUG] office {office}: present area rows={len(present_codes)}, "
-            f"unique area codes={len(uniq_present)}"
-        )
-        logging.warning(
-            f"[JMA DEBUG] office {office}: intersects allowed={len(inter)}; "
-            f"examples={sorted(list(inter))[:5]}"
-        )
+        # Prefer the first areaTypes block that contains class10 'areas'
+        area_types = data.get("areaTypes") or []
+        if not area_types:
+            continue
+
+        # Count present class10 areas for debug
+        present = area_types[0].get("areas") or []
+        present_codes = {str(a.get("code", "")).strip() for a in present}
+        logging.warning("[JMA DEBUG] office %s: present area rows=%d, unique area codes=%d",
+                        office, len(present), len(present_codes))
+
+        # Region filter = only your reconciled codes
+        allowed_codes = set(code_to_name.keys())
+        intersects = sorted(present_codes & allowed_codes)
+        logging.warning("[JMA DEBUG] office %s: intersects allowed=%d; examples=%s",
+                        office, len(intersects), intersects[:3])
 
         added_before = len(entries)
+        for area_obj in present:
+            code = str(area_obj.get("code", "")).strip()
+            if allowed_codes and code not in allowed_codes:
+                continue
 
-        for pub_iso, areas in _iter_area_blocks(doc):
-            published_str = _utc_pub(pub_iso) or _utc_pub(doc.get("reportDatetime") or "")
+            active = _collect_active_area_warnings(area_obj)
+            if not active:
+                continue
 
-            for area in areas:
-                area_code = str(area.get("code", ""))
-                if not area_code or area_code not in allowed_codes:
-                    continue
+            # Emit one entry per active hazard for this area code
+            region_name = code_to_name.get(code, code)
+            for hazard_code, status in active:
+                title = f"Warning – {_hazard_title(hazard_code, weather_map)}"
+                entries.append({
+                    "title": title,
+                    "region": region_name,    # used by your generic renderer
+                    "summary": "",            # could add headlineText if you want
+                    "link": JMA_LINK_FOR_AREA.format(code=code),
+                    "published": _fmt_utc(report_dt),
+                })
 
-                region_name = code_to_name.get(area_code, area_code)
-                warnings = area.get("warnings")
-                if not isinstance(warnings, list):
-                    continue
+        logging.warning("[JMA DEBUG] office %s: added so far=%d", office, len(entries) - added_before)
+        total_considered += len(present)
+        total_kept += len(entries) - added_before
 
-                for w in warnings:
-                    code = str(w.get("code", ""))
-                    status = str(w.get("status", "") or "").strip()
-                    level = _status_to_level(status)
-                    if level is None:
-                        continue  # skip advisories/clears/downgrades
+    logging.warning("[JMA DEBUG] FINAL parsed entries=%d (kept %d of %d areas scanned)", len(entries), total_kept, total_considered)
 
-                    if not _is_warnable_for_code(code, status, level):
-                        continue  # drop advisory-only types unless explicitly a warning
-
-                    pheno = _phenomenon_name(code, w, ts_variants=ts_hr_variants.get(area_code))
-                    if not pheno:
-                        continue  # skip if no valid phenomenon resolution
-
-                    key = (area_code, pheno, level)
-                    if key in dedupe:
-                        continue
-                    dedupe.add(key)
-
-                    entries.append({
-                        "title": f"{level} – {pheno}",
-                        "region": region_name,                    # "Pref: Region" from your map
-                        "type": pheno,
-                        "level": level,
-                        "link": OFFICE_PAGE.format(office=office), # JMA UI page
-                        "published": published_str,
-                    })
-
-        logging.warning(f"[JMA DEBUG] office {office}: added so far={len(entries) - added_before}")
-
-    logging.warning(f"[JMA DEBUG] FINAL parsed entries={len(entries)}")
-    return {"entries": entries, "source": "JMA offices"}
+    return {
+        "entries": entries,
+        "source": {
+            "area_json": JMA_AREA_JSON,
+            "offices": office_codes,
+        }
+    }
