@@ -1,27 +1,27 @@
 def get_feed_definitions():
     return {
         "nws": {
-            "label": "NWS Alerts",
+            "label": "NWS (US)",
             "type": "json",
             "url": "https://api.weather.gov/alerts/active"
         },
         "ec": {
-            "label": "Environment Canada",
+            "label": "EC (Canada)",
             "type": "ec_async",
             "source_file": "environment_canada_sources.json"
         },
         "meteoalarm": {
-            "label": "Meteoalarm Europe",
+            "label": "Meteoalarm (Europe)",
             "type": "rss_meteoalarm",
             "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"
         },
         "cma_china": {
-            "label": "China Alerts",
+            "label": "CMA (China)",
             "type": "rss_cma",
             "url": "https://severeweather.wmo.int/v2/cap-alerts/cn-cma-xx/rss.xml"
         },
         "bom_all": {
-            "label": "Australia BOM",
+            "label": "BOM (Australia)",
             "type": "rss_bom_multi",
             "urls": [
                 "https://www.bom.gov.au/fwo/IDZ00054.warnings_nsw.xml",  # NSW & ACT
@@ -43,7 +43,7 @@ def get_feed_definitions():
             ],
         },
        "jma": {
-            "label": "JMA Warnings",
+            "label": "JMA (Japan)",
             "type": "rss_jma",
             "office_codes": [
                 "011000","012000","013000","014100","014030","015000","016000","017000",
