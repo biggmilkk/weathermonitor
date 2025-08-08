@@ -244,6 +244,19 @@ def render_bom_grouped(entries, conf):
     # 5) snapshot last seen
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
+# JMA
+def render_jma(item, conf):
+    st.markdown(f"**{item['title']}**")
+    if item.get("region"):
+        st.caption(f"Region: {item['region']}")
+    if item.get("until"):
+        st.caption(f"{item['until']}")
+    if item.get("link"):
+        st.markdown(f"[Read more]({item['link']})")
+    if item.get("published"):
+        st.caption(f"Published: {item['published']}")
+    st.markdown('---')
+
 # Renderer registry
 RENDERERS = {
     'json': render_json,
@@ -252,5 +265,5 @@ RENDERERS = {
     'rss_cma': render_cma,
     'rss_meteoalarm': render_meteoalarm,
     'rss_bom_multi': render_bom_grouped,
-    'rss_jma': render_json,
+    'rss_jma': render_jma,
 }
