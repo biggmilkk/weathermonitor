@@ -18,7 +18,11 @@ import psutil
 # Allow nested asyncio loops under Streamlit
 nest_asyncio.apply()
 
-# —— Autotuning constants —— 
+# Page config FIRST (avoid emitting UI before this)
+st.set_page_config(page_title="Global Weather Monitor", layout="wide")
+logging.basicConfig(level=logging.WARNING)
+
+# —— Autotuning constants ——
 MEMORY_LIMIT = 1 * 1024**3         # 1 GiB
 MEMORY_HIGH_WATER = 0.85 * MEMORY_LIMIT
 MEMORY_LOW_WATER  = 0.50 * MEMORY_LIMIT
@@ -54,14 +58,9 @@ st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss//(1024*1024)} MB")
 
 # Constants
 FETCH_TTL = 60
-MAX_CONCURRENCY = 20
 
 # Ensure module path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-# Page config
-st.set_page_config(page_title="Global Weather Monitor", layout="wide")
-logging.basicConfig(level=logging.WARNING)
 
 # Auto-refresh
 st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
@@ -73,6 +72,7 @@ for key, conf in FEED_CONFIG.items():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
     st.session_state.setdefault(f"{key}_last_seen_time", 0.0)
+    # Keep the pending key, but we won't ever commit None
     st.session_state.setdefault(f"{key}_pending_seen_time", None)
     if conf["type"] == "rss_meteoalarm":
         st.session_state.setdefault(f"{key}_last_seen_alerts", set())
@@ -121,7 +121,7 @@ if to_fetch:
             last_seen = (
                 st.session_state[f"{key}_last_seen_alerts"]
                 if conf["type"] == "rss_meteoalarm"
-                else st.session_state[f"{key}_last_seen_time"]
+                else (st.session_state.get(f"{key}_last_seen_time") or 0.0)
             )
             _, new_count = compute_counts(entries, conf, last_seen, alert_id_fn=alert_id)
             if new_count == 0:
@@ -152,7 +152,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     seen = (
         st.session_state[f"{key}_last_seen_alerts"]
         if conf["type"] == "rss_meteoalarm"
-        else st.session_state[f"{key}_last_seen_time"]
+        else (st.session_state.get(f"{key}_last_seen_time") or 0.0)
     )
     _, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
     with cols[i]:
@@ -221,12 +221,12 @@ if active:
 
     else:
         # Generic rendering
-        seen = st.session_state[f"{active}_last_seen_time"]
+        seen = st.session_state.get(f"{active}_last_seen_time") or 0.0
         for item in data_list:
             pub = item.get("published")
             try:
                 ts = dateparser.parse(pub).timestamp() if pub else 0.0
-            except:
+            except Exception:
                 ts = 0.0
             if ts > seen:
                 st.markdown(
@@ -237,15 +237,20 @@ if active:
 
     # Snapshot last seen timestamps or alerts
     pkey = f"{active}_pending_seen_time"
-    if pkey in st.session_state:
-        if conf["type"] == "rss_meteoalarm":
-            snap = {
-                alert_id(e)
-                for country in data_list
-                for alerts in country.get("alerts", {}).values()
-                for e in alerts
-            }
-            st.session_state[f"{active}_last_seen_alerts"] = snap
-        else:
-            st.session_state[f"{active}_last_seen_time"] = st.session_state.pop(pkey)
-        st.session_state.pop(pkey, None)
+    pending = st.session_state.get(pkey, None)
+
+    if conf["type"] == "rss_meteoalarm":
+        snap = {
+            alert_id(e)
+            for country in data_list
+            for alerts in country.get("alerts", {}).values()
+            for e in alerts
+        }
+        st.session_state[f"{active}_last_seen_alerts"] = snap
+    else:
+        # Only commit if we actually captured a timestamp
+        if pending is not None:
+            st.session_state[f"{active}_last_seen_time"] = float(pending)
+
+    # Always clear the pending key to avoid stale Nones lingering
+    st.session_state.pop(pkey, None)
