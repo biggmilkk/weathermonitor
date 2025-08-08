@@ -76,6 +76,6 @@ SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
 
     # Japan Meteorological Agency warnings (only warning levels)
     "rss_jma": ScraperEntry(
-        "jma", "scrape_jma_async", loader=_load_jma_conf
+        "jma", "scrape_jma_async"
     ),
 }
