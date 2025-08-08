@@ -1,9 +1,11 @@
 beautifulsoup4
 requests
-streamlit>=1.30.0
 feedparser
+streamlit>=1.36.0
 streamlit-autorefresh
 aiohttp>=3.8.0
 httpx
 nest_asyncio
 psutil
+pandas==2.2.2
+playwright==1.45.0
