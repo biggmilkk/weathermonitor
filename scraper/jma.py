@@ -39,7 +39,7 @@ def _heavy_rain_suffix_from_attentions(attns: list[str]) -> str:
         return " (Inundation)"
     return ""  # fallback when hints are absent
 
-async def scrape_jma_office_async(office_code: str) -> dict:
+async def scrape_jma_async(office_code: str) -> dict:
     """
     Parse a single office JSON (e.g., 014100 for Hokkaido: Kushiro/Nemuro office)
     and return only Warning/Alert/Emergency for the phenomena we care about.
