@@ -142,7 +142,7 @@ def render_ec_grouped(entries, conf):
                     published_display = a['published']
                 st.caption(f"Published: {published_display}")
             if a.get("link"):
-                st.markdown(f"[More details]({a['link']})")
+                st.markdown(f"[Read More]({a['link']})")
         st.markdown("---")
 
     # 5) snapshot last seen
