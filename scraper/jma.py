@@ -1,170 +1,149 @@
+# scraper/jma.py
 import logging
-import json
-from typing import Dict, List, Tuple
-from datetime import datetime, timezone
+import datetime
+from typing import Dict, Any, List, Optional
 import httpx
 
+# ---- config ----
 MAP_URL = "https://www.jma.go.jp/bosai/warning/data/warning/map.json"
-OFFICE_LINK = "https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code={code}"
 
-# Phenomena names to match the JMA English UI
-PHENOMENON_MAP = {
-    "04": "Flood",
-    "14": "High Wave",
-    "15": "Storm Surge",
-    "18": "Thunderstorm",
-    "20": "Dense Fog",
-    # "03" is special-cased (Heavy Rain -> Landslide / Inundation)
-    # "10" is Heavy Rain (Advisory in many cases) — we ignore unless escalated to Warning level (shouldn’t be needed for class10)
+# Codes to KEEP (warning-or-higher). Advisory (e.g. "10") is excluded.
+WARNING_OR_HIGHER = {"03","04","14","18","19","20","21"}
+
+PHENOMENA = {
+    "03": "Heavy Rain (Landslide)",
+    "04": "Heavy Rain (Inundation)",
+    "14": "Flood",
+    "18": "Storm",
+    "19": "Gale",
+    "20": "High Wave",
+    "21": "Storm Surge",
+    # If JMA ever publishes Thunderstorm/Dense Fog as WARNING with distinct codes, add them here.
 }
 
-def _iso_utc(dt_jst_str: str) -> str:
-    # JMA gives JST with +09:00; we’ll keep it but emit ISO string
-    try:
-        return datetime.fromisoformat(dt_jst_str).astimezone(timezone.utc).replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
-    except Exception:
-        return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
-
-def _load_areacodes(conf: dict) -> Dict:
+def _load_areacode_from_conf(conf: dict) -> Optional[Dict[str, Any]]:
     """
-    Try to load areacode.json from:
-      1) conf['area_code_file'] if provided
-      2) scraper/areacode.json (your repo’s path)
+    Try to load areacode.json either from explicit conf path or default 'scraper/areacode.json'.
     """
+    import json, os
     paths = []
-    if conf and conf.get("area_code_file"):
+    if "area_code_file" in conf and conf["area_code_file"]:
         paths.append(conf["area_code_file"])
+    # default fallback (your repo structure)
     paths.append("scraper/areacode.json")
+    paths.append("areacode.json")
+
     for p in paths:
         try:
-            with open(p, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            continue
-    logging.warning("[JMA DEBUG] areacode.json not found; using codes as names.")
-    return {"class10s": {}, "offices": {}}
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception as e:
+            logging.warning(f"[JMA DEBUG] failed loading {p}: {e}")
+    logging.warning("[JMA DEBUG] areacode.json not found; will show raw codes.")
+    return None
 
-def _is_class10(code: str, ac: Dict) -> bool:
-    # class10s keys are the “office-level regions”
-    return code in (ac.get("class10s") or {})
 
-def _region_names(code: str, ac: Dict) -> Tuple[str, str]:
+def _pref_and_region_from_code(class10_code: str, ac: Dict[str, Any]) -> (str, str):
     """
-    Return (pref_en, region_en) for class10 code.
-    class10s[code]['parent'] -> office code like '020000', then offices[that]['enName'] is the prefecture name.
+    Given a class10 code (e.g., '014010'), return:
+      - left: Prefecture (or 'Hokkaido')
+      - right: '<... Region>' name (class10.enName)
     """
-    class10s = ac.get("class10s") or {}
-    offices = ac.get("offices") or {}
-    if code in class10s:
-        reg_en = class10s[code].get("enName", code)
-        parent_office = class10s[code].get("parent")
-        pref_en = offices.get(parent_office, {}).get("enName", parent_office or "")
-        return pref_en or "", reg_en
-    # Fallback
-    return "", code
+    # class10 node
+    class10 = ac.get("class10s", {}).get(class10_code, {})
+    region_en = class10.get("enName", class10_code)
 
-def _level_from_jp(condition: str, attentions: List[str]) -> str:
-    """
-    Decide Advisory/Warning/Alert/Emergency from Japanese strings.
-    - If any contains '特別警報' => Alert
-    - Else if any contains '警戒'   => Warning
-    - Else if any contains '注意'   => Advisory
-    - Else default to Warning (conservative for class10 feed)
-    """
-    hay = " ".join([condition or ""] + (attentions or []))
-    if "特別警報" in hay:
-        return "Alert"
-    if "警戒" in hay:
-        return "Warning"
-    if "注意" in hay:
-        return "Advisory"
-    return "Warning"
+    office_code = class10.get("parent")  # e.g., '014100' (Kushiro Nemuro) or '020000' (Aomori)
+    offices = ac.get("offices", {})
+    centers = ac.get("centers", {})
 
-def _heavy_rain_subtypes(condition: str, attentions: List[str]) -> List[str]:
-    """
-    For code '03' heavy rain: split to Landslide / Inundation based on mentions.
-    """
-    hay = " ".join([condition or ""] + (attentions or []))
-    subs = []
-    if ("土砂" in hay) or ("土砂災害" in hay):
-        subs.append("Heavy Rain (Landslide)")
-    if ("浸水" in hay) or ("浸水害" in hay):
-        subs.append("Heavy Rain (Inundation)")
-    # If neither recognized (rare), fall back to generic Heavy Rain
-    if not subs:
-        subs.append("Heavy Rain")
-    return subs
+    pref_left = office_code or ""
+    if office_code in offices:
+        office = offices[office_code]
+        # If the center of this office is Hokkaido, we show 'Hokkaido'
+        center_code = office.get("parent")
+        center = centers.get(center_code, {}) if center_code else {}
+        center_en = center.get("enName")
+        office_en = office.get("enName", office_code)
+
+        if center_en == "Hokkaido":
+            left = "Hokkaido"
+        else:
+            # For non-Hokkaido prefectures, the office name is already the prefecture (e.g., Aomori)
+            left = office_en
+    else:
+        # Fallback: try to infer Hokkaido vs others by code
+        left = "Hokkaido" if class10_code.startswith("01") else office_code or "Unknown"
+
+    return left, region_en
+
 
 async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
     """
-    Build JMA office-level Warning/Alert/Emergency items from map.json.
+    Parse JMA warning map JSON and emit only Warning/Alert/Emergency-level phenomena
+    with the desired naming:
+      '<Prefecture or Hokkaido>: <Region>'
+      '<Level> – <Phenomenon>'
     """
-    areacode = _load_areacodes(conf)
+    ac = _load_areacode_from_conf(conf)
 
-    # Fetch map.json
+    # fetch map.json
     try:
-        resp = await client.get(conf.get("url", MAP_URL), timeout=15)
+        resp = await client.get(conf.get("url", MAP_URL), timeout=20)
         resp.raise_for_status()
-        map_data = resp.json()
+        data = resp.json()
     except Exception as e:
         logging.warning(f"[JMA FETCH ERROR] {e}")
         return {"entries": [], "error": str(e), "source": conf.get("url", MAP_URL)}
 
-    # Keep most-recent report per (class10_code, phenomenon_name)
-    latest: Dict[Tuple[str, str], dict] = {}
+    entries: List[Dict[str, Any]] = []
+    now_iso = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    link = "https://www.jma.go.jp/bosai/warning/#lang=en"
 
-    # map.json is a list of reports
-    for report in map_data:
-        report_ts = report.get("reportDatetime")
-        published_iso = _iso_utc(report_ts) if report_ts else datetime.utcnow().replace(tzinfo=timezone.utc).isoformat().replace("+00:00","Z")
-
-        for at in report.get("areaTypes", []):
+    # The file is a list of reports; each has areaTypes -> areas
+    # Each `areas` item has 'code' and a list of 'warnings' [{code, status, ...}]
+    for report in data:
+        area_types = report.get("areaTypes", [])
+        for at in area_types:
             for area in at.get("areas", []):
-                code = str(area.get("code", ""))
-                if not _is_class10(code, areacode):
-                    # Ignore municipalities/class15, etc.
-                    continue
-
-                warnings = area.get("warnings", []) or []
-                for w in warnings:
-                    pcode = str(w.get("code", ""))
-                    condition = w.get("condition") or ""
-                    attentions = w.get("attentions") or []
-
-                    # Decide level and drop advisories
-                    level = _level_from_jp(condition, attentions)
-                    if level == "Advisory":
+                area_code = str(area.get("code"))
+                for w in area.get("warnings", []):
+                    wcode = str(w.get("code"))
+                    if wcode not in WARNING_OR_HIGHER:
+                        # drop advisories and anything not in our keep-set
                         continue
 
-                    # Figure phenomenon(s)
-                    phenos: List[str] = []
-                    if pcode == "03":
-                        phenos = _heavy_rain_subtypes(condition, attentions)
+                    phen = PHENOMENA.get(wcode)
+                    if not phen:
+                        # Unknown/unsupported warning type; skip
+                        continue
+
+                    # Determine class10 code to label the Region exactly
+                    # map.json sometimes lists class10 codes (e.g., '014010'), sometimes municipality codes (7 digits).
+                    # We only want class10 region rows. Those are 6-digit strings and should exist in areacode.class10s.
+                    # If areacode missing, just print the raw code.
+                    if ac and len(area_code) == 6 and ac.get("class10s", {}).get(area_code):
+                        left, region = _pref_and_region_from_code(area_code, ac)
+                        region_label = f"{left}: {region}"
                     else:
-                        name = PHENOMENON_MAP.get(pcode)
-                        if not name:
-                            # Unknown or not in our allow-list
-                            continue
-                        phenos = [name]
+                        # Fallback: we can't confidently format; show code
+                        region_label = area_code
 
-                    for ph in phenos:
-                        key = (code, ph)
-                        entry = latest.get(key)
-                        # Always prefer the newest report time
-                        if (not entry) or (published_iso > entry["published"]):
-                            pref_en, region_en = _region_names(code, areacode)
-                            region_str = f"{pref_en}: {region_en}" if pref_en else region_en
+                    # Level wording: JMA English UI uses “Alert” for 特別警報; our keep-set here is all warnings-or-higher.
+                    # We don’t have a separate flag for 特別警報 in map.json sample you shared, so default to "Warning".
+                    # If you later add a separate SPECIAL set, you can flip to "Alert" as needed.
+                    level_text = "Warning"
 
-                            latest[key] = {
-                                "title": f"{level} – {ph}",
-                                "region": region_str or code,
-                                "level": level,
-                                "type": ph,
-                                "summary": "",
-                                "published": published_iso,
-                                "link": OFFICE_LINK.format(code=code),
-                            }
+                    entries.append({
+                        "title": f"{level_text} – {phen}",
+                        "region": region_label,
+                        "level": level_text,
+                        "type": phen,
+                        "summary": "",
+                        "published": now_iso,   # map.json has per-report time; using 'now' keeps it simple in the UI
+                        "link": link
+                    })
 
-    entries = sorted(latest.values(), key=lambda x: (x["published"], x["region"], x["type"]), reverse=True)
     logging.warning(f"[JMA DEBUG] Parsed {len(entries)} office warnings/alerts")
     return {"entries": entries, "source": conf.get("url", MAP_URL)}
