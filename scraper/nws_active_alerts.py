@@ -53,7 +53,7 @@ async def scrape_nws_async(conf: dict, client: httpx.AsyncClient) -> dict:
         resp = await client.get(url, headers=headers, timeout=10)
         resp.raise_for_status()
         feed = resp.json()
-        logging.warning(f"[NWS DEBUG] Async parsed {len(feed.get('features', []))} alerts")
+        logging.warning(f"[NWS DEBUG] Parsed {len(feed.get('features', []))} alerts")
     except Exception as e:
         logging.warning(f"[NWS SCRAPER ERROR] Async fetch failed: {e}")
         return {"entries": [], "error": str(e), "source": url}
