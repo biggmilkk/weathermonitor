@@ -129,8 +129,8 @@ async def scrape_meteoalarm_async(conf, client: httpx.AsyncClient):
         resp.raise_for_status()
         feed = feedparser.parse(resp.content)
         entries = _parse_feed(feed)
-        logging.warning(f"[METEOALARM DEBUG] Async parsed {len(entries)} alerts")
+        logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} alerts")
         return {"entries": entries, "source": url}
     except Exception as e:
-        logging.warning(f"[METEOALARM ERROR] Async fetch failed: {e}")
+        logging.warning(f"[METEOALARM ERROR] Fetch failed: {e}")
         return {"entries": [], "error": str(e), "source": url}
