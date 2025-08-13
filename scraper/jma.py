@@ -7,13 +7,19 @@ import httpx
 JMA_AREA_JSON = "https://www.jma.go.jp/bosai/common/const/area.json"
 JMA_WARNING_BASE = "https://www.jma.go.jp/bosai/warning/data/warning"
 
-# Only show these hazards
-INCLUDE_CODES = {"03", "04"}  # 03 = Heavy Rain (split by condition), 04 = Flood
+# Show these hazards (additions: 07 & 16 for High Waves)
+# 03 = Heavy Rain (split by condition), 04 = Flood, 07 = High Waves
+INCLUDE_CODES = {"03", "04", "07"}
 
 # English messages
 HEAVY_RAIN_INUNDATION = "Heavy Rain (Inundation)"
 HEAVY_RAIN_LANDSLIDE  = "Heavy Rain (Landslide)"
 FLOOD                 = "Flood"
+HIGH_WAVES            = "High Waves"
+
+# For 07 vs 16 we differentiate the prefix in the title:
+# 07 → "Warning – High Waves"
+# 16 → "Advisory – High Waves"
 
 
 def _load_region_map_from_file(path: str) -> Dict[str, str]:
@@ -71,19 +77,34 @@ def _parse_heavy_rain_conditions(cond_text: Optional[str]) -> List[str]:
 
 
 def _warnings_for_area(area_obj: dict) -> List[Tuple[str, dict]]:
+    """
+    Turn one area block into a list of (display_title, raw_warning_dict),
+    filtering only the hazards we want.
+    """
     results: List[Tuple[str, dict]] = []
     for w in area_obj.get("warnings", []):
         code = str(w.get("code", ""))
+
         if code not in INCLUDE_CODES:
             continue
+
+        # Only “issued” or “continuing”
         if w.get("status", "") not in ("発表", "継続"):
             continue
 
         if code == "03":
+            # Heavy Rain → split by condition
             for msg in _parse_heavy_rain_conditions(w.get("condition")):
-                results.append((msg, w))
+                results.append((f"Warning – {msg}", w))
+
         elif code == "04":
-            results.append((FLOOD, w))
+            # Flood
+            results.append(("Warning – Flood", w))
+
+        elif code == "07":
+            # High Waves (Warning)
+            results.append((f"Warning – {HIGH_WAVES}", w))
+
     return results
 
 
@@ -119,13 +140,15 @@ async def _fetch_office_json(
         code = str(area.get("code", ""))
         if code not in allowed_code_to_name:
             continue
+
         msgs = _warnings_for_area(area)
         if not msgs:
             continue
+
         region_name = allowed_code_to_name[code]
-        for msg, _w in msgs:
+        for title_text, _w in msgs:
             entries.append({
-                "title":     f"Warning – {msg}",
+                "title":     title_text,
                 "region":    region_name,
                 "summary":   "",
                 "link":      frontend_url,   # human-friendly page
