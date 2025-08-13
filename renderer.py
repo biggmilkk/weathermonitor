@@ -144,18 +144,30 @@ def _ec_entry_ts(e) -> float:
 
 def render_ec_grouped_compact(entries, conf):
     """
-    Province → Warning Type summary using BUTTONS like main feed (no arrows).
-    - Badge shows '❗ N New' per bucket (non-clickable).
-    - NEW shows while open (snapshot to pending after render).
-    - On close: last_seen = now and the main EC total updates immediately.
-    - Writes total remaining NEW to st.session_state['{feed_key}_remaining_new_total'].
+    Province → Warning Type summary using BUTTONS (no arrows).
+    - Per-bucket NEW is computed vs per-bucket last_seen.
+    - OPEN: set pending snapshot, then snapshot to last_seen after render.
+    - CLOSE: last_seen = now immediately.
+    - Writes aggregate NEW to st.session_state['{feed_key}_remaining_new_total'].
+    - Performs a one-shot rerun on any toggle so the top-row EC badge updates immediately.
     """
     feed_key = conf.get("key", "ec")
 
-    # Per-bucket state (mirrors main feed semantics)
-    open_key        = f"{feed_key}_active_bucket"            # currently opened bkey or None
-    pending_map_key = f"{feed_key}_bucket_pending_seen"      # bkey -> float
-    lastseen_key    = f"{feed_key}_bucket_last_seen"         # bkey -> float
+    # ---- safe rerun helper (Streamlit >=1.31 uses st.rerun) ----
+    def _safe_rerun():
+        if hasattr(st, "rerun"):
+            st.rerun()
+        elif hasattr(st, "experimental_rerun"):
+            st.experimental_rerun()
+
+    open_key        = f"{feed_key}_active_bucket"           # current bkey or None
+    pending_map_key = f"{feed_key}_bucket_pending_seen"     # bkey -> float
+    lastseen_key    = f"{feed_key}_bucket_last_seen"        # bkey -> float
+    rerun_guard_key = f"{feed_key}_rerun_guard"             # prevent infinite loop
+
+    # clear guard at start of a normal render
+    if st.session_state.get(rerun_guard_key):
+        st.session_state.pop(rerun_guard_key, None)
 
     st.session_state.setdefault(open_key, None)
     st.session_state.setdefault(pending_map_key, {})
@@ -197,7 +209,8 @@ def render_ec_grouped_compact(entries, conf):
     provinces = [p for p in _PROVINCE_ORDER if p in groups] + [p for p in groups if p not in _PROVINCE_ORDER]
 
     opened_bkey_this_pass = None
-    total_remaining_new = 0
+    total_remaining_new   = 0
+    any_toggle            = False
 
     for prov in provinces:
         alerts = groups.get(prov, [])
@@ -215,23 +228,25 @@ def render_ec_grouped_compact(entries, conf):
             bkey = f"{prov}|{label}"
 
             cols = st.columns([0.7, 0.3])
-            # ---- HANDLE CLICK FIRST (so close updates counts immediately) ----
+
+            # --- HANDLE CLICK FIRST so close updates last_seen immediately ---
             with cols[0]:
                 if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
+                    any_toggle = True
                     if active_bucket == bkey:
-                        # closing -> mark seen now
+                        # CLOSE: mark as seen now, clear pending, close
                         bucket_lastseen[bkey] = time.time()
+                        pending_seen.pop(bkey, None)
                         st.session_state[open_key] = None
                         active_bucket = None
-                        pending_seen.pop(bkey, None)
                     else:
-                        # opening -> set active + pending; don't change last_seen yet
+                        # OPEN: set active + pending (snapshot after render)
                         st.session_state[open_key] = bkey
                         active_bucket = bkey
                         pending_seen[bkey] = time.time()
                         opened_bkey_this_pass = bkey
 
-            # Re-read last_seen AFTER potential click-side effects
+            # compute NEW after possible click effects
             last_seen = float(bucket_lastseen.get(bkey, 0.0))
             new_count = sum(1 for x in items if x.get("timestamp",0.0) > last_seen)
             total_remaining_new += new_count
@@ -247,7 +262,7 @@ def render_ec_grouped_compact(entries, conf):
                 else:
                     st.write("")
 
-            # Render list if open. While open, NEW is computed against current last_seen
+            # render list if open
             if st.session_state.get(open_key) == bkey:
                 for a in items:
                     is_new = a.get("timestamp",0.0) > last_seen
@@ -273,14 +288,18 @@ def render_ec_grouped_compact(entries, conf):
 
         st.markdown("---")
 
-    # Snapshot after render for any bucket that was opened this pass
+    # snapshot for a bucket opened this pass
     if opened_bkey_this_pass:
         ts = float(pending_seen.get(opened_bkey_this_pass, time.time()))
         bucket_lastseen[opened_bkey_this_pass] = ts
 
-    # Update the aggregate NEW count for the main EC badge
+    # write exact aggregate total that matches the bucket badges
     st.session_state[f"{feed_key}_remaining_new_total"] = int(total_remaining_new)
 
+    # one-shot rerun so top-row badge uses the updated total immediately
+    if any_toggle and not st.session_state.get(rerun_guard_key, False):
+        st.session_state[rerun_guard_key] = True
+        _safe_rerun()
 
 # ---------- Original EC grouped renderer (kept, unchanged) ----------
 
