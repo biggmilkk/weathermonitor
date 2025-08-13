@@ -113,6 +113,7 @@ EC_WARNING_TYPES = [
     "Hurricane Warning",
     "Rainfall Warning",
     "Severe Thunderstorm Warning",
+    "Severe Thunderstorm Watch",
     "Snowfall Warning",
     "Snow Squall Warning",
     "Tornado Warning",
