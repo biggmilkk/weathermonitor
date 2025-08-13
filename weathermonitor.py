@@ -139,8 +139,22 @@ st.caption(
 )
 st.markdown("---")
 
-# Feed buttons
+# --- helper to draw/update the "❗ N New" badge ---
+def render_badge(ph, count: int):
+    if count and count > 0:
+        ph.markdown(
+            "<span style='margin-left:8px;padding:2px 6px;"
+            "border-radius:4px;background:#ffeecc;font-size:0.9em;'>"
+            f"❗ {count} New</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        ph.empty()
+
+# Feed buttons (use placeholders so we can update EC badge after details render)
 cols = st.columns(len(FEED_CONFIG))
+badge_placeholders = {}  # key -> placeholder
+
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
 
@@ -152,7 +166,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
 
     _, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
 
-    # For Environment Canada, override with aggregated bucket NEW count computed by renderer
+    # For Environment Canada, override with aggregated bucket NEW count computed by renderer (if available)
     if conf["type"] == "ec_async":
         ec_total = st.session_state.get(f"{key}_remaining_new_total")
         if isinstance(ec_total, int):
@@ -160,13 +174,11 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
 
     with cols[i]:
         clicked = st.button(conf["label"], key=f"btn_{key}_{i}", use_container_width=True)
-        if new_count > 0:
-            st.markdown(
-                "<span style='margin-left:8px;padding:2px 6px;"
-                "border-radius:4px;background:#ffeecc;font-size:0.9em;'>"
-                f"❗ {new_count} New</span>",
-                unsafe_allow_html=True,
-            )
+
+        # draw badge via placeholder so we can repaint it later in the same run
+        badge_ph = st.empty()
+        badge_placeholders[key] = badge_ph
+        render_badge(badge_ph, new_count)
 
         if clicked:
             if st.session_state["active_feed"] == key:
@@ -180,7 +192,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                     }
                     st.session_state[f"{key}_last_seen_alerts"] = snap
                 elif conf["type"] == "ec_async":
-                    # EC: per-bucket close behavior handled inside renderer; don't touch feed-level timestamp
+                    # EC: per-bucket close behavior handled inside renderer
                     pass
                 else:
                     st.session_state[f"{key}_last_seen_time"] = time.time()
@@ -189,7 +201,6 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 # Opening a feed
                 st.session_state["active_feed"] = key
                 if conf["type"] == "rss_meteoalarm":
-                    # not used for meteoalarm; kept for symmetry
                     st.session_state[f"{key}_pending_seen_time"] = time.time()
                 elif conf["type"] == "ec_async":
                     # EC: renderer manages per-bucket pending snapshots
@@ -271,3 +282,10 @@ if active:
             st.session_state[f"{active}_last_seen_time"] = float(pending)
 
     st.session_state.pop(pkey, None)
+
+    # --- IMPORTANT: after renderer runs, repaint the EC main badge so closes reflect immediately ---
+    if conf["type"] == "ec_async":
+        ec_total = st.session_state.get(f"{active}_remaining_new_total", 0)
+        ph = badge_placeholders.get(active)
+        if ph is not None:
+            render_badge(ph, int(ec_total))
