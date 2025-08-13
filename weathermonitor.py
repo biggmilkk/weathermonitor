@@ -11,7 +11,7 @@ from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from streamlit_autorefresh import st_autorefresh
 from computation import compute_counts
-from renderer import RENDERERS, EC_WARNING_TYPES, _PROVINCE_NAMES  # <-- added
+from renderer import RENDERERS, ec_remaining_new_total  # <- EC aggregate helper
 import httpx
 import psutil
 
@@ -76,43 +76,6 @@ st.session_state.setdefault("active_feed", None)
 def alert_id(e):
     return f"{e['level']}|{e['type']}|{e['from']}|{e['until']}"
 
-# ---- EC helpers (mirror renderer logic) --------------------------------------
-
-_EC_WARNING_TYPES_LC = [w.lower() for w in EC_WARNING_TYPES]
-_EC_WARNING_CANON = {w.lower(): w for w in EC_WARNING_TYPES}
-
-def _ec_bucket_from_title(title: str):
-    if not title:
-        return None
-    t = title.lower()
-    for w in _EC_WARNING_TYPES_LC:
-        if w in t:
-            return _EC_WARNING_CANON[w]
-    return None
-
-def _ec_remaining_new_total(feed_key: str, entries: list) -> int:
-    """
-    Compute total remaining NEW across all buckets for EC, using renderer's
-    per-bucket last_seen map in session_state.
-    """
-    lastseen_map = st.session_state.get(f"{feed_key}_bucket_last_seen", {}) or {}
-    total = 0
-    for e in entries:
-        bucket = _ec_bucket_from_title(e.get("title", ""))
-        if not bucket:
-            continue
-        code = e.get("province", "")
-        prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
-        bkey = f"{prov_name}|{bucket}"
-        last_seen = float(lastseen_map.get(bkey, 0.0))
-        try:
-            ts = dateparser.parse(e.get("published", "")).timestamp()
-        except Exception:
-            ts = 0.0
-        if ts > last_seen:
-            total += 1
-    return total
-
 # Async fetcher
 async def _fetch_all_feeds(configs):
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
@@ -144,6 +107,8 @@ if to_fetch:
         st.session_state[f"{key}_last_fetch"] = now
         st.session_state["last_refreshed"] = now
         conf = FEED_CONFIG[key]
+
+        # When the active feed is open, decide whether to snapshot "seen"
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen = st.session_state[f"{key}_last_seen_alerts"]
@@ -164,6 +129,11 @@ if to_fetch:
                 _, new_count = compute_counts(entries, conf, last_seen, alert_id_fn=alert_id)
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_time"] = now
+
+        # Keep the EC aggregate (warnings + Severe Thunderstorm Watch) up-to-date even if EC isn't opened yet
+        if conf["type"] == "ec_async":
+            st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
+
         gc.collect()
 
 # Header
@@ -193,26 +163,29 @@ badge_placeholders = {}  # key -> placeholder
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
 
-    # Compute "seen" baseline per feed type
+    # Compute baseline NEW count
     if conf["type"] == "rss_meteoalarm":
         seen = st.session_state[f"{key}_last_seen_alerts"]
-    else:
-        seen = st.session_state.get(f"{key}_last_seen_time") or 0.0
-
-    _, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
-
-    # For EC, prefer aggregate from session_state if available
-    if conf["type"] == "ec_async":
+        _, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
+    elif conf["type"] == "ec_async":
+        # Always use warnings(+watch)-only aggregate that matches bucket math
         ec_total = st.session_state.get(f"{key}_remaining_new_total")
         if isinstance(ec_total, int):
             new_count = ec_total
+        else:
+            new_count = ec_remaining_new_total(key, entries)
+            st.session_state[f"{key}_remaining_new_total"] = int(new_count)
+    else:
+        seen = st.session_state.get(f"{key}_last_seen_time") or 0.0
+        _, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
 
     with cols[i]:
         clicked = st.button(conf["label"], key=f"btn_{key}_{i}", use_container_width=True)
 
+        # draw badge via placeholder so we can repaint it later in the same run
         badge_ph = st.empty()
         badge_placeholders[key] = badge_ph
-        render_badge(badge_ph, new_count)
+        render_badge(badge_ph, int(new_count) if new_count is not None else 0)
 
         if clicked:
             if st.session_state["active_feed"] == key:
@@ -226,7 +199,8 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                     }
                     st.session_state[f"{key}_last_seen_alerts"] = snap
                 elif conf["type"] == "ec_async":
-                    pass  # EC per-bucket behavior handled inside renderer
+                    # EC per-bucket close/open handled inside renderer
+                    pass
                 else:
                     st.session_state[f"{key}_last_seen_time"] = time.time()
                 st.session_state["active_feed"] = None
@@ -236,6 +210,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 if conf["type"] == "rss_meteoalarm":
                     st.session_state[f"{key}_pending_seen_time"] = time.time()
                 elif conf["type"] == "ec_async":
+                    # EC: renderer manages per-bucket pending snapshots
                     st.session_state[f"{key}_pending_seen_time"] = None
                 else:
                     st.session_state[f"{key}_pending_seen_time"] = time.time()
@@ -252,13 +227,12 @@ if active:
     if conf["type"] == "rss_bom_multi":
         RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
 
-    # --- Environment Canada grouped (compact, warnings-only) ---
+    # --- Environment Canada grouped (compact, warnings + Severe Thunderstorm Watch) ---
     elif conf["type"] == "ec_async":
-        # Render the EC compact view (this handles bucket open/close state)
         RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
 
-        # Immediately recompute aggregate NEW using the renderer's last_seen map
-        ec_total_now = _ec_remaining_new_total(active, entries)
+        # Immediately recompute aggregate NEW using renderer's per-bucket last_seen map
+        ec_total_now = ec_remaining_new_total(active, entries)
         st.session_state[f"{active}_remaining_new_total"] = int(ec_total_now)
 
         # Repaint the main badge now so closing a bucket updates the count immediately
