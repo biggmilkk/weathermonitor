@@ -123,7 +123,6 @@ EC_WARNING_TYPES = [
     "Winter Storm Warning",
 ]
 
-# Precompute lowercase for faster checks
 _EC_WARNING_TYPES_LC = [w.lower() for w in EC_WARNING_TYPES]
 _EC_WARNING_CANON = {w.lower(): w for w in EC_WARNING_TYPES}
 
@@ -140,13 +139,26 @@ def _ec_bucket_from_title(title: str) -> str | None:
             return _EC_WARNING_CANON[w]
     return None
 
+# --- helper for stable per-entry IDs (title|region|published is stable enough for EC)
+def _ec_entry_id(e) -> str:
+    return f"{e.get('title','')}|{e.get('region','')}|{e.get('published','')}"
 
 def render_ec_grouped_compact(entries, conf):
     """
-    Province → Warning Type summary (expanders per type).
+    Province → Warning Type summary with toggles per type (no chips).
     Filters to ONLY the provided warning types.
+
+    NEW behavior:
+      - While a bucket is OPEN, keep [NEW] visible so users can see what's new.
+      - When a bucket transitions from OPEN → CLOSED, mark its items as seen.
     """
     feed_key = conf.get("key", "ec")
+
+    # ensure seen-id set exists
+    seen_key = f"{feed_key}_seen_ids"
+    if seen_key not in st.session_state:
+        st.session_state[seen_key] = set()
+    seen_ids = st.session_state[seen_key]
 
     # 1) attach timestamps & sort newest→oldest
     for e in entries:
@@ -157,21 +169,19 @@ def render_ec_grouped_compact(entries, conf):
         e["timestamp"] = e_ts
     entries.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    # 2) annotate: NEW, and compute canonical bucket; FILTER to warnings only
-    last_seen = st.session_state.get(f"{feed_key}_last_seen_time") or 0.0
+    # 2) annotate canonical bucket; FILTER to warnings only; figure 'is_new' via seen_ids
     filtered = []
     for e in entries:
         bucket = _ec_bucket_from_title(e.get("title", ""))
         if not bucket:
             continue  # drop non-warning types (watches/advisories/statements/etc.)
         e["bucket"] = bucket
-        e["is_new"] = e["timestamp"] > last_seen
+        e["_id"] = _ec_entry_id(e)
+        e["is_new"] = e["_id"] not in seen_ids
         filtered.append(e)
 
-    # Early exit if nothing to show
     if not filtered:
         st.info("No active warnings at the moment.")
-        st.session_state[f"{feed_key}_last_seen_time"] = time.time()
         return
 
     # 3) group by province name
@@ -191,6 +201,7 @@ def render_ec_grouped_compact(entries, conf):
         if not alerts:
             continue
 
+        # compute NEW at province level based on seen_ids
         has_new = any(a.get("is_new") for a in alerts)
         if has_new:
             st.markdown(
@@ -199,31 +210,23 @@ def render_ec_grouped_compact(entries, conf):
             )
         st.markdown(f"## {prov}")
 
-        # 4a) bucket by canonical warning type
+        # 4a) bucket by canonical warning type (NO chips; show as toggles)
         buckets = OrderedDict()
         for a in alerts:
             buckets.setdefault(a["bucket"], []).append(a)
 
-        # 4b) compact "chips" showing counts per type
-        cols = st.columns(min(4, max(1, len(buckets))))
-        for i, (label, items) in enumerate(buckets.items()):
-            new_count = sum(1 for x in items if x.get("is_new"))
-            suffix = f" ({len(items)})"
-            prefix = "🆕 " if new_count > 0 else ""
-            with cols[i % len(cols)]:
-                st.markdown(
-                    f"<div style='display:inline-block;padding:6px 10px;margin:6px 6px 0 0;"
-                    f"border-radius:999px;background:#f1f5f9;border:1px solid #e2e8f0;"
-                    f"font-size:0.95em;'>{prefix}{label}{suffix}</div>",
-                    unsafe_allow_html=True
-                )
-
-        # 4c) expanders per warning type
         for label, items in buckets.items():
             # items already newest→oldest due to global sort
             new_count = sum(1 for x in items if x.get("is_new"))
-            exp_label = f"{label} ({len(items)})" + (f" — {new_count} new" if new_count else "")
-            with st.expander(exp_label, expanded=False):
+            hdr = f"{label} ({len(items)})" + (f" — {new_count} new" if new_count else "")
+            exp_key = f"{feed_key}:{prov}:{label}:open"
+            prev_key = f"{exp_key}:prev"
+
+            opened = st.checkbox(hdr, key=exp_key, value=False)
+            prev_open = st.session_state.get(prev_key, False)
+
+            if opened:
+                # Render list WITH [NEW] badges (we do NOT clear them while open)
                 for a in items:
                     prefix = "[NEW] " if a.get("is_new") else ""
                     title = a.get("title", "")
@@ -250,11 +253,17 @@ def render_ec_grouped_compact(entries, conf):
                         st.caption(f"Published: {published_display}")
 
                     st.markdown("---")
+            else:
+                # If it was previously open and now closed, mark items as seen
+                if prev_open:
+                    bucket_ids = {x["_id"] for x in items}
+                    if bucket_ids - seen_ids:
+                        seen_ids.update(bucket_ids)
+
+            # update previous open state
+            st.session_state[prev_key] = opened
 
         st.markdown("---")
-
-    # 5) snapshot last seen
-    st.session_state[f"{feed_key}_last_seen_time"] = time.time()
 
 
 # ---------- Original EC grouped renderer (kept, unchanged) ----------
@@ -538,7 +547,7 @@ RENDERERS = {
     'json': render_json,
     'ec_async': render_ec,
     'ec_grouped': render_ec_grouped,                 # original list view
-    'ec_grouped_compact': render_ec_grouped_compact, # NEW compact warnings-only view
+    'ec_grouped_compact': render_ec_grouped_compact, # compact warnings-only view
     'rss_cma': render_cma,
     'rss_meteoalarm': render_meteoalarm,
     'rss_bom_multi': render_bom_grouped,
