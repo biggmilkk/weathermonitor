@@ -107,15 +107,13 @@ if to_fetch:
         st.session_state[f"{key}_last_fetch"] = now
         st.session_state["last_refreshed"] = now
         conf = FEED_CONFIG[key]
+
+        # When the active feed is open, decide whether to snapshot "seen"
         if st.session_state.get("active_feed") == key:
-            last_seen = (
-                st.session_state[f"{key}_last_seen_alerts"]
-                if conf["type"] == "rss_meteoalarm"
-                else (st.session_state.get(f"{key}_last_seen_time") or 0.0)
-            )
-            _, new_count = compute_counts(entries, conf, last_seen, alert_id_fn=alert_id)
-            if new_count == 0:
-                if conf["type"] == "rss_meteoalarm":
+            if conf["type"] == "rss_meteoalarm":
+                last_seen = st.session_state[f"{key}_last_seen_alerts"]
+                _, new_count = compute_counts(entries, conf, last_seen, alert_id_fn=alert_id)
+                if new_count == 0:
                     snap = {
                         alert_id(e)
                         for country in entries
@@ -123,7 +121,13 @@ if to_fetch:
                         for e in alerts
                     }
                     st.session_state[f"{key}_last_seen_alerts"] = snap
-                else:
+            elif conf["type"] == "ec_async":
+                # EC compact renderer manages NEW state per bucket; do not auto-snapshot here
+                pass
+            else:
+                last_seen = st.session_state.get(f"{key}_last_seen_time") or 0.0
+                _, new_count = compute_counts(entries, conf, last_seen, alert_id_fn=alert_id)
+                if new_count == 0:
                     st.session_state[f"{key}_last_seen_time"] = now
         gc.collect()
 
@@ -139,12 +143,21 @@ st.markdown("---")
 cols = st.columns(len(FEED_CONFIG))
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
-    seen = (
-        st.session_state[f"{key}_last_seen_alerts"]
-        if conf["type"] == "rss_meteoalarm"
-        else (st.session_state.get(f"{key}_last_seen_time") or 0.0)
-    )
+
+    # Compute "seen" baseline per feed type
+    if conf["type"] == "rss_meteoalarm":
+        seen = st.session_state[f"{key}_last_seen_alerts"]
+    else:
+        seen = st.session_state.get(f"{key}_last_seen_time") or 0.0
+
     _, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
+
+    # For Environment Canada, override with aggregated bucket NEW count computed by renderer
+    if conf["type"] == "ec_async":
+        ec_total = st.session_state.get(f"{key}_remaining_new_total")
+        if isinstance(ec_total, int):
+            new_count = ec_total
+
     with cols[i]:
         clicked = st.button(conf["label"], key=f"btn_{key}_{i}", use_container_width=True)
         if new_count > 0:
@@ -154,8 +167,10 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 f"❗ {new_count} New</span>",
                 unsafe_allow_html=True,
             )
+
         if clicked:
             if st.session_state["active_feed"] == key:
+                # Closing an open feed
                 if conf["type"] == "rss_meteoalarm":
                     snap = {
                         alert_id(e)
@@ -164,12 +179,23 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                         for e in alerts
                     }
                     st.session_state[f"{key}_last_seen_alerts"] = snap
+                elif conf["type"] == "ec_async":
+                    # EC: per-bucket close behavior handled inside renderer; don't touch feed-level timestamp
+                    pass
                 else:
                     st.session_state[f"{key}_last_seen_time"] = time.time()
                 st.session_state["active_feed"] = None
             else:
+                # Opening a feed
                 st.session_state["active_feed"] = key
-                st.session_state[f"{key}_pending_seen_time"] = time.time()
+                if conf["type"] == "rss_meteoalarm":
+                    # not used for meteoalarm; kept for symmetry
+                    st.session_state[f"{key}_pending_seen_time"] = time.time()
+                elif conf["type"] == "ec_async":
+                    # EC: renderer manages per-bucket pending snapshots
+                    st.session_state[f"{key}_pending_seen_time"] = None
+                else:
+                    st.session_state[f"{key}_pending_seen_time"] = time.time()
 
 # Display details
 active = st.session_state["active_feed"]
@@ -183,7 +209,7 @@ if active:
     if conf["type"] == "rss_bom_multi":
         RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
 
-    # --- Environment Canada grouped ---
+    # --- Environment Canada grouped (compact, warnings-only) ---
     elif conf["type"] == "ec_async":
         RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
 
@@ -211,21 +237,21 @@ if active:
 
     else:
         # Generic item-per-row renderer
-        seen = st.session_state.get(f"{active}_last_seen_time") or 0.0
+        seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
         for item in data_list:
             pub = item.get("published")
             try:
                 ts = dateparser.parse(pub).timestamp() if pub else 0.0
             except Exception:
                 ts = 0.0
-            if ts > seen:
+            if ts > seen_ts:
                 st.markdown(
                     "<div style='height:4px;background:red;margin:8px 0;'></div>",
                     unsafe_allow_html=True,
                 )
             RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
 
-    # Snapshot last seen timestamps or alerts
+    # Snapshot last seen timestamps or alerts for *non-EC* feeds
     pkey = f"{active}_pending_seen_time"
     pending = st.session_state.get(pkey, None)
 
@@ -237,6 +263,9 @@ if active:
             for e in alerts
         }
         st.session_state[f"{active}_last_seen_alerts"] = snap
+    elif conf["type"] == "ec_async":
+        # EC compact view manages per-bucket snapshots internally
+        pass
     else:
         if pending is not None:
             st.session_state[f"{active}_last_seen_time"] = float(pending)
