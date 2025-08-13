@@ -204,6 +204,30 @@ def render_ec_grouped_compact(entries, conf):
     pending_seen    = st.session_state[pending_map_key]
     bucket_lastseen = st.session_state[lastseen_key]
 
+    # ---------- Scoped CSS to make bucket buttons SHORTER ----------
+    wrapper_id = f"ec-{feed_key}-buckets"
+    if not st.session_state.get(css_injected, False):
+        st.markdown(
+            f"""
+<style>
+/* only affects buttons inside our EC buckets wrapper */
+#{wrapper_id} .stButton > button {{
+  padding: 4px 8px;         /* tighter vertical/horizontal padding */
+  min-height: 28px;         /* shorter overall height */
+  line-height: 1.1;
+  font-size: 0.9rem;        /* slightly smaller text */
+  border-radius: 6px;
+}}
+/* trim row spacing a bit */
+#{wrapper_id} [data-testid="stHorizontalBlock"] {{
+  margin-bottom: 2px;
+}}
+</style>
+""",
+            unsafe_allow_html=True,
+        )
+        st.session_state[css_injected] = True
+    
     # Attach timestamps & sort newest→oldest
     for e in entries:
         try:
