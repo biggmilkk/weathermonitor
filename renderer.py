@@ -145,10 +145,13 @@ def _ec_entry_ts(e) -> float:
 
 def render_ec_grouped_compact(entries, conf):
     """
-    Province → Warning Type summary using BUTTONS like main feed.
-    - Separate non-clickable '❗ N New' badge next to the button.
-    - NEW shows while open; snapshot to pending (like main feed) after rendering.
-    - On close, set last_seen to now.
+    Province → Warning Type summary using BUTTONS like main feed (no arrows in labels).
+    - A non-clickable '❗ N New' badge sits next to each bucket button.
+    - While open: items show [NEW] (based on per-bucket last_seen).
+    - On open: store a pending timestamp and after render snapshot last_seen = pending.
+    - On close: last_seen = now.
+    - Writes total remaining NEW across all buckets to
+      st.session_state['{feed_key}_remaining_new_total'] for the main-feed counter.
     """
     feed_key = conf.get("key", "ec")
 
@@ -181,6 +184,8 @@ def render_ec_grouped_compact(entries, conf):
 
     if not filtered:
         st.info("No active warnings at the moment.")
+        # keep the main-feed counter in sync
+        st.session_state[f"{feed_key}_remaining_new_total"] = 0
         return
 
     # 3) group by province name
@@ -195,6 +200,7 @@ def render_ec_grouped_compact(entries, conf):
 
     # we will remember which bucket is open for snapshotting after render
     opened_bkey_this_pass = None
+    total_remaining_new = 0  # accumulate across all buckets for main-feed counter
 
     for prov in provinces:
         alerts = groups.get(prov, [])
@@ -216,14 +222,18 @@ def render_ec_grouped_compact(entries, conf):
         for a in alerts:
             buckets.setdefault(a["bucket"], []).append(a)
 
-        # rows: [Open/Close button] [New badge]
+        # rows: [Open/Close button (no arrow)] [New badge]
         for label, items in buckets.items():
             bkey = f"{prov}|{label}"
             last_seen = float(bucket_lastseen.get(bkey, 0.0))
             new_count = sum(1 for x in items if x.get("timestamp",0.0) > last_seen)
 
+            # accumulate for main-feed counter
+            total_remaining_new += new_count
+
             cols = st.columns([0.7, 0.3])
-            btn_label = f"{'▾' if active_bucket == bkey else '▸'} {label}"
+            # Button label WITHOUT arrow glyphs
+            btn_label = f"{label}"
             with cols[0]:
                 if st.button(btn_label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
                     if active_bucket == bkey:
@@ -231,7 +241,6 @@ def render_ec_grouped_compact(entries, conf):
                         bucket_lastseen[bkey] = time.time()
                         st.session_state[open_key] = None
                         active_bucket = None
-                        # clear pending snapshot if any
                         pending_seen.pop(bkey, None)
                     else:
                         # opening new bucket → set active + pending
@@ -283,11 +292,13 @@ def render_ec_grouped_compact(entries, conf):
         st.markdown("---")
 
     # ---- snapshot after rendering (mirror main feed behavior) ----
-    # If a bucket was opened this pass, set its last_seen to the pending timestamp.
     if opened_bkey_this_pass:
         ts = float(pending_seen.get(opened_bkey_this_pass, time.time()))
         bucket_lastseen[opened_bkey_this_pass] = ts
-        # we don't clear pending here; leave it for potential close overwrite
+        # keep pending until a close overwrites, same as your main feed pattern
+
+    # Write the aggregate NEW count so the main feed button can display it
+    st.session_state[f"{feed_key}_remaining_new_total"] = int(total_remaining_new)
 
 
 # ---------- Original EC grouped renderer (kept, unchanged) ----------
