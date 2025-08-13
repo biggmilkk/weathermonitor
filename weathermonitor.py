@@ -185,7 +185,7 @@ if active:
 
     # --- Environment Canada grouped ---
     elif conf["type"] == "ec_async":
-        RENDERERS["ec_grouped"](entries, {**conf, "key": active})
+        RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
 
     # --- Meteoalarm (country objects) ---
     elif conf["type"] == "rss_meteoalarm":
