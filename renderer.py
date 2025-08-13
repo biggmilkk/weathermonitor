@@ -127,10 +127,7 @@ _EC_WARNING_TYPES_LC = [w.lower() for w in EC_WARNING_TYPES]
 _EC_WARNING_CANON = {w.lower(): w for w in EC_WARNING_TYPES}
 
 def _ec_bucket_from_title(title: str) -> str | None:
-    """
-    Return canonical warning bucket if the title contains one of EC_WARNING_TYPES.
-    Otherwise return None (so the item can be filtered out).
-    """
+    """Return canonical warning bucket if the title contains one of EC_WARNING_TYPES."""
     if not title:
         return None
     t = title.lower()
@@ -145,27 +142,28 @@ def _ec_entry_ts(e) -> float:
     except Exception:
         return 0.0
 
+
 def render_ec_grouped_compact(entries, conf):
     """
-    Province → Warning Type summary using BUTTONS (like main feed).
-    - Counters are separate, non-clickable pills.
-    - [NEW] stays visible while open.
-    - NEW clears when the bucket is CLOSED (open→close), mirroring main-feed behavior.
+    Province → Warning Type summary using BUTTONS like main feed.
+    - Separate non-clickable '❗ N New' badge next to the button.
+    - NEW shows while open; snapshot to pending (like main feed) after rendering.
+    - On close, set last_seen to now.
     """
     feed_key = conf.get("key", "ec")
 
-    # Per-bucket open + pending/last-seen timestamps (mirrors main feed semantics)
-    open_map_key     = f"{feed_key}_bucket_open"
-    pending_map_key  = f"{feed_key}_bucket_pending"
-    lastseen_map_key = f"{feed_key}_bucket_last_seen"
+    # Per-bucket state (mirrors main feed semantics)
+    open_key        = f"{feed_key}_active_bucket"            # currently opened bkey or None
+    pending_map_key = f"{feed_key}_bucket_pending_seen"      # bkey -> float
+    lastseen_key    = f"{feed_key}_bucket_last_seen"         # bkey -> float
 
-    st.session_state.setdefault(open_map_key, {})      # {(prov|label): bool}
-    st.session_state.setdefault(pending_map_key, {})   # {(prov|label): float}
-    st.session_state.setdefault(lastseen_map_key, {})  # {(prov|label): float}
+    st.session_state.setdefault(open_key, None)
+    st.session_state.setdefault(pending_map_key, {})
+    st.session_state.setdefault(lastseen_key, {})
 
-    open_map     = st.session_state[open_map_key]
-    pending_map  = st.session_state[pending_map_key]
-    last_seen_map= st.session_state[lastseen_map_key]
+    active_bucket  = st.session_state[open_key]
+    pending_seen   = st.session_state[pending_map_key]
+    bucket_lastseen= st.session_state[lastseen_key]
 
     # 1) attach timestamps & sort newest→oldest
     for e in entries:
@@ -195,80 +193,67 @@ def render_ec_grouped_compact(entries, conf):
     # 4) province render order
     provinces = [p for p in _PROVINCE_ORDER if p in groups] + [p for p in groups if p not in _PROVINCE_ORDER]
 
+    # we will remember which bucket is open for snapshotting after render
+    opened_bkey_this_pass = None
+
     for prov in provinces:
         alerts = groups.get(prov, [])
         if not alerts:
             continue
 
-        # has_new at province level (based on per-bucket last_seen)
         def is_new_item(a):
             bkey = f"{prov}|{a['bucket']}"
-            last_seen = float(last_seen_map.get(bkey, 0.0))
+            last_seen = float(bucket_lastseen.get(bkey, 0.0))
             return a.get("timestamp",0.0) > last_seen
 
         has_new = any(is_new_item(a) for a in alerts)
         if has_new:
-            st.markdown(
-                "<div style='height:4px;background:red;margin:8px 0;'></div>",
-                unsafe_allow_html=True
-            )
+            st.markdown("<div style='height:4px;background:red;margin:8px 0;'></div>", unsafe_allow_html=True)
         st.markdown(f"## {prov}")
 
-        # 4a) bucket by warning type
+        # bucket by warning type
         buckets = OrderedDict()
         for a in alerts:
             buckets.setdefault(a["bucket"], []).append(a)
 
-        # 4b) bucket rows: [Open/Close button] [Total pill] [New pill]
+        # rows: [Open/Close button] [New badge]
         for label, items in buckets.items():
             bkey = f"{prov}|{label}"
-            opened = bool(open_map.get(bkey, False))
-            last_seen = float(last_seen_map.get(bkey, 0.0))
-
-            # compute counts
-            total_count = len(items)
+            last_seen = float(bucket_lastseen.get(bkey, 0.0))
             new_count = sum(1 for x in items if x.get("timestamp",0.0) > last_seen)
 
-            # layout
-            c1, c2, c3 = st.columns([0.55, 0.2, 0.25])
+            cols = st.columns([0.7, 0.3])
+            btn_label = f"{'▾' if active_bucket == bkey else '▸'} {label}"
+            with cols[0]:
+                if st.button(btn_label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
+                    if active_bucket == bkey:
+                        # closing this bucket → mark seen = now (like main feed close)
+                        bucket_lastseen[bkey] = time.time()
+                        st.session_state[open_key] = None
+                        active_bucket = None
+                        # clear pending snapshot if any
+                        pending_seen.pop(bkey, None)
+                    else:
+                        # opening new bucket → set active + pending
+                        st.session_state[open_key] = bkey
+                        active_bucket = bkey
+                        pending_seen[bkey] = time.time()
+                        opened_bkey_this_pass = bkey  # snapshot after rendering
 
-            # (1) open/close button (just like main feed)
-            btn_label = f"{'▾' if opened else '▸'} {label}"
-            if c1.button(btn_label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
-                # toggle behavior mirrors main feed:
-                # - closing: snapshot last_seen from pending (or now)
-                # - opening: set pending to now
-                if opened:
-                    ts = float(pending_map.get(bkey, time.time()))
-                    last_seen_map[bkey] = ts
-                    pending_map.pop(bkey, None)
-                    open_map[bkey] = False
+            with cols[1]:
+                # Non-clickable badge identical style to main feed
+                if new_count > 0:
+                    st.markdown(
+                        "<span style='margin-left:8px;padding:2px 6px;"
+                        "border-radius:4px;background:#ffeecc;font-size:0.9em;'>"
+                        f"❗ {new_count} New</span>",
+                        unsafe_allow_html=True,
+                    )
                 else:
-                    pending_map[bkey] = time.time()
-                    open_map[bkey] = True
-                opened = open_map[bkey]
+                    st.write("")  # keep row height stable
 
-            # (2) total pill (non-clickable)
-            with c2:
-                st.markdown(
-                    f"<div style='display:inline-block;padding:6px 10px;margin-top:2px;"
-                    f"border-radius:6px;background:#f1f5f9;border:1px solid #e2e8f0;"
-                    f"font-size:0.9em;'>Total: {total_count}</div>",
-                    unsafe_allow_html=True
-                )
-            # (3) new pill (non-clickable)
-            with c3:
-                badge_bg = "#fee2e2" if new_count else "#f1f5f9"
-                badge_bd = "#fecaca" if new_count else "#e2e8f0"
-                st.markdown(
-                    f"<div style='display:inline-block;padding:6px 10px;margin-top:2px;"
-                    f"border-radius:6px;background:{badge_bg};border:1px solid {badge_bd};"
-                    f"font-size:0.9em;'>New: {new_count}</div>",
-                    unsafe_allow_html=True
-                )
-
-            # 4c) render list if opened (NEW shows while open; clears when closed)
-            if opened:
+            # render list if this bucket is active
+            if active_bucket == bkey:
                 for a in items:
                     is_new = a.get("timestamp",0.0) > last_seen
                     prefix = "[NEW] " if is_new else ""
@@ -296,6 +281,13 @@ def render_ec_grouped_compact(entries, conf):
                     st.markdown("---")
 
         st.markdown("---")
+
+    # ---- snapshot after rendering (mirror main feed behavior) ----
+    # If a bucket was opened this pass, set its last_seen to the pending timestamp.
+    if opened_bkey_this_pass:
+        ts = float(pending_seen.get(opened_bkey_this_pass, time.time()))
+        bucket_lastseen[opened_bkey_this_pass] = ts
+        # we don't clear pending here; leave it for potential close overwrite
 
 
 # ---------- Original EC grouped renderer (kept, unchanged) ----------
