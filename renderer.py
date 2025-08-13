@@ -3,7 +3,6 @@ from dateutil import parser as dateparser
 from collections import OrderedDict
 import time
 from datetime import timezone
-import re
 
 # ---------- Generic JSON/NWS renderer ----------
 
@@ -96,7 +95,7 @@ _PROVINCE_ORDER = [
 
 # ---------- Compact EC renderer (Province → Warning Type → entries) ----------
 
-# Keep ONLY these warning buckets (case-insensitive match against title)
+# Keep ONLY these warning buckets (plus Severe Thunderstorm Watch), case-insensitive match
 EC_WARNING_TYPES = [
     "Arctic Outflow Warning",
     "Blizzard Warning",
@@ -113,7 +112,7 @@ EC_WARNING_TYPES = [
     "Hurricane Warning",
     "Rainfall Warning",
     "Severe Thunderstorm Warning",
-    "Severe Thunderstorm Watch",
+    "Severe Thunderstorm Watch",  # included per request
     "Snowfall Warning",
     "Snow Squall Warning",
     "Tornado Warning",
@@ -142,6 +141,34 @@ def _ec_entry_ts(e) -> float:
         return dateparser.parse(e.get("published","")).timestamp()
     except Exception:
         return 0.0
+
+# --- EC helpers exported for main app (warnings-only math matches buckets) ---
+
+def ec_bucket_from_title(title: str) -> str | None:
+    """Public alias so main app (or others) can reuse bucket logic if needed."""
+    return _ec_bucket_from_title(title)
+
+def ec_remaining_new_total(feed_key: str, entries: list) -> int:
+    """
+    Total remaining NEW across all *warning* buckets for EC, using the per-bucket
+    last_seen map maintained by the compact EC renderer:
+      st.session_state[f"{feed_key}_bucket_last_seen"]  (bkey = "Province|Warning Type")
+    """
+    lastseen_map = st.session_state.get(f"{feed_key}_bucket_last_seen", {}) or {}
+    total = 0
+    for e in entries:
+        bucket = _ec_bucket_from_title(e.get("title", ""))
+        if not bucket:
+            continue  # ignore non-warnings
+        code = e.get("province", "")
+        prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
+        bkey = f"{prov_name}|{bucket}"
+        last_seen = float(lastseen_map.get(bkey, 0.0))
+        ts = _ec_entry_ts(e)
+        if ts > last_seen:
+            total += 1
+    return int(total)
+
 
 def render_ec_grouped_compact(entries, conf):
     """
@@ -180,10 +207,7 @@ def render_ec_grouped_compact(entries, conf):
 
     # attach timestamps & sort newest→oldest
     for e in entries:
-        try:
-            e["timestamp"] = dateparser.parse(e.get("published","")).timestamp()
-        except Exception:
-            e["timestamp"] = 0.0
+        e["timestamp"] = _ec_entry_ts(e)
     entries.sort(key=lambda x: x["timestamp"], reverse=True)
 
     # filter to warnings only and assign bucket
@@ -218,6 +242,19 @@ def render_ec_grouped_compact(entries, conf):
         if not alerts:
             continue
 
+        # red bar if any bucket in province has NEW
+        def _prov_has_new():
+            for a in alerts:
+                bkey = f"{prov}|{a['bucket']}"
+                if a.get("timestamp",0.0) > float(bucket_lastseen.get(bkey, 0.0)):
+                    return True
+            return False
+
+        if _prov_has_new():
+            st.markdown(
+                "<div style='height:4px;background:red;margin:8px 0;'></div>",
+                unsafe_allow_html=True
+            )
         st.markdown(f"## {prov}")
 
         # bucket by warning type
@@ -301,6 +338,7 @@ def render_ec_grouped_compact(entries, conf):
     if any_toggle and not st.session_state.get(rerun_guard_key, False):
         st.session_state[rerun_guard_key] = True
         _safe_rerun()
+
 
 # ---------- Original EC grouped renderer (kept, unchanged) ----------
 
@@ -408,7 +446,7 @@ def render_meteoalarm(item, conf):
                         unsafe_allow_html=True)
             for e in alerts:
                 try:
-                    # Format: Aug 07 22:00 UTC
+                    # Format: Aug 07 %H:%M UTC
                     dt1 = dateparser.parse(e['from']).strftime('%b %d %H:%M UTC')
                     dt2 = dateparser.parse(e['until']).strftime('%b %d %H:%M UTC')
                 except Exception:
