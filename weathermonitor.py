@@ -149,7 +149,7 @@ def render_badge(ph, count: int):
     if count and count > 0:
         ph.markdown(
             "<span style='margin-left:8px;padding:2px 6px;"
-            "border-radius:4px;background:#ffeecc;font-size:0.9em;'>"
+            "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;'>"
             f"❗ {count} New</span>",
             unsafe_allow_html=True,
         )
