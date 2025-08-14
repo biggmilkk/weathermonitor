@@ -433,70 +433,63 @@ def render_cma(item, conf):
     st.markdown('---')
 
 
-def render_meteoalarm(item, conf):
-    # Country total (Orange+Red) if available
-    total_severe = 0
-    counts = item.get("counts") or {}
-    if isinstance(counts, dict):
-        total_severe = int(counts.get("total") or 0)
+# ---------- Meteoalarm renderer ----------
 
-    title = item.get('title','')
+def render_meteoalarm(item, conf):
+    # Country total (Orange+Red) from scraper
+    total_severe = int(item.get("total_alerts") or 0)
+    title = item.get("title", "")
     header = f"{title} ({total_severe})" if total_severe > 0 else title
     st.markdown(f"<h3 style='margin-bottom:4px'>{header}</h3>", unsafe_allow_html=True)
 
-    # Helper to look up per-type, per-level count
-    def _level_type_count(level: str, typ: str) -> int | None:
-        by_type = counts.get("by_type") if isinstance(counts, dict) else None
-        if not isinstance(by_type, dict):
-            return None
-        bucket = by_type.get(typ)
-        if not isinstance(bucket, dict):
-            return None
-        # Prefer the exact level count; fall back to total if missing
-        val = bucket.get(level)
-        if isinstance(val, int) and val > 0:
-            return val
-        tot = bucket.get("total")
-        return tot if isinstance(tot, int) and tot > 0 else None
+    # Helper to look up per-day, per-(level|type) count from scraper
+    # counts structure: {"today": {"Orange|Thunderstorms": 4, ...}, "tomorrow": {...}}
+    counts = item.get("counts") or {}
 
-    for day in ['today', 'tomorrow']:
-        alerts = item.get('alerts', {}).get(day, [])
+    def _day_level_type_count(day: str, level: str, typ: str) -> int | None:
+        day_counts = counts.get(day)
+        if not isinstance(day_counts, dict):
+            return None
+        return day_counts.get(f"{level}|{typ}")
+
+    for day in ["today", "tomorrow"]:
+        alerts = (item.get("alerts", {}) or {}).get(day, [])
         if alerts:
             st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>", unsafe_allow_html=True)
             for e in alerts:
                 try:
-                    # Format: Aug 07 %H:%M UTC
-                    dt1 = dateparser.parse(e['from']).strftime('%b %d %H:%M UTC')
-                    dt2 = dateparser.parse(e['until']).strftime('%b %d %H:%M UTC')
+                    dt1 = dateparser.parse(e.get("from", "")).strftime("%b %d %H:%M UTC")
+                    dt2 = dateparser.parse(e.get("until", "")).strftime("%b %d %H:%M UTC")
                 except Exception:
-                    dt1, dt2 = e.get('from', ''), e.get('until', '')
+                    dt1, dt2 = e.get("from", ""), e.get("until", "")
 
-                level = e.get('level', '')
-                typ   = e.get('type', '')
-                color = {'Orange': '#FF7F00', 'Red': '#E60026'}.get(level, '#888')
-                prefix = '[NEW] ' if e.get('is_new') else ''
+                level = e.get("level", "")
+                typ   = e.get("type", "")
+                color = {"Orange": "#FF7F00", "Red": "#E60026"}.get(level, "#888")
+                prefix = "[NEW] " if e.get("is_new") else ""
 
-                # Add per-alert count (level+type) if we have it
-                n = _level_type_count(level, typ)
-                count_str = f" ({n})" if n else ""
+                # Add per-alert count if available for this day/level/type
+                n = _day_level_type_count(day, level, typ)
+                count_str = f" ({n})" if isinstance(n, int) and n > 0 else ""
 
                 text = f"{prefix}[{level}] {typ}{count_str} – {dt1} to {dt2}"
                 st.markdown(
                     f"<div style='margin-bottom:6px;'>"
                     f"<span style='color:{color};font-size:16px;'>&#9679;</span> {text}</div>",
-                    unsafe_allow_html=True
+                    unsafe_allow_html=True,
                 )
 
-    link = item.get('link')
+    link = item.get("link")
     if link:
         st.markdown(f"[Read more]({link})")
 
-    published = item.get('published')
+    published = item.get("published")
     if published:
-        published_display = published.replace('+0000', 'UTC')
+        # Normalise +0000 → UTC (feed is already UTC)
+        published_display = published.replace("+0000", "UTC")
         st.caption(f"Published: {published_display}")
 
-    st.markdown('---')
+    st.markdown("---")
 
 
 # ---------- BOM grouped renderer ----------
