@@ -243,14 +243,30 @@ if active:
     # --- Meteoalarm (country objects) ---
     elif conf["type"] == "rss_meteoalarm":
         seen_ids = st.session_state[f"{active}_last_seen_alerts"]
-        # Mark new vs seen
-        for country in data_list:
+
+        # Filter to countries that actually have alerts (belt + suspenders)
+        def _has_alerts(c):
+            a = c.get("alerts", {})
+            return any(a.get("today")) or any(a.get("tomorrow"))
+
+        countries = [c for c in data_list if _has_alerts(c)]
+
+    # Mark new vs seen
+        for country in countries:
             for alerts in country.get("alerts", {}).values():
                 for e in alerts:
                     e["is_new"] = alert_id(e) not in seen_ids
-        # Red-bar + render per country
-        for country in data_list:
-            alerts_flat = [e for alerts in country.get("alerts", {}).values() for e in alerts]
+
+    # Sort alphabetically by country title (case-insensitive)
+        countries.sort(key=lambda c: (c.get("title", "").casefold()))
+
+    # Red-bar + render per country
+        for country in countries:
+            alerts_flat = [
+                e
+                for alerts in country.get("alerts", {}).values()
+                for e in alerts
+            ]
             if any(e.get("is_new") for e in alerts_flat):
                 st.markdown(
                     "<div style='height:4px;background:red;margin:8px 0;'></div>",
