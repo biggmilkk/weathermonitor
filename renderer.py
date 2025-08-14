@@ -433,16 +433,36 @@ def render_cma(item, conf):
     st.markdown('---')
 
 
-# ---------- Meteoalarm renderer ----------
-
 def render_meteoalarm(item, conf):
-    st.markdown(f"<h3 style='margin-bottom:4px'>{item.get('title','')}</h3>",
-                unsafe_allow_html=True)
+    # Country total (Orange+Red) if available
+    total_severe = 0
+    counts = item.get("counts") or {}
+    if isinstance(counts, dict):
+        total_severe = int(counts.get("total") or 0)
+
+    title = item.get('title','')
+    header = f"{title} ({total_severe})" if total_severe > 0 else title
+    st.markdown(f"<h3 style='margin-bottom:4px'>{header}</h3>", unsafe_allow_html=True)
+
+    # Helper to look up per-type, per-level count
+    def _level_type_count(level: str, typ: str) -> int | None:
+        by_type = counts.get("by_type") if isinstance(counts, dict) else None
+        if not isinstance(by_type, dict):
+            return None
+        bucket = by_type.get(typ)
+        if not isinstance(bucket, dict):
+            return None
+        # Prefer the exact level count; fall back to total if missing
+        val = bucket.get(level)
+        if isinstance(val, int) and val > 0:
+            return val
+        tot = bucket.get("total")
+        return tot if isinstance(tot, int) and tot > 0 else None
+
     for day in ['today', 'tomorrow']:
         alerts = item.get('alerts', {}).get(day, [])
         if alerts:
-            st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>",
-                        unsafe_allow_html=True)
+            st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>", unsafe_allow_html=True)
             for e in alerts:
                 try:
                     # Format: Aug 07 %H:%M UTC
@@ -451,16 +471,22 @@ def render_meteoalarm(item, conf):
                 except Exception:
                     dt1, dt2 = e.get('from', ''), e.get('until', '')
 
-                color = {'Orange': '#FF7F00', 'Red': '#E60026'}.get(
-                    e.get('level', ''), '#888'
-                )
+                level = e.get('level', '')
+                typ   = e.get('type', '')
+                color = {'Orange': '#FF7F00', 'Red': '#E60026'}.get(level, '#888')
                 prefix = '[NEW] ' if e.get('is_new') else ''
-                text = f"{prefix}[{e.get('level','')}] {e.get('type','')} – {dt1} to {dt2}"
+
+                # Add per-alert count (level+type) if we have it
+                n = _level_type_count(level, typ)
+                count_str = f" ({n})" if n else ""
+
+                text = f"{prefix}[{level}] {typ}{count_str} – {dt1} to {dt2}"
                 st.markdown(
                     f"<div style='margin-bottom:6px;'>"
                     f"<span style='color:{color};font-size:16px;'>&#9679;</span> {text}</div>",
                     unsafe_allow_html=True
                 )
+
     link = item.get('link')
     if link:
         st.markdown(f"[Read more]({link})")
