@@ -176,7 +176,7 @@ def render_ec_grouped_compact(entries, conf):
     - While OPEN: do NOT advance last_seen; bucket badge + [NEW] stay visible.
     - On CLOSE: set last_seen to the time it was opened (pending), clearing the NEWs.
     - Writes aggregate NEW to st.session_state['{feed_key}_remaining_new_total'].
-    - Triggers a one-shot rerun only on CLOSE so the top-row EC badge updates immediately.
+    - Shows an ACTIVE count badge per bucket so users can see totals without opening.
     """
     feed_key = conf.get("key", "ec")
 
@@ -289,11 +289,23 @@ def render_ec_grouped_compact(entries, conf):
             new_count = sum(1 for x in items if x.get("timestamp",0.0) > last_seen)
             total_remaining_new += new_count
 
+            # --- BADGES (right side): ACTIVE (always) + NEW (if >0) ---
             with cols[1]:
+                # Active count badge (neutral)
+                active_count = len(items)
+                st.markdown(
+                    "<span style='margin-left:6px;padding:2px 6px;"
+                    "border-radius:4px;background:#eef0f3;color:#000;font-size:0.9em;"
+                    "font-weight:600;display:inline-block;'>"
+                    f"{active_count} Active</span>",
+                    unsafe_allow_html=True,
+                )
+                # New count badge (attention)
                 if new_count > 0:
                     st.markdown(
-                        "<span style='margin-left:8px;padding:2px 6px;"
-                        "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;font-weight:bold;'>"
+                        "<span style='margin-left:6px;padding:2px 6px;"
+                        "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
+                        "font-weight:bold;display:inline-block;'>"
                         f"❗ {new_count} New</span>",
                         unsafe_allow_html=True,
                     )
@@ -326,7 +338,6 @@ def render_ec_grouped_compact(entries, conf):
 
         st.markdown("---")
 
-    # Do NOT snapshot last_seen on open (we only recorded pending_open time).
     # Aggregate NEW total (matches what you see in badges right now)
     st.session_state[f"{feed_key}_remaining_new_total"] = int(total_remaining_new)
 
@@ -334,7 +345,6 @@ def render_ec_grouped_compact(entries, conf):
     if did_close_toggle and not st.session_state.get(rerun_guard_key, False):
         st.session_state[rerun_guard_key] = True
         _safe_rerun()
-
 
 # ---------- Original EC grouped renderer (kept, unchanged) ----------
 
