@@ -68,7 +68,7 @@ MA_COUNTRY_CODES = {
     "Sweden": "SE",
     "Switzerland": "CH",
     "Ukraine": "UA",
-    "United Kingdom": "GB",
+    "United Kingdom": "UK",
     "United Kingdom of Great Britain and Northern Ireland": "GB",
 }
 
