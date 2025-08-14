@@ -442,15 +442,34 @@ def render_meteoalarm(item, conf):
     header = f"{title} ({total_severe})" if total_severe > 0 else title
     st.markdown(f"<h3 style='margin-bottom:4px'>{header}</h3>", unsafe_allow_html=True)
 
-    # Helper to look up per-day, per-(level|type) count from scraper
-    # counts structure: {"today": {"Orange|Thunderstorms": 4, ...}, "tomorrow": {...}}
-    counts = item.get("counts") or {}
+    # Counts structure from scraper:
+    # {
+    #   "total": int,
+    #   "by_type": { "<Type>": {"Orange": n, "Red": m, "total": n+m}, ... },
+    #   "by_day":  {
+    #       "today":    { "Orange|Thunderstorms": n, ... },
+    #       "tomorrow": { "Red|Rain": n, ... }
+    #   }
+    # }
+    counts   = item.get("counts") or {}
+    by_day   = counts.get("by_day")  if isinstance(counts, dict) else {}
+    by_type  = counts.get("by_type") if isinstance(counts, dict) else {}
 
     def _day_level_type_count(day: str, level: str, typ: str) -> int | None:
-        day_counts = counts.get(day)
-        if not isinstance(day_counts, dict):
-            return None
-        return day_counts.get(f"{level}|{typ}")
+        """Prefer exact per-day count; fall back to per-type bucket totals if missing."""
+        if isinstance(by_day, dict):
+            d = by_day.get(day)
+            if isinstance(d, dict):
+                n = d.get(f"{level}|{typ}")
+                if isinstance(n, int) and n > 0:
+                    return n
+        if isinstance(by_type, dict):
+            bucket = by_type.get(typ)
+            if isinstance(bucket, dict):
+                n = bucket.get(level) or bucket.get("total")
+                if isinstance(n, int) and n > 0:
+                    return n
+        return None
 
     for day in ["today", "tomorrow"]:
         alerts = (item.get("alerts", {}) or {}).get(day, [])
@@ -468,7 +487,7 @@ def render_meteoalarm(item, conf):
                 color = {"Orange": "#FF7F00", "Red": "#E60026"}.get(level, "#888")
                 prefix = "[NEW] " if e.get("is_new") else ""
 
-                # Add per-alert count if available for this day/level/type
+                # Per-alert count (if available)
                 n = _day_level_type_count(day, level, typ)
                 count_str = f" ({n})" if isinstance(n, int) and n > 0 else ""
 
@@ -485,11 +504,11 @@ def render_meteoalarm(item, conf):
 
     published = item.get("published")
     if published:
-        # Normalise +0000 → UTC (feed is already UTC)
+        # Feed is UTC formatted with +0000; normalize label
         published_display = published.replace("+0000", "UTC")
         st.caption(f"Published: {published_display}")
 
-    st.markdown("---")
+    st.markdown('---')
 
 
 # ---------- BOM grouped renderer ----------
