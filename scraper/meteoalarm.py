@@ -31,14 +31,70 @@ AWARENESS_TYPES = {
 # Default feed URL
 DEFAULT_URL = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"
 
+# Country → 2-letter region code used by meteoalarm.org
+COUNTRY_TO_CODE = {
+    "Austria": "AT",
+    "Belgium": "BE",
+    "Bosnia and Herzegovina": "BA",
+    "Bulgaria": "BG",
+    "Croatia": "HR",
+    "Cyprus": "CY",
+    "Czechia": "CZ",
+    "Czech Republic": "CZ",  # alias
+    "Denmark": "DK",
+    "Estonia": "EE",
+    "Finland": "FI",
+    "France": "FR",
+    "Germany": "DE",
+    "Greece": "GR",
+    "Hungary": "HU",
+    "Iceland": "IS",
+    "Ireland": "IE",
+    "Israel": "IL",
+    "Italy": "IT",
+    "Latvia": "LV",
+    "Lithuania": "LT",
+    "Luxembourg": "LU",
+    "Malta": "MT",
+    "Moldova": "MD",
+    "Montenegro": "ME",
+    "Netherlands": "NL",
+    "North Macedonia": "MK",
+    "Norway": "NO",
+    "Poland": "PL",
+    "Portugal": "PT",
+    "Romania": "RO",
+    "Serbia": "RS",
+    "Slovakia": "SK",
+    "Slovenia": "SI",
+    "Spain": "ES",
+    "Sweden": "SE",
+    "Switzerland": "CH",
+    "Ukraine": "UA",
+    "United Kingdom": "UK",  # ISO alpha-2; swap to "UK" if their frontend expects it
+}
+
+def _normalize_country(name: str) -> str:
+    # Collapse whitespace and strip; keep exact casing keys in map
+    return " ".join((name or "").split())
+
+def _country_link(country_name: str) -> str | None:
+    code = COUNTRY_TO_CODE.get(_normalize_country(country_name))
+    if not code:
+        return None
+    return f"https://meteoalarm.org/en/live/region/{code}"
 
 def _parse_feed(feed):
     entries = []
     for entry in feed.entries:
+        # e.g., title like "MeteoAlarm Austria"
         country = entry.get("title", "").replace("MeteoAlarm", "").strip()
         pub_date = entry.get("published", "")
         description_html = entry.get("description", "")
-        link = entry.get("link", "")
+        default_link = entry.get("link", "")
+
+        # Prefer country-specific live page if we can map it
+        link = _country_link(country) or default_link
 
         soup = BeautifulSoup(description_html, "html.parser")
         rows = soup.find_all("tr")
@@ -67,11 +123,10 @@ def _parse_feed(feed):
                 if match:
                     awt, level = match.groups()
 
-            # Only recognized severity levels
+            # Only recognized severity levels, and only Orange/Red
             if level not in AWARENESS_LEVELS:
                 continue
             level_name = AWARENESS_LEVELS[level]
-            # Only Orange and Red
             if level_name not in ["Orange", "Red"]:
                 continue
 
@@ -94,12 +149,12 @@ def _parse_feed(feed):
             continue
 
         entries.append({
-            "title": f"{country} Alerts",
+            "title": f"{_normalize_country(country)} Alerts",
             "summary": "",
             "alerts": alert_data,
             "link": link,
             "published": pub_date,
-            "region": country,
+            "region": _normalize_country(country),
             "province": "Europe",
         })
     return entries
