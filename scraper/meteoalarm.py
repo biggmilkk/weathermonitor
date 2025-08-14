@@ -1,65 +1,136 @@
-def _parse_feed(feed):
-    # Country name → 2-letter region code used by MeteoAlarm frontend URLs
-    MA_COUNTRY_CODES = {
-        "Austria": "AT",
-        "Belgium": "BE",
-        "Bosnia and Herzegovina": "BA",
-        "Bulgaria": "BG",
-        "Croatia": "HR",
-        "Cyprus": "CY",
-        "Czechia": "CZ",
-        "Czech Republic": "CZ",  # alias
-        "Denmark": "DK",
-        "Estonia": "EE",
-        "Finland": "FI",
-        "France": "FR",
-        "Germany": "DE",
-        "Greece": "GR",
-        "Hungary": "HU",
-        "Iceland": "IS",
-        "Ireland": "IE",
-        "Israel": "IL",
-        "Italy": "IT",
-        "Latvia": "LV",
-        "Lithuania": "LT",
-        "Luxembourg": "LU",
-        "Malta": "MT",
-        "Moldova": "MD",
-        "Montenegro": "ME",
-        "Netherlands": "NL",
-        "North Macedonia": "MK",
-        "Norway": "NO",
-        "Poland": "PL",
-        "Portugal": "PT",
-        "Romania": "RO",
-        "Serbia": "RS",
-        "Slovakia": "SK",
-        "Slovenia": "SI",
-        "Spain": "ES",
-        "Sweden": "SE",
-        "Switzerland": "CH",
-        "Ukraine": "UA",
-        "United Kingdom": "GB",
-        "United Kingdom of Great Britain and Northern Ireland": "GB",
+import streamlit as st
+import feedparser
+import logging
+import re
+from bs4 import BeautifulSoup
+import httpx
+
+# Alert severity levels mapped from MeteoAlarm codes
+AWARENESS_LEVELS = {
+    "2": "Yellow",
+    "3": "Orange",
+    "4": "Red",
+}
+
+# Alert types mapped from MeteoAlarm codes
+AWARENESS_TYPES = {
+    "1": "Wind",
+    "2": "Snow/Ice",
+    "3": "Thunderstorms",
+    "4": "Fog",
+    "5": "Extreme high temperature",
+    "6": "Extreme low temperature",
+    "7": "Coastal event",
+    "8": "Forest fire",
+    "9": "Avalanche",
+    "10": "Rain",
+    "12": "Flood",
+    "13": "Rain/Flood",
+}
+
+# Default feed URL
+DEFAULT_URL = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"
+
+# Country → 2-letter region code used by meteoalarm.org “live” page
+COUNTRY_TO_CODE = {
+    "Austria": "AT",
+    "Belgium": "BE",
+    "Bosnia and Herzegovina": "BA",
+    "Bulgaria": "BG",
+    "Croatia": "HR",
+    "Cyprus": "CY",
+    "Czechia": "CZ",
+    "Czech Republic": "CZ",  # alias
+    "Denmark": "DK",
+    "Estonia": "EE",
+    "Finland": "FI",
+    "France": "FR",
+    "Germany": "DE",
+    "Greece": "GR",
+    "Hungary": "HU",
+    "Iceland": "IS",
+    "Ireland": "IE",
+    "Israel": "IL",
+    "Italy": "IT",
+    "Latvia": "LV",
+    "Lithuania": "LT",
+    "Luxembourg": "LU",
+    "Malta": "MT",
+    "Moldova": "MD",
+    "Montenegro": "ME",
+    "Netherlands": "NL",
+    "North Macedonia": "MK",
+    "Norway": "NO",
+    "Poland": "PL",
+    "Portugal": "PT",
+    "Romania": "RO",
+    "Serbia": "RS",
+    "Slovakia": "SK",
+    "Slovenia": "SI",
+    "Spain": "ES",
+    "Sweden": "SE",
+    "Switzerland": "CH",
+    "Ukraine": "UA",
+    "United Kingdom": "UK",  # use "UK" if their frontend expects it
+}
+
+def _normalize_country(name: str) -> str:
+    return " ".join((name or "").split())
+
+def _country_link(country_name: str) -> str | None:
+    code = COUNTRY_TO_CODE.get(_normalize_country(country_name))
+    if not code:
+        return None
+    return f"https://meteoalarm.org/en/live/region/{code}"
+
+def _summarize_counts(alert_data: dict) -> dict:
+    """
+    Build totals of severe/extreme (Orange/Red) by type and by level.
+    Returns:
+      {
+        "total": int,
+        "by_level": {"Orange": n, "Red": m},
+        "by_type": {
+           "Thunderstorms": {"Orange": x, "Red": y, "total": x+y},
+           ...
+        }
+      }
+    """
+    summary = {
+        "total": 0,
+        "by_level": {"Orange": 0, "Red": 0},
+        "by_type": {}
     }
+    for day in ("today", "tomorrow"):
+        for a in alert_data.get(day, []):
+            lvl = a.get("level")
+            typ = a.get("type")
+            if lvl not in ("Orange", "Red") or not typ:
+                continue
+            summary["total"] += 1
+            summary["by_level"][lvl] = summary["by_level"].get(lvl, 0) + 1
+            bt = summary["by_type"].setdefault(typ, {"Orange": 0, "Red": 0, "total": 0})
+            bt[lvl] += 1
+            bt["total"] += 1
+    return summary
 
+def _parse_feed(feed):
     entries = []
-
     for entry in feed.entries:
-        # Country name (e.g., "Austria")
+        # e.g., title like "MeteoAlarm Austria"
         country = entry.get("title", "").replace("MeteoAlarm", "").strip()
         pub_date = entry.get("published", "")
         description_html = entry.get("description", "")
+        default_link = entry.get("link", "")
 
-        # Parse the HTML table
+        # Prefer country-specific live page if we can map it
+        link = _country_link(country) or default_link
+
         soup = BeautifulSoup(description_html, "html.parser")
         rows = soup.find_all("tr")
 
         current_section = "today"
         alert_data = {"today": [], "tomorrow": []}
-
-        # Per-day counts by (level, type)
-        per_day_counts = {"today": {}, "tomorrow": {}}
 
         for row in rows:
             header = row.find("th")
@@ -75,72 +146,80 @@ def _parse_feed(feed):
             if len(cells) != 2:
                 continue
 
-            # Try to get level/type from attributes, else fallback to text probe
             level = cells[0].get("data-awareness-level")
             awt = cells[0].get("data-awareness-type")
             if not level or not awt:
-                m = re.search(r"awt:(\d+)\s+level:(\d+)", cells[0].get_text(strip=True))
-                if m:
-                    awt, level = m.groups()
+                match = re.search(r"awt:(\d+)\s+level:(\d+)", cells[0].get_text(strip=True))
+                if match:
+                    awt, level = match.groups()
 
-            # Map to names and filter: only Orange/Red
+            # Only recognized severity levels, and only Orange/Red
             if level not in AWARENESS_LEVELS:
                 continue
             level_name = AWARENESS_LEVELS[level]
-            if level_name not in ("Orange", "Red"):
+            if level_name not in ["Orange", "Red"]:
                 continue
 
             type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
 
-            # Window (keep as strings; renderer formats them)
             from_match = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
             until_match = re.search(r"Until:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
             from_time = from_match.group(1) if from_match else "?"
             until_time = until_match.group(1) if until_match else "?"
 
-            # Store one alert entry (same structure you already use)
-            alert = {
+            alert_data[current_section].append({
                 "level": level_name,
                 "type": type_name,
                 "from": from_time,
                 "until": until_time,
-            }
-            alert_data[current_section].append(alert)
+            })
 
-            # Count by (level, type) for this day
-            key = (level_name, type_name)
-            per_day_counts[current_section][key] = per_day_counts[current_section].get(key, 0) + 1
-
-        # Skip countries with no Orange/Red entries
+        # Skip if no relevant alerts
         if not alert_data["today"] and not alert_data["tomorrow"]:
             continue
 
-        # Total Orange/Red count across both days
-        total_alerts = sum(per_day_counts["today"].values()) + sum(per_day_counts["tomorrow"].values())
-
-        # Build the correct frontend URL (fallback to RSS link if we don't know the code)
-        code = MA_COUNTRY_CODES.get(country)
-        if code:
-            link = f"https://meteoalarm.org/en/live/region/{code}"
-        else:
-            # fallback to the feed link in case of an unexpected country label
-            link = entry.get("link", "")
+        country_norm = _normalize_country(country)
+        counts = _summarize_counts(alert_data)
 
         entries.append({
-            "title": f"{country} Alerts",
+            "title": f"{country_norm} Alerts",
             "summary": "",
-            "alerts": alert_data,                 # keeps your existing structure
-            "counts": {                           # NEW: per-day (level,type) counts
-                "today": per_day_counts["today"],
-                "tomorrow": per_day_counts["tomorrow"],
-            },
-            "total_alerts": total_alerts,         # NEW: country total
-            "link": link,                         # fixed human-friendly URL
+            "alerts": alert_data,
+            "counts": counts,   # <— NEW: totals by type/level + overall
+            "link": link,
             "published": pub_date,
-            "region": country,
+            "region": country_norm,
             "province": "Europe",
         })
-
-    # Alphabetical by country name
-    entries.sort(key=lambda e: e["region"].lower())
     return entries
+
+@st.cache_data(ttl=60, show_spinner=False)
+def scrape_meteoalarm(conf):
+    """
+    Synchronous wrapper: fetch and parse MeteoAlarm RSS.
+    """
+    url = conf.get("url", DEFAULT_URL)
+    try:
+        feed = feedparser.parse(url)
+        entries = _parse_feed(feed)
+        logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} country entries (Orange/Red only)")
+        return {"entries": entries, "source": url}
+    except Exception as e:
+        logging.warning(f"[METEOALARM ERROR] Failed to fetch feed: {e}")
+        return {"entries": [], "error": str(e), "source": url}
+
+async def scrape_meteoalarm_async(conf, client: httpx.AsyncClient):
+    """
+    Async MeteoAlarm scraper using httpx.AsyncClient.
+    """
+    url = conf.get("url", DEFAULT_URL)
+    try:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.content)
+        entries = _parse_feed(feed)
+        logging.warning(f"[METEOALARM DEBUG] Parsed {len(entries)} country entries (async)")
+        return {"entries": entries, "source": url}
+    except Exception as e:
+        logging.warning(f"[METEOALARM ERROR] Fetch failed: {e}")
+        return {"entries": [], "error": str(e), "source": url}
