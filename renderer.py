@@ -171,13 +171,6 @@ def ec_remaining_new_total(feed_key: str, entries: list) -> int:
     return int(total)
 
 def render_ec_grouped_compact(entries, conf):
-    """
-    Province → Warning Type summary using BUTTONS (no arrows).
-    - While OPEN: do NOT advance last_seen; bucket badge + [NEW] stay visible.
-    - On CLOSE: set last_seen to the time it was opened (pending), clearing the NEWs.
-    - Writes aggregate NEW to st.session_state['{feed_key}_remaining_new_total'].
-    - Shows an ACTIVE count badge per bucket so users can see totals without opening.
-    """
     feed_key = conf.get("key", "ec")
 
     # ---- safe rerun helper (Streamlit >=1.31 uses st.rerun) ----
