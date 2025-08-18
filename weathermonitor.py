@@ -353,11 +353,6 @@ if active:
                 for alerts in (country.get("alerts", {}) or {}).values()
                 for e in (alerts or [])
             ]
-            if any(e.get("is_new") for e in alerts_flat):
-                st.markdown(
-                    "<div style='height:4px;background:red;margin:8px 0;'></div>",
-                    unsafe_allow_html=True,
-                )
             RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
 
     # --- JMA ---
@@ -373,12 +368,7 @@ if active:
                 ts = dateparser.parse(pub).timestamp() if pub else 0.0
             except Exception:
                 ts = 0.0
-            if ts > seen_ts:
-                st.markdown(
-                    "<div style='height:4px;background:red;margin:8px 0;'></div>",
-                    unsafe_allow_html=True,
-                )
-            # dispatch by conf type if available, else no-op
+            item["is_new"] = bool(ts > seen_ts)
             RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
 
     # Snapshot last seen timestamps or alerts for *non-EC* feeds
