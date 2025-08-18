@@ -1,3 +1,5 @@
+# weathermonitor.py
+
 import time
 import streamlit as st
 import os
@@ -6,7 +8,7 @@ import logging
 import gc
 import asyncio
 import nest_asyncio
-from dateutil import parser as dateparser
+from dateutil import parser as dateparser  # (still used in generic branch)
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from streamlit_autorefresh import st_autorefresh
@@ -22,8 +24,10 @@ nest_asyncio.apply()
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
 
-# —— Autotuning constants ——
-MEMORY_LIMIT = 1 * 1024**3
+# —— Adaptive memory targets —— #
+vm = psutil.virtual_memory()
+# Use up to half of system RAM, capped at 4 GiB budget for our app
+MEMORY_LIMIT = int(min(0.5 * vm.total, 4 * 1024**3))
 MEMORY_HIGH_WATER = 0.85 * MEMORY_LIMIT
 MEMORY_LOW_WATER  = 0.50 * MEMORY_LIMIT
 
@@ -31,24 +35,24 @@ MIN_CONC = 5
 MAX_CONC = 50
 STEP     = 5
 
+def _rss_bytes() -> int:
+    return psutil.Process(os.getpid()).memory_info().rss
+
 # Initialize in session_state once
 st.session_state.setdefault("concurrency", 20)
 
-# Measure current process RSS
-proc = psutil.Process(os.getpid())
-rss  = proc.memory_info().rss
-
-# Nudge concurrency based on memory
-if rss > MEMORY_HIGH_WATER:
+# Measure current process RSS and nudge concurrency
+rss_before = _rss_bytes()
+if rss_before > MEMORY_HIGH_WATER:
     st.session_state["concurrency"] = max(MIN_CONC, st.session_state["concurrency"] - STEP)
-elif rss < MEMORY_LOW_WATER:
+elif rss_before < MEMORY_LOW_WATER:
     st.session_state["concurrency"] = min(MAX_CONC, st.session_state["concurrency"] + STEP)
 
 # Use this dynamic value everywhere you used MAX_CONCURRENCY
 MAX_CONCURRENCY = st.session_state["concurrency"]
 
 # (Optional) Print for debugging
-st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss//(1024*1024)} MB")
+st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss_before//(1024*1024)} MB")
 
 # Constants
 FETCH_TTL = 60
@@ -59,8 +63,19 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Auto-refresh
 st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 
-# Load feeds and init session state
-FEED_CONFIG = get_feed_definitions()
+# Cache feed definitions if they involve I/O
+@st.cache_data(ttl=3600)
+def load_feeds():
+    return get_feed_definitions()
+
+FEED_CONFIG = load_feeds()
+
+# Guard: no feeds configured
+if not FEED_CONFIG:
+    st.title("Global Weather Monitor")
+    st.info("No feeds configured.")
+    st.stop()
+
 now = time.time()
 for key, conf in FEED_CONFIG.items():
     st.session_state.setdefault(f"{key}_data", [])
@@ -68,7 +83,8 @@ for key, conf in FEED_CONFIG.items():
     st.session_state.setdefault(f"{key}_last_seen_time", 0.0)
     st.session_state.setdefault(f"{key}_pending_seen_time", None)
     if conf["type"] == "rss_meteoalarm":
-        st.session_state.setdefault(f"{key}_last_seen_alerts", set())
+        # store as tuple for deterministic session_state; convert to set when reading
+        st.session_state.setdefault(f"{key}_last_seen_alerts", tuple())
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
 
@@ -76,25 +92,74 @@ st.session_state.setdefault("active_feed", None)
 def alert_id(e):
     return f"{e['level']}|{e['type']}|{e['from']}|{e['until']}"
 
+# ---- Networking helpers ---- #
+
+async def with_retries(coro_fn, *, attempts=3, base_delay=0.5):
+    """
+    Retry wrapper for transient fetch errors.
+    `coro_fn` should be a callable that returns an awaitable (no args).
+    """
+    for i in range(attempts):
+        try:
+            return await coro_fn()
+        except Exception as ex:
+            if i == attempts - 1:
+                raise
+            await asyncio.sleep(base_delay * (2 ** i))
+
 # Async fetcher
 async def _fetch_all_feeds(configs):
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
-    async with httpx.AsyncClient(timeout=30.0) as client:
+
+    limits = httpx.Limits(
+        max_connections=MAX_CONCURRENCY,
+        max_keepalive_connections=MAX_CONCURRENCY
+    )
+    transport = httpx.AsyncHTTPTransport(retries=3)
+    headers = {
+        "User-Agent": "weathermonitor.app/1.0 (+contact@example.com)"
+    }
+    timeout = httpx.Timeout(30.0)
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        limits=limits,
+        transport=transport,
+        http2=True,
+        headers=headers,
+    ) as client:
+
         async def bound_fetch(key, conf):
             async with sem:
+                async def call():
+                    return await SCRAPER_REGISTRY[conf["type"]](conf, client)
+
+                t0 = time.perf_counter()
                 try:
-                    data = await SCRAPER_REGISTRY[conf["type"]](conf, client)
+                    data = await with_retries(call)
                 except Exception as ex:
                     logging.warning(f"[{key.upper()} FETCH ERROR] {ex}")
                     data = {"entries": [], "error": str(ex), "source": conf}
+                dt_ms = (time.perf_counter() - t0) * 1000.0
+                try:
+                    n = len(data.get("entries", []))
+                except Exception:
+                    n = -1
+                logging.info(f"[{key}] {n} entries in {dt_ms:.1f} ms")
                 return key, data
+
         tasks = [bound_fetch(k, cfg) for k, cfg in configs.items()]
         return await asyncio.gather(*tasks)
 
-# Run async on current loop
+# Run async on a fresh event loop (safer under Streamlit reruns)
 def run_async(coro):
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
 
 # Refresh stale feeds
 now = time.time()
@@ -111,22 +176,25 @@ if to_fetch:
         # When the active feed is open, decide whether to snapshot "seen"
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
-                last_seen = st.session_state[f"{key}_last_seen_alerts"]
+                # Only snapshot if no NEW since open
+                last_seen_tuple = st.session_state[f"{key}_last_seen_alerts"]
+                last_seen = set(last_seen_tuple) if isinstance(last_seen_tuple, (list, tuple, set)) else set()
                 _, new_count = compute_counts(entries, conf, last_seen, alert_id_fn=alert_id)
                 if new_count == 0:
-                    snap = {
+                    snap = tuple(sorted(
                         alert_id(e)
                         for country in entries
-                        for alerts in country.get("alerts", {}).values()
-                        for e in alerts
-                    }
+                        for alerts in (country.get("alerts", {}) or {}).values()
+                        for e in (alerts or [])
+                    ))
                     st.session_state[f"{key}_last_seen_alerts"] = snap
             elif conf["type"] == "ec_async":
                 # EC compact renderer manages NEW state per bucket; no auto snapshot here
                 pass
             else:
-                last_seen = st.session_state.get(f"{key}_last_seen_time") or 0.0
-                _, new_count = compute_counts(entries, conf, last_seen, alert_id_fn=alert_id)
+                last_seen_ts = float(st.session_state.get(f"{key}_last_seen_time") or 0.0)
+                # compute_counts is allowed to run with None id_fn for generic feeds
+                _, new_count = compute_counts(entries, conf, last_seen_ts, alert_id_fn=None)
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_time"] = now
 
@@ -136,6 +204,11 @@ if to_fetch:
 
         gc.collect()
 
+    # Post-fetch memory check: if we spiked, dampen concurrency immediately
+    rss_after = _rss_bytes()
+    if rss_after > MEMORY_HIGH_WATER:
+        st.session_state["concurrency"] = max(MIN_CONC, st.session_state["concurrency"] - STEP)
+
 # Header
 st.title("Global Weather Monitor")
 st.caption(
@@ -144,13 +217,20 @@ st.caption(
 )
 st.markdown("---")
 
-# --- helper to draw/update the "❗ N New" badge ---
+# --- helper to draw/update the "❗ N New" badge --- #
+def _safe_int(x):
+    try:
+        return max(0, int(x))
+    except Exception:
+        return 0
+
 def render_badge(ph, count: int):
-    if count and count > 0:
+    n = _safe_int(count)
+    if n > 0:
         ph.markdown(
             "<span style='margin-left:8px;padding:2px 6px;"
             "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;font-weight:bold;'>"
-            f"❗ {count} New</span>",
+            f"❗ {n} New</span>",
             unsafe_allow_html=True,
         )
     else:
@@ -165,7 +245,8 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
 
     # Compute baseline NEW count
     if conf["type"] == "rss_meteoalarm":
-        seen = st.session_state[f"{key}_last_seen_alerts"]
+        last_seen_tuple = st.session_state[f"{key}_last_seen_alerts"]
+        seen = set(last_seen_tuple) if isinstance(last_seen_tuple, (list, tuple, set)) else set()
         _, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
     elif conf["type"] == "ec_async":
         # Always use warnings(+watch)-only aggregate that matches bucket math
@@ -176,8 +257,8 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
             new_count = ec_remaining_new_total(key, entries)
             st.session_state[f"{key}_remaining_new_total"] = int(new_count)
     else:
-        seen = st.session_state.get(f"{key}_last_seen_time") or 0.0
-        _, new_count = compute_counts(entries, conf, seen, alert_id_fn=alert_id)
+        seen_ts = float(st.session_state.get(f"{key}_last_seen_time") or 0.0)
+        _, new_count = compute_counts(entries, conf, seen_ts, alert_id_fn=None)
 
     with cols[i]:
         clicked = st.button(conf["label"], key=f"btn_{key}_{i}", use_container_width=True)
@@ -185,22 +266,27 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         # draw badge via placeholder so we can repaint it later in the same run
         badge_ph = st.empty()
         badge_placeholders[key] = badge_ph
-        render_badge(badge_ph, int(new_count) if new_count is not None else 0)
+        render_badge(badge_ph, _safe_int(new_count))
 
         if clicked:
             if st.session_state["active_feed"] == key:
                 # Closing an open feed
                 if conf["type"] == "rss_meteoalarm":
-                    snap = {
+                    snap = tuple(sorted(
                         alert_id(e)
                         for country in entries
-                        for alerts in country.get("alerts", {}).values()
-                        for e in alerts
-                    }
+                        for alerts in (country.get("alerts", {}) or {}).values()
+                        for e in (alerts or [])
+                    ))
                     st.session_state[f"{key}_last_seen_alerts"] = snap
                 elif conf["type"] == "ec_async":
                     # EC per-bucket close/open handled inside renderer
-                    pass
+                    # Recompute top-row badge now for immediate feedback
+                    ec_total_now = ec_remaining_new_total(key, entries)
+                    st.session_state[f"{key}_remaining_new_total"] = int(ec_total_now)
+                    ph = badge_placeholders.get(key)
+                    if ph is not None:
+                        render_badge(ph, _safe_int(ec_total_now))
                 else:
                     st.session_state[f"{key}_last_seen_time"] = time.time()
                 st.session_state["active_feed"] = None
@@ -227,7 +313,7 @@ if active:
     if conf["type"] == "rss_bom_multi":
         RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
 
-    # --- Environment Canada grouped ---
+    # --- Environment Canada grouped (compact warnings/watch view) ---
     elif conf["type"] == "ec_async":
         RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
 
@@ -238,11 +324,12 @@ if active:
         # Repaint the main badge now so closing a bucket updates the count immediately
         ph = badge_placeholders.get(active)
         if ph is not None:
-            render_badge(ph, int(ec_total_now))
+            render_badge(ph, _safe_int(ec_total_now))
 
     # --- Meteoalarm ---
     elif conf["type"] == "rss_meteoalarm":
-        seen_ids = st.session_state[f"{active}_last_seen_alerts"]
+        last_seen_tuple = st.session_state[f"{active}_last_seen_alerts"]
+        seen_ids = set(last_seen_tuple) if isinstance(last_seen_tuple, (list, tuple, set)) else set()
 
         # Filter to countries that actually have alerts (belt + suspenders)
         def _has_alerts(c):
@@ -251,21 +338,21 @@ if active:
 
         countries = [c for c in data_list if _has_alerts(c)]
 
-    # Mark new vs seen
+        # Mark new vs seen by unique id
         for country in countries:
-            for alerts in country.get("alerts", {}).values():
-                for e in alerts:
+            for alerts in (country.get("alerts", {}) or {}).values():
+                for e in (alerts or []):
                     e["is_new"] = alert_id(e) not in seen_ids
 
-    # Sort alphabetically by country title (case-insensitive)
+        # Sort alphabetically by country title (case-insensitive)
         countries.sort(key=lambda c: (c.get("title", "").casefold()))
 
-    # Red-bar + render per country
+        # Red-bar + render per country
         for country in countries:
             alerts_flat = [
                 e
-                for alerts in country.get("alerts", {}).values()
-                for e in alerts
+                for alerts in (country.get("alerts", {}) or {}).values()
+                for e in (alerts or [])
             ]
             if any(e.get("is_new") for e in alerts_flat):
                 st.markdown(
@@ -280,7 +367,7 @@ if active:
 
     else:
         # Generic item-per-row renderer
-        seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
+        seen_ts = float(st.session_state.get(f"{active}_last_seen_time") or 0.0)
         for item in data_list:
             pub = item.get("published")
             try:
@@ -292,6 +379,7 @@ if active:
                     "<div style='height:4px;background:red;margin:8px 0;'></div>",
                     unsafe_allow_html=True,
                 )
+            # dispatch by conf type if available, else no-op
             RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
 
     # Snapshot last seen timestamps or alerts for *non-EC* feeds
@@ -299,12 +387,12 @@ if active:
     pending = st.session_state.get(pkey, None)
 
     if conf["type"] == "rss_meteoalarm":
-        snap = {
+        snap = tuple(sorted(
             alert_id(e)
             for country in data_list
-            for alerts in country.get("alerts", {}).values()
-            for e in alerts
-        }
+            for alerts in (country.get("alerts", {}) or {}).values()
+            for e in (alerts or [])
+        ))
         st.session_state[f"{active}_last_seen_alerts"] = snap
     elif conf["type"] == "ec_async":
         # EC compact view manages per-bucket snapshots internally
