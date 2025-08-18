@@ -1,5 +1,3 @@
-# renderer.py
-
 import streamlit as st
 from dateutil import parser as dateparser
 from collections import OrderedDict
@@ -29,7 +27,7 @@ def _to_utc_label(pub: str | None) -> str | None:
     try:
         dt = dateparser.parse(pub)
         if dt:
-            return dt.astimezone(_tz.utc).strftime("%a, %d %b %y %H:%M:%S UTC")
+            return dt.astimezone(_tz.utc).strftime("%a,  %d %b %y %H:%M:%S UTC")
     except Exception:
         pass
     return pub
@@ -44,6 +42,13 @@ def _norm(s: str | None) -> str:
 
 def _fmt_utc(ts: float) -> str:
     return time.strftime("%a, %d %b %y %H:%M:%S UTC", time.gmtime(ts))
+
+def _left_stripe():
+    """Less jumpy visual cue than a full-width bar."""
+    st.markdown(
+        "<div style='border-left:4px solid red;margin:8px 0;padding-left:8px;'></div>",
+        unsafe_allow_html=True,
+    )
 
 
 # =========================
@@ -255,7 +260,7 @@ def render_ec_grouped_compact(entries, conf):
         if not alerts:
             continue
 
-        # Red bar if any bucket in province has NEW
+        # Left stripe if any bucket in province has NEW
         def _prov_has_new():
             for a in alerts:
                 bkey = f"{prov}|{a['bucket']}"
@@ -264,10 +269,7 @@ def render_ec_grouped_compact(entries, conf):
             return False
 
         if _prov_has_new():
-            st.markdown(
-                "<div style='height:4px;background:red;margin:8px 0;'></div>",
-                unsafe_allow_html=True
-            )
+            _left_stripe()
         st.markdown(f"## {prov}")
 
         # Bucket by warning type
@@ -506,10 +508,7 @@ def render_bom_grouped(entries, conf):
         if not alerts:
             continue
         if any(a.get("is_new") for a in alerts):
-            st.markdown(
-                "<div style='height:4px;background:red;margin:8px 0;'></div>",
-                unsafe_allow_html=True
-            )
+            _left_stripe()
         st.markdown(f"## {state}")
         for a in alerts:
             prefix = "[NEW] " if a.get("is_new") else ""
@@ -560,10 +559,7 @@ def render_jma_grouped(entries, conf):
     # 4) render each region with deduped titles + colored bullets
     for region, alerts in groups.items():
         if any(a.get("is_new") for a in alerts):
-            st.markdown(
-                "<div style='height:4px;background:red;margin:8px 0;'></div>",
-                unsafe_allow_html=True
-            )
+            _left_stripe()
         st.markdown(f"## {region}")
 
         # title -> is_new_any
