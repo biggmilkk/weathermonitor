@@ -6,6 +6,7 @@ import logging
 import asyncio
 import httpx
 import psutil
+import traceback
 
 import streamlit as st
 from dateutil import parser as dateparser
@@ -151,6 +152,7 @@ async def _fetch_all_feeds(configs: dict):
                     data = await with_retries(call)
                 except Exception as ex:
                     logging.warning(f"[{key.upper()} FETCH ERROR] {ex}")
+                    logging.warning(traceback.format_exc())
                     data = {"entries": [], "error": str(ex), "source": conf}
                 return key, data
 
