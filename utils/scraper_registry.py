@@ -57,22 +57,21 @@ def _load_jma_conf(conf: dict) -> dict:
 
 
 SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
-    # NWS active alerts (json)
-    "json": ScraperEntry("nws_active_alerts", "scrape_nws_async"),
+    # --- NWS ---
+    "nws_grouped_compact": ScraperEntry("nws_active_alerts", "scrape_nws_async"),
 
-    # Environment Canada RSS feeds
-    "ec_async": ScraperEntry(
-        "environment_canada", "scrape_ec_async", loader=_load_ec_conf),
+    # --- Environment Canada ---
+    "ec_async": ScraperEntry("environment_canada", "scrape_ec_async", loader=_load_ec_conf),
 
-    # MeteoAlarm countries
+    # --- MeteoAlarm countries ---
     "rss_meteoalarm": ScraperEntry("meteoalarm", "scrape_meteoalarm_async"),
 
-    # China Meteorological Admin regions
+    # --- China Meteorological Administration ---
     "rss_cma": ScraperEntry("cma", "scrape_cma_async"),
 
-    # BOM multi-state Australia
+    # --- Australia BOM multi-state ---
     "rss_bom_multi": ScraperEntry("bom", "scrape_bom_multi_async"),
 
-    # Japan Meteorological Agency warnings (only warning levels)
+    # --- Japan Meteorological Agency (warnings only) ---
     "rss_jma": ScraperEntry("jma", "scrape_jma_async"),
 }
