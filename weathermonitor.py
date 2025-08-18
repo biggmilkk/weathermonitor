@@ -348,6 +348,10 @@ if active:
     elif conf["type"] == "rss_jma":
         RENDERERS["rss_jma"](entries, {**conf, "key": active})
 
+    # --- NWS (grouped compact, US) ---
+    elif conf["type"] == "nws_grouped_compact":
+        RENDERERS["nws_grouped_compact"](entries, {**conf, "key": active})
+    
     else:
         # Generic item-per-row renderer (JSON/NWS/CMA etc.)
         seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
