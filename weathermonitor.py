@@ -11,7 +11,7 @@ from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from streamlit_autorefresh import st_autorefresh
 from computation import compute_counts
-from renderer import RENDERERS, ec_remaining_new_total  # <- EC aggregate helper
+from renderer import RENDERERS, ec_remaining_new_total
 import httpx
 import psutil
 
@@ -23,7 +23,7 @@ st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
 
 # —— Autotuning constants ——
-MEMORY_LIMIT = 1 * 1024**3         # 1 GiB
+MEMORY_LIMIT = 1 * 1024**3
 MEMORY_HIGH_WATER = 0.85 * MEMORY_LIMIT
 MEMORY_LOW_WATER  = 0.50 * MEMORY_LIMIT
 
@@ -223,11 +223,11 @@ if active:
     entries = st.session_state[f"{active}_data"]
     data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
 
-    # --- BOM grouped ---
+    # --- BOM ---
     if conf["type"] == "rss_bom_multi":
         RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
 
-    # --- Environment Canada grouped (compact, warnings + Severe Thunderstorm Watch) ---
+    # --- Environment Canada grouped ---
     elif conf["type"] == "ec_async":
         RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
 
@@ -240,7 +240,7 @@ if active:
         if ph is not None:
             render_badge(ph, int(ec_total_now))
 
-    # --- Meteoalarm (country objects) ---
+    # --- Meteoalarm ---
     elif conf["type"] == "rss_meteoalarm":
         seen_ids = st.session_state[f"{active}_last_seen_alerts"]
 
@@ -274,7 +274,7 @@ if active:
                 )
             RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
 
-    # --- JMA grouped (region headers with deduped warnings) ---
+    # --- JMA ---
     elif conf["type"] == "rss_jma":
         RENDERERS["rss_jma"](entries, {**conf, "key": active})
 
