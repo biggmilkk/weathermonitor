@@ -1,5 +1,3 @@
-# renderer.py
-
 import html
 import re
 import time
@@ -60,7 +58,7 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
         f"{content}</div>"
     )
 
-# --------- Badge + int helpers (moved from main) ---------
+# --------- Badge + int helpers (exported for main) ---------
 
 def safe_int(x) -> int:
     try:
@@ -80,7 +78,7 @@ def draw_badge(placeholder, count: int):
     else:
         placeholder.empty()
 
-# --------- Meteoalarm helpers (moved from main) ---------
+# --------- Meteoalarm helpers (exported for main) ---------
 
 def alert_id(e: dict) -> str:
     """Canonical Meteoalarm alert ID (used for NEW marking and snapshots)."""
@@ -109,12 +107,12 @@ def meteoalarm_snapshot_ids(countries_or_entries: list[dict]) -> tuple[str, ...]
     }
     return tuple(sorted(snap))
 
-# Uniform empty-state
+# Uniform empty-state for grouped renderers
 def render_empty_state():
     st.info("No active warnings at the moment.")
 
 # ============================================================
-# Generic JSON/NWS renderer
+# Generic JSON-like renderer (uses left stripe)
 # ============================================================
 
 def render_json(item, conf):
@@ -148,7 +146,7 @@ def render_json(item, conf):
     st.markdown('---')
 
 # ============================================================
-# EC renderer
+# EC compact (Province → Warning Type → entries)
 # ============================================================
 
 # Map 2-letter codes → full names for EC grouping
@@ -232,6 +230,7 @@ def _ec_entry_ts(e) -> float:
     return _to_ts(e.get("published"))
 
 # Public helpers (used by main app)
+
 def ec_bucket_from_title(title: str) -> str | None:
     return _ec_bucket_from_title(title)
 
@@ -256,165 +255,29 @@ def ec_remaining_new_total(feed_key: str, entries: list) -> int:
             total += 1
     return int(max(0, total))
 
-def render_ec_grouped_compact(entries, conf):
-    feed_key = conf.get("key", "ec")
-
-    def _safe_rerun():
-        if hasattr(st, "rerun"):
-            st.rerun()
-        elif hasattr(st, "experimental_rerun"):
-            st.experimental_rerun()
-
-    open_key        = f"{feed_key}_active_bucket"        # current bkey or None
-    pending_map_key = f"{feed_key}_bucket_pending_seen"  # bkey -> float (opened at)
-    lastseen_key    = f"{feed_key}_bucket_last_seen"     # bkey -> float (committed)
-    rerun_guard_key = f"{feed_key}_rerun_guard"
-
-    # Clear guard at the start of a normal render
-    if st.session_state.get(rerun_guard_key):
-        st.session_state.pop(rerun_guard_key, None)
-
-    st.session_state.setdefault(open_key, None)
-    st.session_state.setdefault(pending_map_key, {})
-    st.session_state.setdefault(lastseen_key, {})
-
-    active_bucket   = st.session_state[open_key]
-    pending_seen    = st.session_state[pending_map_key]
-    bucket_lastseen = st.session_state[lastseen_key]
-
-    # Attach timestamps & sort newest→oldest
-    entries = _as_list(entries)
-    for e in entries:
-        e["timestamp"] = _ec_entry_ts(e)
-    entries.sort(key=lambda x: x["timestamp"], reverse=True)
-
-    # Filter to warnings/watch buckets and assign bucket
-    filtered = []
-    for e in entries:
-        bucket = _ec_bucket_from_title(e.get("title",""))
-        if not bucket:
-            continue
-        e["bucket"] = bucket
-        filtered.append(e)
-
-    if not filtered:
-        render_empty_state()
-        st.session_state[f"{feed_key}_remaining_new_total"] = 0
-        return
-
-    # Group by province
-    groups = OrderedDict()
-    for e in filtered:
-        code = e.get("province","")
-        prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
-        groups.setdefault(prov_name, []).append(e)
-
-    provinces = [p for p in _PROVINCE_ORDER if p in groups] + [p for p in groups if p not in _PROVINCE_ORDER]
-
-    total_remaining_new = 0
-    did_close_toggle    = False  # rerun only if we closed something
-
-    for prov in provinces:
-        alerts = groups.get(prov, [])
-        if not alerts:
-            continue
-
-        # Determine if province has any NEW items across buckets
-        def _prov_has_new():
-            for a in alerts:
-                bkey = f"{prov}|{a['bucket']}"
-                if a.get("timestamp",0.0) > float(bucket_lastseen.get(bkey, 0.0)):
-                    return True
-            return False
-
-        # Province header with potential left stripe
-        prov_header_html = _stripe_wrap(f"<h2>{html.escape(prov)}</h2>", _prov_has_new())
-        st.markdown(prov_header_html, unsafe_allow_html=True)
-
-        # Bucket by warning type
-        buckets = OrderedDict()
-        for a in alerts:
-            buckets.setdefault(a["bucket"], []).append(a)
-
-        for label, items in buckets.items():
-            bkey = f"{prov}|{label}"
-
-            cols = st.columns([0.7, 0.3])
-
-            # --- HANDLE CLICK FIRST ---
-            with cols[0]:
-                if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
-                    if active_bucket == bkey:
-                        # CLOSE: commit last_seen to when it was opened (or now)
-                        ts_opened = float(pending_seen.pop(bkey, time.time()))
-                        bucket_lastseen[bkey] = ts_opened
-                        st.session_state[open_key] = None
-                        active_bucket = None
-                        did_close_toggle = True
-                    else:
-                        # OPEN: set active + remember "opened at" in pending; DO NOT change last_seen
-                        st.session_state[open_key] = bkey
-                        active_bucket = bkey
-                        pending_seen[bkey] = time.time()
-
-            # Compute NEW vs committed last_seen (unchanged while open)
-            last_seen = float(bucket_lastseen.get(bkey, 0.0))
-            new_count = sum(1 for x in items if x.get("timestamp",0.0) > last_seen)
-            total_remaining_new += new_count
-
-            # --- BADGES (right side): ACTIVE (always) + NEW (if >0) ---
-            with cols[1]:
-                active_count = len(items)
-                st.markdown(
-                    "<span style='margin-left:6px;padding:2px 6px;"
-                    "border-radius:4px;background:#eef0f3;color:#000;font-size:0.9em;"
-                    "font-weight:600;display:inline-block;'>"
-                    f"{active_count} Active</span>",
-                    unsafe_allow_html=True,
-                )
-                if new_count > 0:
-                    st.markdown(
-                        "<span style='margin-left:6px;padding:2px 6px;"
-                        "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
-                        "font-weight:bold;display:inline-block;'>"
-                        f"❗ {new_count} New</span>",
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.write("")
-
-            # Render list if open — show [NEW] per item using committed last_seen
-            if st.session_state.get(open_key) == bkey:
-                for a in items:
-                    is_new = a.get("timestamp",0.0) > last_seen
-                    prefix = "[NEW] " if is_new else ""
-                    title  = _norm(a.get("title",""))
-                    region = _norm(a.get("region",""))
-                    link   = _norm(a.get("link"))
-                    if title and link:
-                        st.markdown(f"{prefix}**[{title}]({link})**")
-                    else:
-                        st.markdown(f"{prefix}**{title}**")
-                    if region:
-                        st.caption(f"Region: {region}")
-                    pub_label = _to_utc_label(a.get("published"))
-                    if pub_label:
-                        st.caption(f"Published: {pub_label}")
-                    st.markdown("---")
-
-        st.markdown("---")
-
-    # Aggregate NEW total (matches badges right now)
-    st.session_state[f"{feed_key}_remaining_new_total"] = int(max(0, total_remaining_new or 0))
-
-    # One-shot rerun only on CLOSE so the top-row EC badge updates immediately
-    if did_close_toggle and not st.session_state.get(rerun_guard_key, False):
-        st.session_state[rerun_guard_key] = True
-        _safe_rerun()
-
 # ============================================================
-# NWS renderer
+# NWS compact (State → Event Bucket → entries)
 # ============================================================
+
+def nws_remaining_new_total(feed_key: str, entries: list) -> int:
+    """
+    Total remaining NEW across all buckets for NWS, using the per-bucket
+    last_seen map maintained by the compact NWS renderer:
+      st.session_state[f"{feed_key}_bucket_last_seen"]  (bkey = "State|Bucket")
+    """
+    lastseen_map = st.session_state.get(f"{feed_key}_bucket_last_seen", {}) or {}
+    total = 0
+    for e in _as_list(entries):
+        state  = _norm(e.get("state") or e.get("state_name") or e.get("state_code") or "")
+        bucket = _norm(e.get("bucket") or e.get("event") or "")
+        if not state or not bucket:
+            continue
+        bkey = f"{state}|{bucket}"
+        last_seen = float(lastseen_map.get(bkey, 0.0))
+        ts = _to_ts(e.get("published"))
+        if ts > last_seen:
+            total += 1
+    return int(max(0, total))
 
 def render_nws_grouped_compact(entries, conf):
     """
@@ -456,10 +319,9 @@ def render_nws_grouped_compact(entries, conf):
         # Ensure state & bucket exist (fallbacks)
         e["state"]  = _norm(e.get("state") or e.get("state_name") or e.get("state_code") or "Unknown")
         e["bucket"] = _norm(e.get("bucket") or e.get("event") or e.get("title") or "Alert")
-    # newest first
-    entries.sort(key=lambda x: x["timestamp"], reverse=True)
+    entries.sort(key=lambda x: x["timestamp"], reverse=True)  # newest first
 
-    # Filter out items with no state/bucket (very rare)
+    # Filter out items with no state/bucket
     filtered = [e for e in entries if e.get("state") and e.get("bucket")]
     if not filtered:
         render_empty_state()
@@ -571,7 +433,7 @@ def render_nws_grouped_compact(entries, conf):
         _safe_rerun()
 
 # ============================================================
-# CMA renderer
+# CMA renderer (left stripe on title if new)
 # ============================================================
 
 CMA_COLORS = {'Orange': '#FF7F00', 'Red': '#E60026'}
@@ -608,7 +470,7 @@ def render_cma(item, conf):
     st.markdown('---')
 
 # ============================================================
-# Meteoalarm renderer
+# Meteoalarm renderer (per country)
 # ============================================================
 
 def render_meteoalarm(item, conf):
@@ -693,7 +555,7 @@ def render_meteoalarm(item, conf):
     st.markdown('---')
 
 # ============================================================
-# BOM renderer
+# BOM grouped renderer
 # ============================================================
 
 _BOM_ORDER = [
@@ -767,7 +629,7 @@ def render_bom_grouped(entries, conf):
     st.session_state[f"{feed_key}_last_seen_time"] = time.time()
 
 # ============================================================
-# JMA renderer
+# JMA grouped renderer
 # ============================================================
 
 JMA_COLORS = {'Warning': '#FF7F00', 'Emergency': '#E60026'}
@@ -850,7 +712,7 @@ def render_jma_grouped(entries, conf):
 # ============================================================
 
 RENDERERS = {
-    'json': render_json,
+    'json': render_json,                       # generic
     'ec_grouped_compact': render_ec_grouped_compact,
     'nws_grouped_compact': render_nws_grouped_compact,
     'rss_cma': render_cma,
