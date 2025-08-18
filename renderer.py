@@ -1,3 +1,5 @@
+# renderer.py
+
 import streamlit as st
 from dateutil import parser as dateparser
 from collections import OrderedDict
@@ -27,7 +29,7 @@ def _to_utc_label(pub: str | None) -> str | None:
     try:
         dt = dateparser.parse(pub)
         if dt:
-            return dt.astimezone(_tz.utc).strftime("%a,  %d %b %y %H:%M:%S UTC")
+            return dt.astimezone(_tz.utc).strftime("%a, %d %b %y %H:%M:%S UTC")
     except Exception:
         pass
     return pub
@@ -50,12 +52,20 @@ def _left_stripe():
         unsafe_allow_html=True,
     )
 
+def left_stripe_html() -> str:
+    """Exported helper in case the app wants to inject the stripe directly."""
+    return "<div style='border-left:4px solid red;margin:8px 0;padding-left:8px;'></div>"
+
 
 # =========================
 # Generic JSON/NWS renderer
 # =========================
 
 def render_json(item, conf):
+    # If caller flagged this as new, draw the left stripe
+    if item.get("is_new"):
+        _left_stripe()
+
     title = item.get('title') or item.get('headline') or '(no title)'
     st.markdown(f"**{_norm(title)}**")
 
@@ -81,7 +91,7 @@ def render_json(item, conf):
 
 
 # =========================
-# EC constants + helpers
+# EC constants + helpers (for compact EC)
 # =========================
 
 # Map 2-letter codes → full names for EC grouping
@@ -153,7 +163,6 @@ _EC_BUCKET_PATTERNS = {
 }
 
 def _ec_bucket_from_title(title: str) -> str | None:
-    """Return canonical warning bucket if the title contains one of EC_WARNING_TYPES."""
     if not title:
         return None
     for canon, pat in _EC_BUCKET_PATTERNS.items():
@@ -164,24 +173,17 @@ def _ec_bucket_from_title(title: str) -> str | None:
 def _ec_entry_ts(e) -> float:
     return _to_ts(e.get("published"))
 
-# --- EC helpers exported for main app (warnings-only math matches buckets) ---
-
+# Public helpers
 def ec_bucket_from_title(title: str) -> str | None:
-    """Public alias so main app (or others) can reuse bucket logic if needed."""
     return _ec_bucket_from_title(title)
 
 def ec_remaining_new_total(feed_key: str, entries: list) -> int:
-    """
-    Total remaining NEW across all *warning* buckets for EC, using the per-bucket
-    last_seen map maintained by the compact EC renderer:
-      st.session_state[f"{feed_key}_bucket_last_seen"]  (bkey = "Province|Warning Type")
-    """
     lastseen_map = st.session_state.get(f"{feed_key}_bucket_last_seen", {}) or {}
     total = 0
     for e in _as_list(entries):
         bucket = _ec_bucket_from_title(e.get("title", ""))
         if not bucket:
-            continue  # ignore non-warnings
+            continue
         code = e.get("province", "")
         prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
         bkey = f"{prov_name}|{bucket}"
@@ -199,19 +201,17 @@ def ec_remaining_new_total(feed_key: str, entries: list) -> int:
 def render_ec_grouped_compact(entries, conf):
     feed_key = conf.get("key", "ec")
 
-    # ---- safe rerun helper (Streamlit >=1.31 uses st.rerun) ----
     def _safe_rerun():
         if hasattr(st, "rerun"):
             st.rerun()
         elif hasattr(st, "experimental_rerun"):
             st.experimental_rerun()
 
-    open_key        = f"{feed_key}_active_bucket"           # current bkey or None
-    pending_map_key = f"{feed_key}_bucket_pending_seen"     # bkey -> float (when it was opened)
-    lastseen_key    = f"{feed_key}_bucket_last_seen"        # bkey -> float (committed "seen up to")
-    rerun_guard_key = f"{feed_key}_rerun_guard"             # prevent infinite loop
+    open_key        = f"{feed_key}_active_bucket"
+    pending_map_key = f"{feed_key}_bucket_pending_seen"
+    lastseen_key    = f"{feed_key}_bucket_last_seen"
+    rerun_guard_key = f"{feed_key}_rerun_guard"
 
-    # Clear guard at the start of a normal render
     if st.session_state.get(rerun_guard_key):
         st.session_state.pop(rerun_guard_key, None)
 
@@ -253,7 +253,7 @@ def render_ec_grouped_compact(entries, conf):
     provinces = [p for p in _PROVINCE_ORDER if p in groups] + [p for p in groups if p not in _PROVINCE_ORDER]
 
     total_remaining_new = 0
-    did_close_toggle    = False  # rerun only if we closed something
+    did_close_toggle    = False
 
     for prov in provinces:
         alerts = groups.get(prov, [])
@@ -272,7 +272,7 @@ def render_ec_grouped_compact(entries, conf):
             _left_stripe()
         st.markdown(f"## {prov}")
 
-        # Bucket by warning type
+        # Buckets
         buckets = OrderedDict()
         for a in alerts:
             buckets.setdefault(a["bucket"], []).append(a)
@@ -282,30 +282,24 @@ def render_ec_grouped_compact(entries, conf):
 
             cols = st.columns([0.7, 0.3])
 
-            # --- HANDLE CLICK FIRST ---
             with cols[0]:
                 if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
                     if active_bucket == bkey:
-                        # CLOSE: commit last_seen to when it was opened (or now)
                         ts_opened = float(pending_seen.pop(bkey, time.time()))
                         bucket_lastseen[bkey] = ts_opened
                         st.session_state[open_key] = None
                         active_bucket = None
                         did_close_toggle = True
                     else:
-                        # OPEN: set active + remember "opened at" in pending; DO NOT change last_seen
                         st.session_state[open_key] = bkey
                         active_bucket = bkey
                         pending_seen[bkey] = time.time()
 
-            # Compute NEW vs committed last_seen (unchanged while open)
             last_seen = float(bucket_lastseen.get(bkey, 0.0))
             new_count = sum(1 for x in items if x.get("timestamp",0.0) > last_seen)
             total_remaining_new += new_count
 
-            # --- BADGES (right side): ACTIVE (always) + NEW (if >0) ---
             with cols[1]:
-                # Active count badge (neutral)
                 active_count = len(items)
                 st.markdown(
                     "<span style='margin-left:6px;padding:2px 6px;"
@@ -314,7 +308,6 @@ def render_ec_grouped_compact(entries, conf):
                     f"{active_count} Active</span>",
                     unsafe_allow_html=True,
                 )
-                # New count badge (attention)
                 if new_count > 0:
                     st.markdown(
                         "<span style='margin-left:6px;padding:2px 6px;"
@@ -326,7 +319,6 @@ def render_ec_grouped_compact(entries, conf):
                 else:
                     st.write("")
 
-            # Render list if open — show [NEW] per item using committed last_seen
             if st.session_state.get(open_key) == bkey:
                 for a in items:
                     is_new = a.get("timestamp",0.0) > last_seen
@@ -347,10 +339,8 @@ def render_ec_grouped_compact(entries, conf):
 
         st.markdown("---")
 
-    # Aggregate NEW total (matches what you see in badges right now)
     st.session_state[f"{feed_key}_remaining_new_total"] = int(max(0, total_remaining_new or 0))
 
-    # One-shot rerun only on CLOSE so the top-row EC badge updates immediately
     if did_close_toggle and not st.session_state.get(rerun_guard_key, False):
         st.session_state[rerun_guard_key] = True
         _safe_rerun()
@@ -363,6 +353,10 @@ def render_ec_grouped_compact(entries, conf):
 CMA_COLORS = {'Orange': '#FF7F00', 'Red': '#E60026'}
 
 def render_cma(item, conf):
+    # Show left stripe if caller marks this item new
+    if item.get("is_new"):
+        _left_stripe()
+
     level = item.get('level', 'Orange')
     color = CMA_COLORS.get(level, '#888')
 
@@ -393,10 +387,22 @@ def render_cma(item, conf):
 
 
 # =========================
-# Meteoalarm renderer
+# Meteoalarm renderer (per country)
 # =========================
 
 def render_meteoalarm(item, conf):
+    # Determine if any alert under this country is new → left stripe
+    def _any_new(country):
+        alerts_dict = (country.get("alerts") or {})
+        for day in ("today", "tomorrow"):
+            for e in alerts_dict.get(day, []) or []:
+                if e.get("is_new"):
+                    return True
+        return False
+
+    if _any_new(item):
+        _left_stripe()
+
     # Country total (Orange+Red) from scraper
     try:
         total_severe = int(item.get("total_alerts") or 0)
@@ -412,7 +418,6 @@ def render_meteoalarm(item, conf):
     by_type  = counts.get("by_type") if isinstance(counts, dict) else {}
 
     def _day_level_type_count(day: str, level: str, typ: str) -> int | None:
-        """Prefer exact per-day count; fall back to per-type bucket totals if missing."""
         if isinstance(by_day, dict):
             d = by_day.get(day)
             if isinstance(d, dict):
@@ -443,7 +448,6 @@ def render_meteoalarm(item, conf):
                 color = {"Orange": "#FF7F00", "Red": "#E60026"}.get(level, "#888")
                 prefix = "[NEW] " if e.get("is_new") else ""
 
-                # Per-alert count (if available)
                 n = _day_level_type_count(day, level, typ)
                 count_str = f" ({n})" if isinstance(n, int) and n > 0 else ""
 
@@ -480,9 +484,6 @@ _BOM_ORDER = [
 ]
 
 def render_bom_grouped(entries, conf):
-    """
-    Grouped renderer for BOM multi-state feed.
-    """
     feed_key = conf.get("key", "bom")
     entries = _as_list(entries)
 
@@ -507,8 +508,11 @@ def render_bom_grouped(entries, conf):
         alerts = groups.get(state, [])
         if not alerts:
             continue
+
+        # If any alert is new in this state, show a left stripe here
         if any(a.get("is_new") for a in alerts):
             _left_stripe()
+
         st.markdown(f"## {state}")
         for a in alerts:
             prefix = "[NEW] " if a.get("is_new") else ""
@@ -571,7 +575,6 @@ def render_jma_grouped(entries, conf):
             title_new_map[t] = title_new_map.get(t, False) or bool(a.get("is_new"))
 
         for t, is_new_any in title_new_map.items():
-            # Color by level keyword in the title
             level = "Emergency" if "Emergency" in t else ("Warning" if "Warning" in t else None)
             color = JMA_COLORS.get(level, "#888")
             prefix = "[NEW] " if is_new_any else ""
@@ -601,7 +604,7 @@ def render_jma_grouped(entries, conf):
 
 RENDERERS = {
     'json': render_json,
-    'ec_grouped_compact': render_ec_grouped_compact,
+    'ec_grouped_compact': render_ec_grouped_compact,  # only EC view we keep
     'rss_cma': render_cma,
     'rss_meteoalarm': render_meteoalarm,
     'rss_bom_multi': render_bom_grouped,
