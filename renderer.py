@@ -1,17 +1,16 @@
-# renderer.py
+import html
+import re
+import time
+from collections import OrderedDict
+from functools import lru_cache
+from datetime import timezone as _tz
 
 import streamlit as st
-import html
 from dateutil import parser as dateparser
-from collections import OrderedDict
-import time
-from datetime import timezone as _tz
-from functools import lru_cache
-import re
 
-# =========================
-# Shared utilities
-# =========================
+# ============================================================
+# Shared utilities (moved from main to keep weathermonitor lean)
+# ============================================================
 
 @lru_cache(maxsize=4096)
 def _to_ts(pub: str | None) -> float:
@@ -59,10 +58,62 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
         f"{content}</div>"
     )
 
+# --------- Badge + int helpers (moved from main) ---------
 
-# =========================
-# Generic JSON/NWS renderer
-# =========================
+def safe_int(x) -> int:
+    try:
+        return max(0, int(x))
+    except Exception:
+        return 0
+
+def draw_badge(placeholder, count: int):
+    """Render the ❗ New badge in a consistent style."""
+    if count and count > 0:
+        placeholder.markdown(
+            "<span style='margin-left:8px;padding:2px 6px;"
+            "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;font-weight:bold;'>"
+            f"❗ {count} New</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        placeholder.empty()
+
+# --------- Meteoalarm helpers (moved from main) ---------
+
+def alert_id(e: dict) -> str:
+    """Canonical Meteoalarm alert ID (used for NEW marking and snapshots)."""
+    return f"{e.get('level','')}|{e.get('type','')}|{e.get('from','')}|{e.get('until','')}"
+
+def meteoalarm_country_has_alerts(country: dict) -> bool:
+    a = (country.get("alerts") or {})
+    return bool(a.get("today")) or bool(a.get("tomorrow"))
+
+def meteoalarm_mark_and_sort(countries: list[dict], seen_ids: set[str]) -> list[dict]:
+    """Mark per-alert is_new using seen_ids and sort countries by title (case-insensitive)."""
+    for country in countries:
+        for alerts in (country.get("alerts", {}) or {}).values():
+            for e in (alerts or []):
+                e["is_new"] = (alert_id(e) not in seen_ids)
+    countries.sort(key=lambda c: (c.get("title", "").casefold()))
+    return countries
+
+def meteoalarm_snapshot_ids(countries_or_entries: list[dict]) -> tuple[str, ...]:
+    """Snapshot all alert IDs from a list of country dicts (feed entries)."""
+    snap = {
+        alert_id(e)
+        for country in countries_or_entries
+        for alerts in (country.get("alerts", {}) or {}).values()
+        for e in (alerts or [])
+    }
+    return tuple(sorted(snap))
+
+# Uniform empty-state
+def render_empty_state():
+    st.info("No active warnings at the moment.")
+
+# ============================================================
+# Generic JSON/NWS renderer (kept minimal; uses left stripe)
+# ============================================================
 
 def render_json(item, conf):
     """
@@ -94,10 +145,9 @@ def render_json(item, conf):
 
     st.markdown('---')
 
-
-# =========================
-# EC constants + helpers (for compact EC only)
-# =========================
+# ============================================================
+# EC compact (Province → Warning Type → entries)
+# ============================================================
 
 # Map 2-letter codes → full names for EC grouping
 _PROVINCE_NAMES = {
@@ -204,11 +254,6 @@ def ec_remaining_new_total(feed_key: str, entries: list) -> int:
             total += 1
     return int(max(0, total))
 
-
-# =========================
-# Compact EC renderer (Province → Warning Type → entries)
-# =========================
-
 def render_ec_grouped_compact(entries, conf):
     feed_key = conf.get("key", "ec")
 
@@ -251,7 +296,7 @@ def render_ec_grouped_compact(entries, conf):
         filtered.append(e)
 
     if not filtered:
-        st.info("No active warnings at the moment.")
+        render_empty_state()
         st.session_state[f"{feed_key}_remaining_new_total"] = 0
         return
 
@@ -365,10 +410,9 @@ def render_ec_grouped_compact(entries, conf):
         st.session_state[rerun_guard_key] = True
         _safe_rerun()
 
-
-# =========================
-# CMA renderer
-# =========================
+# ============================================================
+# CMA renderer (kept minimal; left stripe on title if new)
+# ============================================================
 
 CMA_COLORS = {'Orange': '#FF7F00', 'Red': '#E60026'}
 
@@ -403,10 +447,9 @@ def render_cma(item, conf):
 
     st.markdown('---')
 
-
-# =========================
+# ============================================================
 # Meteoalarm renderer (per country)
-# =========================
+# ============================================================
 
 def render_meteoalarm(item, conf):
     """
@@ -489,10 +532,9 @@ def render_meteoalarm(item, conf):
 
     st.markdown('---')
 
-
-# =========================
+# ============================================================
 # BOM grouped renderer
-# =========================
+# ============================================================
 
 _BOM_ORDER = [
     "NSW & ACT",
@@ -529,10 +571,12 @@ def render_bom_grouped(entries, conf):
         groups.setdefault(st_name, []).append(e)
 
     # 4) render in desired order, skipping empties
+    any_rendered = False
     for state in _BOM_ORDER:
         alerts = groups.get(state, [])
         if not alerts:
             continue
+        any_rendered = True
 
         # Stripe the state header if any alert is NEW
         state_header = _stripe_wrap(
@@ -557,14 +601,14 @@ def render_bom_grouped(entries, conf):
         st.markdown("---")
 
     if not any_rendered:
-        st.info("No active warnings at the moment.")
+        render_empty_state()
+
     # 5) snapshot last seen
     st.session_state[f"{feed_key}_last_seen_time"] = time.time()
 
-
-# =========================
+# ============================================================
 # JMA grouped renderer
-# =========================
+# ============================================================
 
 JMA_COLORS = {'Warning': '#FF7F00', 'Emergency': '#E60026'}
 
@@ -575,6 +619,7 @@ def render_jma_grouped(entries, conf):
     """
     entries = _as_list(entries)
     if not entries:
+        render_empty_state()
         return
 
     # 1) attach timestamps & sort newest→oldest
@@ -594,7 +639,12 @@ def render_jma_grouped(entries, conf):
         groups.setdefault(region, []).append(e)
 
     # 4) render each region with deduped titles + colored bullets
+    any_rendered = False
     for region, alerts in groups.items():
+        if not alerts:
+            continue
+        any_rendered = True
+
         region_header = _stripe_wrap(
             f"<h2>{html.escape(region)}</h2>",
             any(a.get("is_new") for a in alerts)
@@ -631,13 +681,13 @@ def render_jma_grouped(entries, conf):
         st.markdown("---")
 
     if not any_rendered:
-        st.info("No active warnings at the moment.")
+        render_empty_state()
+
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
-
-# =========================
+# ============================================================
 # Renderer Registry
-# =========================
+# ============================================================
 
 RENDERERS = {
     'json': render_json,
