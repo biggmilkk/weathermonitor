@@ -2,23 +2,23 @@ def get_feed_definitions():
     return {
         "nws": {
             "label": "NWS (US)",
-            "type": "json",
-            "url": "https://api.weather.gov/alerts/active"
+            "type": "nws_grouped_compact",
+            "url": "https://api.weather.gov/alerts/active",
         },
         "ec": {
             "label": "EC (Canada)",
             "type": "ec_async",
-            "source_file": "environment_canada_sources.json"
+            "source_file": "environment_canada_sources.json",
         },
         "meteoalarm": {
             "label": "Meteoalarm (Europe)",
             "type": "rss_meteoalarm",
-            "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"
+            "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe",
         },
         "cma_china": {
             "label": "CMA (China)",
             "type": "rss_cma",
-            "url": "https://severeweather.wmo.int/v2/cap-alerts/cn-cma-xx/rss.xml"
+            "url": "https://severeweather.wmo.int/v2/cap-alerts/cn-cma-xx/rss.xml",
         },
         "jma": {
             "label": "JMA (Japan)",
@@ -33,7 +33,7 @@ def get_feed_definitions():
                 "420000","430000","440000","450000","460100","460040","471000","472000",
                 "473000","474000"
             ],
-            "region_map_file": "scraper/region_area_codes.json"
+            "region_map_file": "scraper/region_area_codes.json",
         },
         "bom_all": {
             "label": "BOM (Australia)",
@@ -42,7 +42,7 @@ def get_feed_definitions():
                 "https://www.bom.gov.au/fwo/IDZ00054.warnings_nsw.xml",  # NSW & ACT
                 "https://www.bom.gov.au/fwo/IDZ00059.warnings_vic.xml",  # Victoria
                 "https://www.bom.gov.au/fwo/IDZ00056.warnings_qld.xml",  # Queensland
-                "https://www.bom.gov.au/fwo/IDZ00060.warnings_wa.xml",   # West Australia
+                "https://www.bom.gov.au/fwo/IDZ00060.warnings_wa.xml",   # Western Australia
                 "https://www.bom.gov.au/fwo/IDZ00057.warnings_sa.xml",   # South Australia
                 "https://www.bom.gov.au/fwo/IDZ00058.warnings_tas.xml",  # Tasmania
                 "https://www.bom.gov.au/fwo/IDZ00055.warnings_nt.xml",   # Northern Territory
@@ -51,11 +51,10 @@ def get_feed_definitions():
                 "NSW & ACT",
                 "Victoria",
                 "Queensland",
-                "West Australia",
+                "Western Australia",
                 "South Australia",
                 "Tasmania",
                 "Northern Territory",
             ],
         },
-
     }
