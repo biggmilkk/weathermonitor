@@ -247,7 +247,7 @@ st.caption(
 st.markdown("---")
 
 # --------------------------------------------------------------------
-# Feed buttons row — minimalist active highlight (no flags/captions)
+# Feed buttons row — professional highlight using Streamlit's primary style
 # --------------------------------------------------------------------
 
 if not FEED_CONFIG:
@@ -279,22 +279,13 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     with cols[i]:
         is_active = (st.session_state.get("active_feed") == key)
 
-        # Draw the actual button (unchanged UI)
+        # Professional, minimal highlight: use primary button type for the active feed
         clicked = st.button(
             conf.get("label", key.upper()),
             key=f"btn_{key}_{i}",
             use_container_width=True,
+            type=("primary" if is_active else "secondary"),
         )
-
-        # Minimalist highlight: a subtle shaded box placed under the button area when active
-        if is_active:
-            st.markdown(
-                "<div style='background:#e8f2ff;border:1px solid #9ec5ff;"
-                "border-radius:6px;padding:2px;margin-top:-38px;margin-bottom:8px;'></div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.write("")  # keeps spacing consistent when not active
 
         # Badge placeholder and draw
         badge_ph = st.empty()
@@ -383,7 +374,7 @@ if active:
         # Sort alphabetically by country title (case-insensitive)
         countries.sort(key=lambda c: (c.get("title", "").casefold()))
 
-        # Render per country; renderer handles left stripes
+        # Render per country
         for country in countries:
             RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
 
