@@ -15,7 +15,17 @@ import nest_asyncio
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from computation import compute_counts
-from renderer import RENDERERS, ec_remaining_new_total
+from renderer import (
+    RENDERERS,
+    ec_remaining_new_total,
+    draw_badge,                    
+    safe_int,                       
+    alert_id,                       
+    meteoalarm_country_has_alerts,  
+    meteoalarm_mark_and_sort,       
+    meteoalarm_snapshot_ids,        
+    render_empty_state,             
+)
 
 # --------------------------------------------------------------------
 # Environment + Streamlit setup
@@ -96,20 +106,8 @@ st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
 
 # --------------------------------------------------------------------
-# Helpers
+# Async HTTP fetching with tuned limits/retries
 # --------------------------------------------------------------------
-
-def alert_id(e: dict) -> str:
-    """Unique ID for MeteoAlarm items."""
-    return f"{e.get('level','')}|{e.get('type','')}|{e.get('from','')}|{e.get('until','')}"
-
-def _safe_int(x):
-    try:
-        return max(0, int(x))
-    except Exception:
-        return 0
-
-# --- Async HTTP fetching with tuned limits/retries ---
 
 async def with_retries(fn, *, attempts=3, base_delay=0.5):
     for i in range(attempts):
@@ -175,18 +173,6 @@ def _immediate_rerun():
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
 
-# --- UI helper to draw/update the "❗ N New" badge ---
-def render_badge(ph, count: int):
-    if count and count > 0:
-        ph.markdown(
-            "<span style='margin-left:8px;padding:2px 6px;"
-            "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;font-weight:bold;'>"
-            f"❗ {count} New</span>",
-            unsafe_allow_html=True,
-        )
-    else:
-        ph.empty()
-
 # --------------------------------------------------------------------
 # Refresh stale feeds
 # --------------------------------------------------------------------
@@ -208,13 +194,8 @@ if to_fetch:
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
                 _, new_count = compute_counts(entries, conf, last_seen_ids, alert_id_fn=alert_id)
                 if new_count == 0:
-                    snap = {
-                        alert_id(e)
-                        for country in entries
-                        for alerts in (country.get("alerts", {}) or {}).values()
-                        for e in (alerts or [])
-                    }
-                    st.session_state[f"{key}_last_seen_alerts"] = tuple(sorted(snap))
+                    # snapshot of all visible alerts
+                    st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
             elif conf["type"] == "ec_async":
                 # EC compact renderer manages NEW state per bucket; no auto snapshot here
                 pass
@@ -287,23 +268,17 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
             type=("primary" if is_active else "secondary"),
         )
 
-        # Badge placeholder and draw
+        # Badge placeholder and draw (moved style in renderer.draw_badge)
         badge_ph = st.empty()
         badge_placeholders[key] = badge_ph
-        render_badge(badge_ph, _safe_int(new_count))
+        draw_badge(badge_ph, safe_int(new_count))
 
         # Click handling with immediate rerun to avoid "extra click" artifacts
         if clicked:
             if st.session_state.get("active_feed") == key:
                 # Closing an open feed → snapshot "seen" where appropriate
                 if conf["type"] == "rss_meteoalarm":
-                    snap = {
-                        alert_id(e)
-                        for country in entries
-                        for alerts in (country.get("alerts", {}) or {}).values()
-                        for e in (alerts or [])
-                    }
-                    st.session_state[f"{key}_last_seen_alerts"] = tuple(sorted(snap))
+                    st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
                 elif conf["type"] == "ec_async":
                     # EC per-bucket close/open handled inside renderer
                     pass
@@ -352,40 +327,22 @@ if active:
         # Repaint the main badge now so closing a bucket updates the count immediately
         ph = badge_placeholders.get(active)
         if ph is not None:
-            render_badge(ph, _safe_int(ec_total_now))
+            draw_badge(ph, safe_int(ec_total_now))
 
     # --- Meteoalarm (countries) ---
     elif conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{active}_last_seen_alerts"])
 
-        # Filter to countries that actually have alerts (belt + suspenders)
-        def _has_alerts(c):
-            a = c.get("alerts", {}) or {}
-            return any(a.get("today")) or any(a.get("tomorrow"))
+        countries = [c for c in data_list if meteoalarm_country_has_alerts(c)]
+        if not countries:
+            render_empty_state()
+        else:
+            countries = meteoalarm_mark_and_sort(countries, seen_ids)
+            for country in countries:
+                RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
 
-        countries = [c for c in data_list if _has_alerts(c)]
-
-        # Mark new vs seen (per-alert)
-        for country in countries:
-            for alerts in (country.get("alerts", {}) or {}).values():
-                for e in (alerts or []):
-                    e["is_new"] = (alert_id(e) not in seen_ids)
-
-        # Sort alphabetically by country title (case-insensitive)
-        countries.sort(key=lambda c: (c.get("title", "").casefold()))
-
-        # Render per country
-        for country in countries:
-            RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
-
-        # Commit snapshot of all currently visible alerts
-        snap = {
-            alert_id(e)
-            for country in countries
-            for alerts in (country.get("alerts", {}) or {}).values()
-            for e in (alerts or [])
-        }
-        st.session_state[f"{active}_last_seen_alerts"] = tuple(sorted(snap))
+            # Commit snapshot of all currently visible alerts
+            st.session_state[f"{active}_last_seen_alerts"] = meteoalarm_snapshot_ids(countries)
 
     # --- JMA ---
     elif conf["type"] == "rss_jma":
@@ -394,18 +351,21 @@ if active:
     else:
         # Generic item-per-row renderer (JSON/NWS/CMA etc.)
         seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
-        for item in data_list:
-            pub = item.get("published")
-            try:
-                ts = dateparser.parse(pub).timestamp() if pub else 0.0
-            except Exception:
-                ts = 0.0
-            item["is_new"] = bool(ts > seen_ts)  # renderer will draw left stripe if True
-            RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
+        if not data_list:
+            render_empty_state()
+        else:
+            for item in data_list:
+                pub = item.get("published")
+                try:
+                    ts = dateparser.parse(pub).timestamp() if pub else 0.0
+                except Exception:
+                    ts = 0.0
+                item["is_new"] = bool(ts > seen_ts)  # renderer will draw left stripe if True
+                RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
 
-        # Snapshot last seen timestamp for generic feeds
-        pkey = f"{active}_pending_seen_time"
-        pending = st.session_state.get(pkey, None)
-        if pending is not None:
-            st.session_state[f"{active}_last_seen_time"] = float(pending)
-        st.session_state.pop(pkey, None)
+            # Snapshot last seen timestamp for generic feeds
+            pkey = f"{active}_pending_seen_time"
+            pending = st.session_state.get(pkey, None)
+            if pending is not None:
+                st.session_state[f"{active}_last_seen_time"] = float(pending)
+            st.session_state.pop(pkey, None)
