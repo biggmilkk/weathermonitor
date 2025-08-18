@@ -1,5 +1,3 @@
-# renderer.py
-
 import streamlit as st
 from dateutil import parser as dateparser
 from collections import OrderedDict
@@ -45,16 +43,15 @@ def _norm(s: str | None) -> str:
 def _fmt_utc(ts: float) -> str:
     return time.strftime("%a, %d %b %y %H:%M:%S UTC", time.gmtime(ts))
 
-def _left_stripe():
-    """Less jumpy visual cue than a full-width bar."""
-    st.markdown(
-        "<div style='border-left:4px solid red;margin:8px 0;padding-left:8px;'></div>",
-        unsafe_allow_html=True,
+def _stripe_wrap(inner_html: str, show: bool) -> str:
+    """Wrap any HTML block with a visible left red stripe if show=True."""
+    if not show:
+        return inner_html
+    return (
+        "<div style='border-left:4px solid #e40000;"
+        "padding-left:10px;margin:8px 0;'>"
+        f"{inner_html}</div>"
     )
-
-def left_stripe_html() -> str:
-    """Exported helper in case the app wants to inject the stripe directly."""
-    return "<div style='border-left:4px solid red;margin:8px 0;padding-left:8px;'></div>"
 
 
 # =========================
@@ -62,12 +59,10 @@ def left_stripe_html() -> str:
 # =========================
 
 def render_json(item, conf):
-    # If caller flagged this as new, draw the left stripe
-    if item.get("is_new"):
-        _left_stripe()
-
+    is_new = bool(item.get("is_new"))
     title = item.get('title') or item.get('headline') or '(no title)'
-    st.markdown(f"**{_norm(title)}**")
+    title_html = _stripe_wrap(f"<strong>{_norm(title)}</strong>", is_new)
+    st.markdown(title_html, unsafe_allow_html=True)
 
     region = _norm(item.get('region', ''))
     province = _norm(item.get('province', ''))
@@ -260,7 +255,7 @@ def render_ec_grouped_compact(entries, conf):
         if not alerts:
             continue
 
-        # Left stripe if any bucket in province has NEW
+        # Stripe on province header if any bucket has NEW
         def _prov_has_new():
             for a in alerts:
                 bkey = f"{prov}|{a['bucket']}"
@@ -268,9 +263,8 @@ def render_ec_grouped_compact(entries, conf):
                     return True
             return False
 
-        if _prov_has_new():
-            _left_stripe()
-        st.markdown(f"## {prov}")
+        prov_header = _stripe_wrap(f"## {prov}", _prov_has_new())
+        st.markdown(prov_header, unsafe_allow_html=True)
 
         # Buckets
         buckets = OrderedDict()
@@ -353,20 +347,15 @@ def render_ec_grouped_compact(entries, conf):
 CMA_COLORS = {'Orange': '#FF7F00', 'Red': '#E60026'}
 
 def render_cma(item, conf):
-    # Show left stripe if caller marks this item new
-    if item.get("is_new"):
-        _left_stripe()
-
-    level = item.get('level', 'Orange')
-    color = CMA_COLORS.get(level, '#888')
-
+    is_new = bool(item.get("is_new"))
     title = _norm(item.get('title',''))
-    st.markdown(
-        f"<div style='margin-bottom:8px;'>"
-        f"<span style='color:{color};font-size:18px;'>&#9679;</span> "
-        f"<strong>{title}</strong></div>",
-        unsafe_allow_html=True
+    title_html = _stripe_wrap(
+        f"<div><span style='color:{CMA_COLORS.get(item.get('level','Orange'), '#888')};"
+        "font-size:18px;'>&#9679;</span> <strong>"
+        f"{title}</strong></div>",
+        is_new
     )
+    st.markdown(title_html, unsafe_allow_html=True)
 
     region = _norm(item.get('region', ''))
     if region:
@@ -391,7 +380,7 @@ def render_cma(item, conf):
 # =========================
 
 def render_meteoalarm(item, conf):
-    # Determine if any alert under this country is new → left stripe
+    # Stripe country header if any alert under this country is NEW
     def _any_new(country):
         alerts_dict = (country.get("alerts") or {})
         for day in ("today", "tomorrow"):
@@ -400,18 +389,15 @@ def render_meteoalarm(item, conf):
                     return True
         return False
 
-    if _any_new(item):
-        _left_stripe()
-
-    # Country total (Orange+Red) from scraper
     try:
         total_severe = int(item.get("total_alerts") or 0)
     except Exception:
         total_severe = 0
 
     title = _norm(item.get("title", ""))
-    header = f"{title} ({total_severe})" if total_severe > 0 else title
-    st.markdown(f"<h3 style='margin-bottom:4px'>{header}</h3>", unsafe_allow_html=True)
+    header_txt = f"{title} ({total_severe})" if total_severe > 0 else title
+    header_html = _stripe_wrap(f"<h3 style='margin-bottom:4px'>{header_txt}</h3>", _any_new(item))
+    st.markdown(header_html, unsafe_allow_html=True)
 
     counts   = item.get("counts") or {}
     by_day   = counts.get("by_day")  if isinstance(counts, dict) else {}
@@ -509,11 +495,10 @@ def render_bom_grouped(entries, conf):
         if not alerts:
             continue
 
-        # If any alert is new in this state, show a left stripe here
-        if any(a.get("is_new") for a in alerts):
-            _left_stripe()
+        # Stripe the state header if any alert is NEW
+        state_header = _stripe_wrap(f"## {state}", any(a.get("is_new") for a in alerts))
+        st.markdown(state_header, unsafe_allow_html=True)
 
-        st.markdown(f"## {state}")
         for a in alerts:
             prefix = "[NEW] " if a.get("is_new") else ""
             title = _norm(a.get('title',''))
@@ -562,9 +547,8 @@ def render_jma_grouped(entries, conf):
 
     # 4) render each region with deduped titles + colored bullets
     for region, alerts in groups.items():
-        if any(a.get("is_new") for a in alerts):
-            _left_stripe()
-        st.markdown(f"## {region}")
+        region_header = _stripe_wrap(f"## {region}", any(a.get("is_new") for a in alerts))
+        st.markdown(region_header, unsafe_allow_html=True)
 
         # title -> is_new_any
         title_new_map = OrderedDict()
