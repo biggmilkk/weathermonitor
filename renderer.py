@@ -1,3 +1,5 @@
+# renderer.py
+
 import html
 import re
 import time
@@ -9,7 +11,7 @@ import streamlit as st
 from dateutil import parser as dateparser
 
 # ============================================================
-# Shared utilities (moved from main to keep weathermonitor lean)
+# Shared utilities
 # ============================================================
 
 @lru_cache(maxsize=4096)
@@ -112,7 +114,7 @@ def render_empty_state():
     st.info("No active warnings at the moment.")
 
 # ============================================================
-# Generic JSON/NWS renderer (kept minimal; uses left stripe)
+# Generic JSON/NWS renderer
 # ============================================================
 
 def render_json(item, conf):
@@ -146,7 +148,7 @@ def render_json(item, conf):
     st.markdown('---')
 
 # ============================================================
-# EC compact (Province → Warning Type → entries)
+# EC renderer
 # ============================================================
 
 # Map 2-letter codes → full names for EC grouping
@@ -411,7 +413,165 @@ def render_ec_grouped_compact(entries, conf):
         _safe_rerun()
 
 # ============================================================
-# CMA renderer (kept minimal; left stripe on title if new)
+# NWS renderer
+# ============================================================
+
+def render_nws_grouped_compact(entries, conf):
+    """
+    Grouped compact renderer for NWS, similar to EC:
+      State (e.g., California, Texas, Marine)
+        → Event bucket (e.g., Tornado Warning)
+          → list of alerts
+    Relies on scraper-populated fields: 'state', 'bucket' (alias 'event'), 'region', 'link', 'published'.
+    Maintains per-bucket last-seen keyed by "State|Bucket".
+    """
+    feed_key = conf.get("key", "nws")
+
+    def _safe_rerun():
+        if hasattr(st, "rerun"):
+            st.rerun()
+        elif hasattr(st, "experimental_rerun"):
+            st.experimental_rerun()
+
+    open_key        = f"{feed_key}_active_bucket"
+    pending_map_key = f"{feed_key}_bucket_pending_seen"
+    lastseen_key    = f"{feed_key}_bucket_last_seen"
+    rerun_guard_key = f"{feed_key}_rerun_guard"
+
+    if st.session_state.get(rerun_guard_key):
+        st.session_state.pop(rerun_guard_key, None)
+
+    st.session_state.setdefault(open_key, None)
+    st.session_state.setdefault(pending_map_key, {})
+    st.session_state.setdefault(lastseen_key, {})
+
+    active_bucket   = st.session_state[open_key]
+    pending_seen    = st.session_state[pending_map_key]
+    bucket_lastseen = st.session_state[lastseen_key]
+
+    # Normalize & sort
+    entries = _as_list(entries)
+    for e in entries:
+        e["timestamp"] = _to_ts(e.get("published"))
+        # Ensure state & bucket exist (fallbacks)
+        e["state"]  = _norm(e.get("state") or e.get("state_name") or e.get("state_code") or "Unknown")
+        e["bucket"] = _norm(e.get("bucket") or e.get("event") or e.get("title") or "Alert")
+    # newest first
+    entries.sort(key=lambda x: x["timestamp"], reverse=True)
+
+    # Filter out items with no state/bucket (very rare)
+    filtered = [e for e in entries if e.get("state") and e.get("bucket")]
+    if not filtered:
+        render_empty_state()
+        st.session_state[f"{feed_key}_remaining_new_total"] = 0
+        return
+
+    # Group by state
+    groups = OrderedDict()
+    for e in filtered:
+        groups.setdefault(e["state"], []).append(e)
+
+    # Order states alphabetically, placing Marine last if present
+    def _state_sort_key(s: str):
+        return (s.lower() == "marine", s.lower())
+    states = sorted(groups.keys(), key=_state_sort_key)
+
+    total_remaining_new = 0
+    did_close_toggle    = False
+
+    for state in states:
+        alerts = groups.get(state, [])
+        if not alerts:
+            continue
+
+        # Does the state have any "new" across buckets?
+        def _state_has_new() -> bool:
+            for a in alerts:
+                bkey = f"{state}|{a['bucket']}"
+                if a.get("timestamp", 0.0) > float(bucket_lastseen.get(bkey, 0.0)):
+                    return True
+            return False
+
+        # State header with optional left red stripe
+        st.markdown(_stripe_wrap(f"<h2>{html.escape(state)}</h2>", _state_has_new()), unsafe_allow_html=True)
+
+        # Bucket by event type
+        buckets = OrderedDict()
+        for a in alerts:
+            buckets.setdefault(a["bucket"], []).append(a)
+
+        # Render each bucket with toggle and counts
+        for label, items in buckets.items():
+            bkey = f"{state}|{label}"
+
+            cols = st.columns([0.7, 0.3])
+
+            with cols[0]:
+                if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
+                    if active_bucket == bkey:
+                        ts_opened = float(pending_seen.pop(bkey, time.time()))
+                        bucket_lastseen[bkey] = ts_opened
+                        st.session_state[open_key] = None
+                        active_bucket = None
+                        did_close_toggle = True
+                    else:
+                        st.session_state[open_key] = bkey
+                        active_bucket = bkey
+                        pending_seen[bkey] = time.time()
+
+            last_seen = float(bucket_lastseen.get(bkey, 0.0))
+            new_count = sum(1 for x in items if x.get("timestamp",0.0) > last_seen)
+            total_remaining_new += new_count
+
+            with cols[1]:
+                active_count = len(items)
+                st.markdown(
+                    "<span style='margin-left:6px;padding:2px 6px;"
+                    "border-radius:4px;background:#eef0f3;color:#000;font-size:0.9em;"
+                    "font-weight:600;display:inline-block;'>"
+                    f"{active_count} Active</span>",
+                    unsafe_allow_html=True,
+                )
+                if new_count > 0:
+                    st.markdown(
+                        "<span style='margin-left:6px;padding:2px 6px;"
+                        "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
+                        "font-weight:bold;display:inline-block;'>"
+                        f"❗ {new_count} New</span>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.write("")
+
+            # List items if this bucket is open
+            if st.session_state.get(open_key) == bkey:
+                for a in items:
+                    is_new = a.get("timestamp",0.0) > last_seen
+                    prefix = "[NEW] " if is_new else ""
+                    title  = _norm(a.get("title",""))
+                    region = _norm(a.get("region",""))
+                    link   = _norm(a.get("link"))
+                    if title and link:
+                        st.markdown(f"{prefix}**[{title}]({link})**")
+                    else:
+                        st.markdown(f"{prefix}**{title}**")
+                    if region:
+                        st.caption(f"Region: {region}")
+                    pub_label = _to_utc_label(a.get("published"))
+                    if pub_label:
+                        st.caption(f"Published: {pub_label}")
+                    st.markdown("---")
+
+        st.markdown("---")
+
+    st.session_state[f"{feed_key}_remaining_new_total"] = int(max(0, total_remaining_new or 0))
+
+    if did_close_toggle and not st.session_state.get(rerun_guard_key, False):
+        st.session_state[rerun_guard_key] = True
+        _safe_rerun()
+
+# ============================================================
+# CMA renderer
 # ============================================================
 
 CMA_COLORS = {'Orange': '#FF7F00', 'Red': '#E60026'}
@@ -448,7 +608,7 @@ def render_cma(item, conf):
     st.markdown('---')
 
 # ============================================================
-# Meteoalarm renderer (per country)
+# Meteoalarm renderer
 # ============================================================
 
 def render_meteoalarm(item, conf):
@@ -533,7 +693,7 @@ def render_meteoalarm(item, conf):
     st.markdown('---')
 
 # ============================================================
-# BOM grouped renderer
+# BOM renderer
 # ============================================================
 
 _BOM_ORDER = [
@@ -607,7 +767,7 @@ def render_bom_grouped(entries, conf):
     st.session_state[f"{feed_key}_last_seen_time"] = time.time()
 
 # ============================================================
-# JMA grouped renderer
+# JMA renderer
 # ============================================================
 
 JMA_COLORS = {'Warning': '#FF7F00', 'Emergency': '#E60026'}
@@ -692,6 +852,7 @@ def render_jma_grouped(entries, conf):
 RENDERERS = {
     'json': render_json,
     'ec_grouped_compact': render_ec_grouped_compact,
+    'nws_grouped_compact': render_nws_grouped_compact,
     'rss_cma': render_cma,
     'rss_meteoalarm': render_meteoalarm,
     'rss_bom_multi': render_bom_grouped,
