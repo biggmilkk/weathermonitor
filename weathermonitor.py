@@ -1,3 +1,5 @@
+# weathermonitor.py
+
 import os
 import sys
 import time
@@ -6,6 +8,7 @@ import logging
 import asyncio
 import httpx
 import psutil
+import traceback
 
 import streamlit as st
 from dateutil import parser as dateparser
@@ -17,14 +20,16 @@ from utils.scraper_registry import SCRAPER_REGISTRY
 from computation import compute_counts
 from renderer import (
     RENDERERS,
+    # Aggregates used for main-button "❗ New" counters
     ec_remaining_new_total,
-    draw_badge,                    
-    safe_int,                       
-    alert_id,                       
-    meteoalarm_country_has_alerts,  
-    meteoalarm_mark_and_sort,       
-    meteoalarm_snapshot_ids,        
-    render_empty_state,             
+    nws_remaining_new_total,
+    # Small UI + ID helpers
+    draw_badge,
+    safe_int,
+    alert_id,
+    meteoalarm_country_has_alerts,
+    meteoalarm_mark_and_sort,
+    meteoalarm_snapshot_ids,
 )
 
 # --------------------------------------------------------------------
@@ -113,7 +118,7 @@ async def with_retries(fn, *, attempts=3, base_delay=0.5):
     for i in range(attempts):
         try:
             return await fn()
-        except Exception as ex:
+        except Exception:
             if i == attempts - 1:
                 raise
             await asyncio.sleep(base_delay * (2 ** i))
@@ -151,6 +156,7 @@ async def _fetch_all_feeds(configs: dict):
                     data = await with_retries(call)
                 except Exception as ex:
                     logging.warning(f"[{key.upper()} FETCH ERROR] {ex}")
+                    logging.warning(traceback.format_exc())
                     data = {"entries": [], "error": str(ex), "source": conf}
                 return key, data
 
@@ -192,12 +198,16 @@ if to_fetch:
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
+                # compute_counts is generic; we only need to know "any new?"
                 _, new_count = compute_counts(entries, conf, last_seen_ids, alert_id_fn=alert_id)
                 if new_count == 0:
-                    # snapshot of all visible alerts
+                    # If nothing new, snapshot all currently visible IDs
                     st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
             elif conf["type"] == "ec_async":
                 # EC compact renderer manages NEW state per bucket; no auto snapshot here
+                pass
+            elif conf["type"] == "nws_grouped_compact":
+                # NWS compact renderer manages per-bucket snapshots internally
                 pass
             else:
                 last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
@@ -205,9 +215,11 @@ if to_fetch:
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_time"] = now
 
-        # Keep the EC aggregate (warnings + Severe Thunderstorm Watch) up-to-date even if EC isn't opened yet
+        # Keep EC and NWS aggregates up-to-date even if the feed isn't opened yet
         if conf["type"] == "ec_async":
             st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
+        elif conf["type"] == "nws_grouped_compact":
+            st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
 
         gc.collect()
 
@@ -242,10 +254,11 @@ _toggled = False  # track whether we toggled so we can rerun exactly once
 for i, (key, conf) in enumerate(FEED_CONFIG.items()):
     entries = st.session_state[f"{key}_data"]
 
-    # Compute baseline NEW count
+    # Compute baseline NEW count (per-feed strategy)
     if conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
         _, new_count = compute_counts(entries, conf, seen_ids, alert_id_fn=alert_id)
+
     elif conf["type"] == "ec_async":
         ec_total = st.session_state.get(f"{key}_remaining_new_total")
         if isinstance(ec_total, int):
@@ -253,6 +266,15 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         else:
             new_count = ec_remaining_new_total(key, entries)
             st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
+
+    elif conf["type"] == "nws_grouped_compact":
+        nws_total = st.session_state.get(f"{key}_remaining_new_total")
+        if isinstance(nws_total, int):
+            new_count = nws_total
+        else:
+            new_count = nws_remaining_new_total(key, entries)
+            st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
+
     else:
         seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
         _, new_count = compute_counts(entries, conf, seen_ts)
@@ -268,7 +290,7 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
             type=("primary" if is_active else "secondary"),
         )
 
-        # Badge placeholder and draw (moved style in renderer.draw_badge)
+        # Badge placeholder and draw
         badge_ph = st.empty()
         badge_placeholders[key] = badge_ph
         draw_badge(badge_ph, safe_int(new_count))
@@ -279,8 +301,8 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 # Closing an open feed → snapshot "seen" where appropriate
                 if conf["type"] == "rss_meteoalarm":
                     st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                elif conf["type"] == "ec_async":
-                    # EC per-bucket close/open handled inside renderer
+                elif conf["type"] in ("ec_async", "nws_grouped_compact"):
+                    # EC/NWS per-bucket close/open handled inside their renderers
                     pass
                 else:
                     st.session_state[f"{key}_last_seen_time"] = time.time()
@@ -290,8 +312,8 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 st.session_state["active_feed"] = key
                 if conf["type"] == "rss_meteoalarm":
                     st.session_state[f"{key}_pending_seen_time"] = time.time()
-                elif conf["type"] == "ec_async":
-                    # EC: renderer manages per-bucket pending snapshots
+                elif conf["type"] in ("ec_async", "nws_grouped_compact"):
+                    # Renderers manage per-bucket pending snapshots
                     st.session_state[f"{key}_pending_seen_time"] = None
                 else:
                     st.session_state[f"{key}_pending_seen_time"] = time.time()
@@ -329,47 +351,55 @@ if active:
         if ph is not None:
             draw_badge(ph, safe_int(ec_total_now))
 
+    # --- NWS (grouped compact, US) ---
+    elif conf["type"] == "nws_grouped_compact":
+        RENDERERS["nws_grouped_compact"](entries, {**conf, "key": active})
+
+        # After rendering, recompute aggregate NEW using renderer's per-bucket last_seen map
+        nws_total_now = nws_remaining_new_total(active, entries)
+        st.session_state[f"{active}_remaining_new_total"] = int(nws_total_now)
+
+        # Repaint the main badge now so closing a bucket updates the count immediately
+        ph = badge_placeholders.get(active)
+        if ph is not None:
+            draw_badge(ph, safe_int(nws_total_now))
+
     # --- Meteoalarm (countries) ---
     elif conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{active}_last_seen_alerts"])
 
+        # Filter to countries that actually have alerts
         countries = [c for c in data_list if meteoalarm_country_has_alerts(c)]
-        if not countries:
-            render_empty_state()
-        else:
-            countries = meteoalarm_mark_and_sort(countries, seen_ids)
-            for country in countries:
-                RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
 
-            # Commit snapshot of all currently visible alerts
-            st.session_state[f"{active}_last_seen_alerts"] = meteoalarm_snapshot_ids(countries)
+        # Mark new vs seen (per-alert) and sort by country title
+        countries = meteoalarm_mark_and_sort(countries, seen_ids)
+
+        # Render per country
+        for country in countries:
+            RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
+
+        # Commit snapshot of all currently visible alerts
+        st.session_state[f"{active}_last_seen_alerts"] = meteoalarm_snapshot_ids(countries)
 
     # --- JMA ---
     elif conf["type"] == "rss_jma":
         RENDERERS["rss_jma"](entries, {**conf, "key": active})
 
-    # --- NWS (grouped compact, US) ---
-    elif conf["type"] == "nws_grouped_compact":
-        RENDERERS["nws_grouped_compact"](entries, {**conf, "key": active})
-    
     else:
-        # Generic item-per-row renderer (JSON/NWS/CMA etc.)
+        # Generic item-per-row renderer (JSON/NWS legacy/CMA etc.)
         seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
-        if not data_list:
-            render_empty_state()
-        else:
-            for item in data_list:
-                pub = item.get("published")
-                try:
-                    ts = dateparser.parse(pub).timestamp() if pub else 0.0
-                except Exception:
-                    ts = 0.0
-                item["is_new"] = bool(ts > seen_ts)  # renderer will draw left stripe if True
-                RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
+        for item in data_list:
+            pub = item.get("published")
+            try:
+                ts = dateparser.parse(pub).timestamp() if pub else 0.0
+            except Exception:
+                ts = 0.0
+            item["is_new"] = bool(ts > seen_ts)  # renderer will draw left stripe if True
+            RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
 
-            # Snapshot last seen timestamp for generic feeds
-            pkey = f"{active}_pending_seen_time"
-            pending = st.session_state.get(pkey, None)
-            if pending is not None:
-                st.session_state[f"{active}_last_seen_time"] = float(pending)
-            st.session_state.pop(pkey, None)
+        # Snapshot last seen timestamp for generic feeds
+        pkey = f"{active}_pending_seen_time"
+        pending = st.session_state.get(pkey, None)
+        if pending is not None:
+            st.session_state[f"{active}_last_seen_time"] = float(pending)
+        st.session_state.pop(pkey, None)
