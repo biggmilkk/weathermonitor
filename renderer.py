@@ -556,6 +556,8 @@ def render_bom_grouped(entries, conf):
                 st.caption(f"Published: {pub_label}")
         st.markdown("---")
 
+    if not any_rendered:
+        st.info("No active warnings at the moment.")
     # 5) snapshot last seen
     st.session_state[f"{feed_key}_last_seen_time"] = time.time()
 
@@ -628,6 +630,8 @@ def render_jma_grouped(entries, conf):
 
         st.markdown("---")
 
+    if not any_rendered:
+        st.info("No active warnings at the moment.")
     st.session_state[f"{conf['key']}_last_seen_time"] = time.time()
 
 
