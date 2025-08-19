@@ -1,5 +1,3 @@
-# renderer.py
-
 import html
 import re
 import time
@@ -11,7 +9,7 @@ import streamlit as st
 from dateutil import parser as dateparser
 
 # ============================================================
-# Shared utilities (keep main app lean)
+# Shared utilities
 # ============================================================
 
 @lru_cache(maxsize=4096)
@@ -60,7 +58,7 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
         f"{content}</div>"
     )
 
-# --------- Badge + int helpers (exported for main) ---------
+# --------- Badge + int helpers ---------
 
 def safe_int(x) -> int:
     try:
@@ -80,7 +78,7 @@ def draw_badge(placeholder, count: int):
     else:
         placeholder.empty()
 
-# --------- Meteoalarm helpers (exported for main) ---------
+# --------- Meteoalarm helpers ---------
 
 def alert_id(e: dict) -> str:
     """Canonical Meteoalarm alert ID (used for NEW marking and snapshots)."""
@@ -114,7 +112,7 @@ def render_empty_state():
     st.info("No active warnings at the moment.")
 
 # ============================================================
-# Generic JSON-like renderer (uses left stripe)
+# Generic JSON-like renderer
 # ============================================================
 
 def render_json(item, conf):
@@ -148,7 +146,7 @@ def render_json(item, conf):
     st.markdown('---')
 
 # ============================================================
-# EC compact (Province → Warning Type → entries)
+# EC compact
 # ============================================================
 
 # Map 2-letter codes → full names for EC grouping
@@ -185,7 +183,7 @@ _PROVINCE_ORDER = [
     "Yukon",
 ]
 
-# Keep ONLY these warning buckets (plus Severe Thunderstorm Watch)
+# Keep ONLY these warning buckets
 EC_WARNING_TYPES = [
     "Arctic Outflow Warning",
     "Blizzard Warning",
@@ -202,7 +200,7 @@ EC_WARNING_TYPES = [
     "Hurricane Warning",
     "Rainfall Warning",
     "Severe Thunderstorm Warning",
-    "Severe Thunderstorm Watch",  # included per request
+    "Severe Thunderstorm Watch",
     "Snowfall Warning",
     "Snow Squall Warning",
     "Tornado Warning",
@@ -231,7 +229,7 @@ def _ec_bucket_from_title(title: str) -> str | None:
 def _ec_entry_ts(e) -> float:
     return _to_ts(e.get("published"))
 
-# Public helpers (used by main app)
+# Public helpers
 
 def ec_bucket_from_title(title: str) -> str | None:
     return _ec_bucket_from_title(title)
@@ -247,7 +245,7 @@ def ec_remaining_new_total(feed_key: str, entries: list) -> int:
     for e in _as_list(entries):
         bucket = _ec_bucket_from_title(e.get("title", ""))
         if not bucket:
-            continue  # ignore non-warnings
+            continue 
         code = e.get("province", "")
         prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
         bkey = f"{prov_name}|{bucket}"
@@ -291,7 +289,6 @@ def render_ec_grouped_compact(entries, conf):
     bucket_lastseen = st.session_state[lastseen_key]
 
     entries = _as_list(entries)
-    # Attach timestamps and infer bucket; keep only warnings/watch we care about
     filtered = []
     for e in entries:
         e["timestamp"] = _ec_entry_ts(e)
@@ -299,7 +296,6 @@ def render_ec_grouped_compact(entries, conf):
         if not bucket:
             continue
         e["bucket"] = bucket
-        # Province normalization
         code = e.get("province", "")
         prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
         e["province_name"] = prov_name
@@ -326,7 +322,6 @@ def render_ec_grouped_compact(entries, conf):
         if not alerts:
             continue
 
-        # Any "new" in this province?
         def _prov_has_new() -> bool:
             for a in alerts:
                 bkey = f"{prov}|{a['bucket']}"
@@ -334,7 +329,6 @@ def render_ec_grouped_compact(entries, conf):
                     return True
             return False
 
-        # Province header with left stripe if any new
         st.markdown(_stripe_wrap(f"<h2>{html.escape(prov)}</h2>", _prov_has_new()), unsafe_allow_html=True)
 
         # Bucket by warning type
@@ -351,14 +345,12 @@ def render_ec_grouped_compact(entries, conf):
             with cols[0]:
                 if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
                     if active_bucket == bkey:
-                        # CLOSE: commit last_seen to when it was opened (or now)
                         ts_opened = float(pending_seen.pop(bkey, time.time()))
                         bucket_lastseen[bkey] = ts_opened
                         st.session_state[open_key] = None
                         active_bucket = None
                         did_close_toggle = True
                     else:
-                        # OPEN: set active + remember "opened at" in pending; DO NOT change last_seen
                         st.session_state[open_key] = bkey
                         active_bucket = bkey
                         pending_seen[bkey] = time.time()
@@ -368,7 +360,7 @@ def render_ec_grouped_compact(entries, conf):
             new_count = sum(1 for x in items if x.get("timestamp", 0.0) > last_seen)
             total_remaining_new += new_count
 
-            # Badges (right)
+            # Badges
             with cols[1]:
                 active_count = len(items)
                 st.markdown(
@@ -410,16 +402,14 @@ def render_ec_grouped_compact(entries, conf):
 
         st.markdown("---")
 
-    # Aggregate NEW total (matches badges)
     st.session_state[f"{feed_key}_remaining_new_total"] = int(max(0, total_remaining_new or 0))
 
-    # One-shot rerun only on CLOSE so the top-row EC badge updates immediately
     if did_close_toggle and not st.session_state.get(rerun_guard_key, False):
         st.session_state[rerun_guard_key] = True
         _safe_rerun()
 
 # ============================================================
-# NWS compact (State → Event Bucket → entries)
+# NWS compact
 # ============================================================
 
 def nws_remaining_new_total(feed_key: str, entries: list) -> int:
@@ -479,7 +469,6 @@ def render_nws_grouped_compact(entries, conf):
     entries = _as_list(entries)
     for e in entries:
         e["timestamp"] = _to_ts(e.get("published"))
-        # Ensure state & bucket exist (fallbacks)
         e["state"]  = _norm(e.get("state") or e.get("state_name") or e.get("state_code") or "Unknown")
         e["bucket"] = _norm(e.get("bucket") or e.get("event") or e.get("title") or "Alert")
     entries.sort(key=lambda x: x["timestamp"], reverse=True)  # newest first
@@ -517,7 +506,6 @@ def render_nws_grouped_compact(entries, conf):
                     return True
             return False
 
-        # State header with optional left red stripe
         st.markdown(_stripe_wrap(f"<h2>{html.escape(state)}</h2>", _state_has_new()), unsafe_allow_html=True)
 
         # Bucket by event type
@@ -596,7 +584,7 @@ def render_nws_grouped_compact(entries, conf):
         _safe_rerun()
 
 # ============================================================
-# CMA renderer (left stripe on title if new)
+# CMA renderer
 # ============================================================
 
 CMA_COLORS = {'Orange': '#FF7F00', 'Red': '#E60026'}
@@ -633,7 +621,7 @@ def render_cma(item, conf):
     st.markdown('---')
 
 # ============================================================
-# Meteoalarm renderer (per country)
+# Meteoalarm renderer
 # ============================================================
 
 def render_meteoalarm(item, conf):
@@ -875,7 +863,7 @@ def render_jma_grouped(entries, conf):
 # ============================================================
 
 RENDERERS = {
-    'json': render_json,                       # generic
+    'json': render_json,
     'ec_grouped_compact': render_ec_grouped_compact,
     'nws_grouped_compact': render_nws_grouped_compact,
     'rss_cma': render_cma,
