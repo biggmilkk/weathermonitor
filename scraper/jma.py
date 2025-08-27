@@ -7,25 +7,20 @@ import httpx
 JMA_AREA_JSON = "https://www.jma.go.jp/bosai/common/const/area.json"
 JMA_WARNING_BASE = "https://www.jma.go.jp/bosai/warning/data/warning"
 
-# Show these hazards (additions: 07 & 16 for High Waves)
-# 03 = Heavy Rain (split by condition), 04 = Flood, 07 = High Waves
-INCLUDE_CODES = {"03", "04", "07"}
+# Only show these hazards (warnings/emergencies only; advisories excluded)
+# 03 = Heavy Rain (split by condition), 04 = Flood, 05 = Storm/Gale, 07 = High Waves
+INCLUDE_CODES = {"03", "04", "05", "07"}
 
 # English messages
 HEAVY_RAIN_INUNDATION = "Heavy Rain (Inundation)"
 HEAVY_RAIN_LANDSLIDE  = "Heavy Rain (Landslide)"
 FLOOD                 = "Flood"
+STORM_GALE            = "Storm/Gale"
 HIGH_WAVES            = "High Waves"
-
-# For 07 vs 16 we differentiate the prefix in the title:
-# 07 → "Warning – High Waves"
-# 16 → "Advisory – High Waves"
-
 
 def _load_region_map_from_file(path: str) -> Dict[str, str]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
-
 
 async def _fetch_area_json(client: httpx.AsyncClient) -> Optional[dict]:
     try:
@@ -36,13 +31,11 @@ async def _fetch_area_json(client: httpx.AsyncClient) -> Optional[dict]:
         logging.warning(f"[JMA VALIDATION] Could not fetch area.json: {e}")
         return None
 
-
 def _valid_class10_codes(area_json: dict) -> Set[str]:
     try:
         return set(area_json.get("class10s", {}).keys())
     except Exception:
         return set()
-
 
 def _validate_region_map(region_map: Dict[str, str], area_json: Optional[dict]) -> Dict[str, str]:
     if not area_json:
@@ -56,14 +49,11 @@ def _validate_region_map(region_map: Dict[str, str], area_json: Optional[dict]) 
             logging.warning(f"[JMA VALIDATION] Dropping '{name}' (unknown code {code}) per area.json")
     return out
 
-
 def _office_json_url(office_code: str) -> str:
     return f"{JMA_WARNING_BASE}/{office_code}.json"
 
-
 def _office_frontend_url(office_code: str) -> str:
     return f"https://www.jma.go.jp/bosai/warning/#lang=en&area_type=offices&area_code={office_code}"
-
 
 def _parse_heavy_rain_conditions(cond_text: Optional[str]) -> List[str]:
     out: List[str] = []
@@ -75,42 +65,32 @@ def _parse_heavy_rain_conditions(cond_text: Optional[str]) -> List[str]:
         out.append(HEAVY_RAIN_LANDSLIDE)
     return out
 
-
 def _warnings_for_area(area_obj: dict) -> List[Tuple[str, dict]]:
     """
-    Turn one area block into a list of (display_title, raw_warning_dict),
-    filtering only the hazards we want.
+    Return a list of (message, warning_dict) for included hazards.
+    Only statuses '発表' (issued) or '継続' (continuing) are shown.
     """
     results: List[Tuple[str, dict]] = []
     for w in area_obj.get("warnings", []):
         code = str(w.get("code", ""))
-
         if code not in INCLUDE_CODES:
             continue
-
-        # Only “issued” or “continuing”
         if w.get("status", "") not in ("発表", "継続"):
             continue
 
-        if code == "03":
-            # Heavy Rain → split by condition
+        if code == "03":  # Heavy Rain -> split by condition
             for msg in _parse_heavy_rain_conditions(w.get("condition")):
-                results.append((f"Warning – {msg}", w))
-
-        elif code == "04":
-            # Flood
-            results.append(("Warning – Flood", w))
-
-        elif code == "07":
-            # High Waves (Warning)
-            results.append((f"Warning – {HIGH_WAVES}", w))
-
+                results.append((msg, w))
+        elif code == "04":  # Flood (warning)
+            results.append((FLOOD, w))
+        elif code == "05":  # Storm/Gale (warning)
+            results.append((STORM_GALE, w))
+        elif code == "07":  # High Waves (warning)
+            results.append((HIGH_WAVES, w))
     return results
-
 
 def _build_code_to_name(region_map: Dict[str, str]) -> Dict[str, str]:
     return {code: name for name, code in region_map.items()}
-
 
 async def _fetch_office_json(
     client: httpx.AsyncClient,
@@ -140,15 +120,13 @@ async def _fetch_office_json(
         code = str(area.get("code", ""))
         if code not in allowed_code_to_name:
             continue
-
         msgs = _warnings_for_area(area)
         if not msgs:
             continue
-
         region_name = allowed_code_to_name[code]
-        for title_text, _w in msgs:
+        for msg, _w in msgs:
             entries.append({
-                "title":     title_text,
+                "title":     f"Warning – {msg}",
                 "region":    region_name,
                 "summary":   "",
                 "link":      frontend_url,   # human-friendly page
@@ -156,11 +134,9 @@ async def _fetch_office_json(
             })
     return entries
 
-
 async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
     """
     Fetch all JMA office JSONs concurrently (unbounded) and return normalized entries.
-    Returns: {"entries": [...], "source": "..."}  <-- important for weathermonitor.py
     """
     try:
         region_map = _load_region_map_from_file(conf["region_map_file"])
