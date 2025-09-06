@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, List, Dict, Any
 
@@ -270,6 +271,9 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
             entries.append(item)
         except Exception as e:
             errors.append(f"{url}: {e}")
+
+    # Single debug line (match EC/BOM/JMA style)
+    logging.warning(f"[CMA DEBUG] Parsed {len(entries)} alerts")
 
     out: Dict[str, Any] = {"entries": entries, "source": "CMA"}
     if errors:
