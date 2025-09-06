@@ -587,7 +587,13 @@ def render_nws_grouped_compact(entries, conf):
 # CMA renderer
 # ============================================================
 
-CMA_COLORS = {'Orange': '#FF7F00', 'Red': '#E60026'}
+# Add explicit colors for all CMA levels (incl. Blue as CMA uses it)
+CMA_COLORS = {
+    'Yellow': '#FFD400',  # bright yellow
+    'Orange': '#FF7F00',  # orange
+    'Red':    '#E60026',  # red
+    'Blue':   '#1E90FF',  # (optional) blue alerts
+}
 
 def render_cma(item, conf):
     """
@@ -595,7 +601,8 @@ def render_cma(item, conf):
     """
     is_new = bool(item.get("is_new"))
     title  = _norm(item.get('title',''))
-    bullet_color = CMA_COLORS.get(item.get('level', 'Orange'), '#888')
+    level  = _norm(item.get('level', ''))
+    bullet_color = CMA_COLORS.get(level, '#888')  # default to gray if unknown/missing
 
     title_html = (
         f"<div><span style='color:{bullet_color};font-size:18px;'>&#9679;</span> "
@@ -691,7 +698,8 @@ def render_meteoalarm(item, conf):
                 text = f"{prefix}[{level}] {typ}{count_str} – {dt1} to {dt2}"
                 st.markdown(
                     f"<div style='margin-bottom:6px;'>"
-                    f"<span style='color:{color};font-size:16px;'>&#9679;</span> {text}</div>",
+                    f"<span style='color:{color};font-size:16px;'>&#9679;</span> {text}</div>"
+                    ,
                     unsafe_allow_html=True,
                 )
 
