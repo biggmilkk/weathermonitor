@@ -90,7 +90,7 @@ def scrape_ec(sources: list) -> dict:
         logging.error(f"[EC SCRAPER ERROR] Invalid sources type: {type(sources)}")
         return {"entries": [], "error": "Invalid sources type", "source": "Environment Canada"}
     entries = asyncio.run(_scrape_async(sources))
-    logging.warning(f"[EC DEBUG] Successfully parsed {len(entries)} alerts")
+    logging.warning(f"[EC DEBUG] Successfully parsed {len(entries)}")
     return {"entries": entries, "source": "Environment Canada"}
 
 async def scrape_ec_async(sources: list, client) -> dict:
@@ -100,7 +100,7 @@ async def scrape_ec_async(sources: list, client) -> dict:
     """
     try:
         entries = await _scrape_async(sources)
-        logging.warning(f"[EC DEBUG] Parsed {len(entries)} alerts")
+        logging.warning(f"[EC DEBUG] Parsed {len(entries)}")
         return {"entries": entries, "source": "Environment Canada"}
     except Exception as e:
         logging.warning(f"[EC ERROR] Async fetch failed: {e}")
