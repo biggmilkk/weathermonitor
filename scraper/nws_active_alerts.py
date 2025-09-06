@@ -132,6 +132,6 @@ async def scrape_nws_async(conf: dict, client: httpx.AsyncClient) -> dict:
             entries.append(enriched)
 
     # Debug: total parsed
-    logging.warning(f"[NWS DEBUG] Parsed {len(entries)} alerts")
+    logging.warning(f"[NWS DEBUG] Parsed {len(entries)}")
 
     return {"entries": entries, "source": url}
