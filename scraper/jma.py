@@ -156,5 +156,5 @@ async def scrape_jma_async(conf: dict, client: httpx.AsyncClient) -> dict:
     entries = [e for sub in results for e in sub]
     entries.sort(key=lambda x: x.get("published", ""), reverse=True)
 
-    logging.warning(f"[JMA DEBUG] Parsed {len(entries)} alerts")
+    logging.warning(f"[JMA DEBUG] Parsed {len(entries)}")
     return {"entries": entries, "source": "JMA (office JSONs)"}
