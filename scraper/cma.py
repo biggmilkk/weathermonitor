@@ -53,10 +53,11 @@ RE_LEVEL = re.compile(r"(蓝色|黄色|橙色|红色)\s*预警")
 CN_COLOR_MAP = {"蓝色": "Blue", "黄色": "Yellow", "橙色": "Orange", "红色": "Red"}
 
 # Impacted regions (best effort):
-# try to capture the list before “等地 … 发生…风险/预警”
-RE_IMPACT_1 = re.compile(r"预计[，,]\s*(?P<regions>.+?)等地.*?发生", re.S)
-# fallback: capture before first “发生…风险/预警”
-RE_IMPACT_2 = re.compile(r"预计[，,]\s*(?P<regions>.+?)(?:，|,)?\s*发生.*?(?:风险|预警)", re.S)
+# We'll search after removing the window text, to avoid capturing dates as regions.
+RE_IMPACT_MAIN = re.compile(
+    r"预计[，,]\s*(?P<regions>[\u4e00-\u9fff、\s]{2,}?)(?:等地)?(?:部分地区)?(?:将)?发生",
+    re.S,
+)
 
 # Content roots to try for nicer summaries
 _CONTENT_SELECTORS = [
@@ -107,16 +108,27 @@ def _headline(soup: BeautifulSoup) -> str:
 # ------------------------------------------------------------
 # Summary helpers
 # ------------------------------------------------------------
-_BLOCKLIST_SUBSTR = ("首页", "主站", "网站地图", "导航", "当前位置")  # skip nav/breadcrumb lines
+_BLOCKLIST_SUBSTR = (
+    "首页", "主站", "网站地图", "导航", "当前位置",
+    "部门概况", "政务公开", "业务介绍", "新闻", "公告",
+    "友情链接", "帮助", "地图", "联系我们"
+)
+
+RE_LINE_LOOKS_LIKE_WINDOW = re.compile(r"^\d{1,2}月\d{1,2}日.*(至|到|—|–|-|~|～).*$")
 def _is_nav_line(s: str) -> bool:
-    return any(b in s for b in _BLOCKLIST_SUBSTR)
+    if any(b in s for b in _BLOCKLIST_SUBSTR):
+        return True
+    if RE_LINE_LOOKS_LIKE_WINDOW.search(s):
+        return True
+    return False
 
 def _first_meaningful_line(text: str) -> str:
-    # Prefer an informative sentence; skip crumbs and too-short fragments
+    # Prefer an informative sentence; skip crumbs, window-looking lines, and too-short fragments
     for line in text.split("\n"):
         s = line.strip()
         if not s or _is_nav_line(s):
             continue
+        # Must contain Chinese and be reasonably long
         if re.search(r"[\u4e00-\u9fff]", s) and len(s) >= 8:
             return s
     # fallback: still avoid nav lines
@@ -126,29 +138,47 @@ def _first_meaningful_line(text: str) -> str:
             return s
     return ""
 
+def _strip_window_fragment(s: str) -> str:
+    """Remove any '…月…日至…月…日…' fragment to avoid mistaking it as region text."""
+    return RE_WINDOW.sub("", s)
+
 def _extract_impacted_regions(all_text: str) -> List[str]:
     """
     Best effort: pull the comma-separated region list from the opening sentence, e.g.
     '预计，四川东北部、重庆北部、陕西东南部等地部分地区发生…'
     Returns a list like ['四川东北部', '重庆北部', '陕西东南部'].
     """
-    m = RE_IMPACT_1.search(all_text) or RE_IMPACT_2.search(all_text)
+    # Remove explicit time-window fragments before searching
+    text_wo_window = _strip_window_fragment(all_text)
+    m = RE_IMPACT_MAIN.search(text_wo_window)
     if not m:
         return []
+
     segment = m.group("regions")
-    # Clean: remove leading conjunctions and trailing particles
-    segment = re.sub(r"^(未来|预计|今天|今夜|明天|近日|今|当日|当晚)[，,：:\s]*", "", segment)
-    # Stop at an obvious clause marker if present
-    segment = re.split(r"[，,。；;]", segment)[0]
+    # Keep only Chinese, delimiter '、', and spaces, then collapse spaces
+    segment = re.sub(r"[^\u4e00-\u9fff、\s]", "", segment).strip()
+    segment = re.sub(r"\s+", "", segment)
+
     # Split by the Chinese list delimiter
     parts = [p.strip() for p in segment.split("、") if p.strip()]
-    # Drop generic tails like “等地”, “部分地区” if any slipped in
-    cleaned = []
+
+    cleaned: List[str] = []
     for p in parts:
+        # Drop anything that still looks like a time/date token
+        if re.search(r"[月日时至到—–\-~：:0-9]", p):
+            continue
+        # Drop generic tails like “等地/部分地区” if they slipped in
         p = re.sub(r"(等地|部分地区)$", "", p).strip()
-        if p:
+        # Keep only reasonably descriptive chunks (>= 2 Chinese chars)
+        if re.search(r"[\u4e00-\u9fff]{2,}", p):
             cleaned.append(p)
-    return cleaned
+
+    # Deduplicate preserving order
+    seen, out = set(), []
+    for c in cleaned:
+        if c not in seen:
+            seen.add(c); out.append(c)
+    return out
 
 def _summarize(body_text: str, win_start: Optional[datetime], win_end: Optional[datetime], all_text: str) -> str:
     parts = []
