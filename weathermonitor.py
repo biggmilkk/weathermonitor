@@ -1,5 +1,3 @@
-# weathermonitor.py
-
 import os
 import sys
 import time
@@ -30,6 +28,8 @@ from renderer import (
     meteoalarm_country_has_alerts,
     meteoalarm_mark_and_sort,
     meteoalarm_snapshot_ids,
+    # ⬇ NEW: show a proper empty state for generic feeds (e.g., CMA)
+    render_empty_state,
 )
 
 # --------------------------------------------------------------------
@@ -388,18 +388,31 @@ if active:
     else:
         # Generic item-per-row renderer (JSON/NWS legacy/CMA etc.)
         seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
-        for item in data_list:
-            pub = item.get("published")
-            try:
-                ts = dateparser.parse(pub).timestamp() if pub else 0.0
-            except Exception:
-                ts = 0.0
-            item["is_new"] = bool(ts > seen_ts)  # renderer will draw left stripe if True
-            RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
 
-        # Snapshot last seen timestamp for generic feeds
-        pkey = f"{active}_pending_seen_time"
-        pending = st.session_state.get(pkey, None)
-        if pending is not None:
-            st.session_state[f"{active}_last_seen_time"] = float(pending)
-        st.session_state.pop(pkey, None)
+        # >>> FIX: show standard empty-state when there are no entries <<<
+        if not data_list:
+            render_empty_state()
+
+            # Snapshot "seen" to avoid perpetual NEW highlight on next non-empty refresh
+            pkey = f"{active}_pending_seen_time"
+            pending = st.session_state.get(pkey, None)
+            if pending is not None:
+                st.session_state[f"{active}_last_seen_time"] = float(pending)
+            st.session_state.pop(pkey, None)
+
+        else:
+            for item in data_list:
+                pub = item.get("published")
+                try:
+                    ts = dateparser.parse(pub).timestamp() if pub else 0.0
+                except Exception:
+                    ts = 0.0
+                item["is_new"] = bool(ts > seen_ts)  # renderer will draw left stripe if True
+                RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
+
+            # Snapshot last seen timestamp for generic feeds
+            pkey = f"{active}_pending_seen_time"
+            pending = st.session_state.get(pkey, None)
+            if pending is not None:
+                st.session_state[f"{active}_last_seen_time"] = float(pending)
+            st.session_state.pop(pkey, None)
