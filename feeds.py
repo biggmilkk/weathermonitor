@@ -1,3 +1,5 @@
+# feeds.py
+
 def get_feed_definitions():
     return {
         "nws": {
@@ -15,11 +17,16 @@ def get_feed_definitions():
             "type": "rss_meteoalarm",
             "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe",
         },
+
         "cma_china": {
             "label": "CMA (China)",
             "type": "rss_cma",
-            "url": "https://severeweather.wmo.int/v2/cap-alerts/cn-cma-xx/rss.xml",
+            "conf": {
+                "translate_to_en": True,
+                "expiry_grace_minutes": 0,
+            },
         },
+
         "jma": {
             "label": "JMA (Japan)",
             "type": "rss_jma",
