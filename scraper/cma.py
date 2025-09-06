@@ -352,7 +352,7 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
             errors.append(f"{url}: {e}")
 
     # Single debug line (match EC/BOM/JMA style)
-    logging.warning(f"[CMA DEBUG] Parsed {len(entries)} alerts")
+    logging.warning(f"[CMA DEBUG] Parsed {len(entries)}")
 
     out: Dict[str, Any] = {"entries": entries, "source": "CMA"}
     if errors:
