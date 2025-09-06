@@ -10,8 +10,7 @@ Flow:
      - published (optional)
      - valid-time window (start/end)
      - level color (蓝/黄/橙/红 → Blue/Yellow/Orange/Red)
-     - lead sentence from the article body (#text .xml) starting with “预计，…”
-     - impacted regions extracted from that lead sentence
+     - FULL alert text from the article body (#text .xml), skipping header & images
   3) Return an entry ONLY if start <= now < end (Asia/Shanghai)
      (Optional) keep within a small grace after end via conf["expiry_grace_minutes"].
 """
@@ -57,6 +56,7 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
 # ------------------------------------------------------------
 RE_PUBLISHED = re.compile(r"发布时间：\s*(\d{4})年(\d{1,2})月(\d{1,2})日(\d{1,2})时")
 
+#  9月5日20时至6日20时 / 9月5日20:30至6日20:00 / 9月5日20时到9月6日20时 / 9月5日20时—6日20时 / - / ～ …
 RE_WINDOW = re.compile(
     r"(?P<mon>\d{1,2})月(?P<d1>\d{1,2})日(?P<h1>\d{1,2})(?:时|:)?(?P<m1>\d{2})?"
     r"\s*(?:至|到|—|–|-|~|～)\s*"
@@ -65,13 +65,6 @@ RE_WINDOW = re.compile(
 
 RE_LEVEL = re.compile(r"(蓝色|黄色|橙色|红色)\s*预警")
 CN_COLOR_MAP = {"蓝色": "Blue", "黄色": "Yellow", "橙色": "Orange", "红色": "Red"}
-
-RE_LEAD_SENTENCE = re.compile(r"(预计[，,].{10,400}?)(?:。|！|!|；|;|$)")
-
-RE_IMPACT_MAIN = re.compile(
-    r"预计[，,]\s*(?P<regions>[\u4e00-\u9fff、\s]{2,}?)(?:等地)?(?:部分地区)?(?:将)?发生",
-    re.S,
-)
 
 RE_LINE_LOOKS_LIKE_WINDOW = re.compile(r"^\d{1,2}月\d{1,2}日.*(至|到|—|–|-|~|～).*$")
 
@@ -102,39 +95,6 @@ def _extract_whitelist_links_from_map(html: str) -> list[str]:
     return out
 
 
-def _article_text(soup: BeautifulSoup) -> str:
-    """Return the article body text (inside #text .xml) as fallback context."""
-    node = soup.select_one("#text .xml")
-    if node and node.get_text(strip=True):
-        return node.get_text("\n", strip=True)
-    for sel in (
-        "main",
-        "div#content",
-        "div.detail",
-        "div.article",
-        "div#article",
-        "div.container",
-        "div#main",
-    ):
-        n = soup.select_one(sel)
-        if n and n.get_text(strip=True):
-            return n.get_text("\n", strip=True)
-    return soup.get_text("\n", strip=True)
-
-
-def _lead_paragraph_text(soup: BeautifulSoup) -> str:
-    """Find the first <p> inside #text .xml that contains '预计'."""
-    container = soup.select_one("#text .xml")
-    if not container:
-        return ""
-    for p in container.find_all("p"):
-        t = p.get_text(" ", strip=True)
-        t = re.sub(r"\s+", "", t)
-        if t.startswith("预计"):
-            return t
-    return ""
-
-
 def _headline(soup: BeautifulSoup) -> str:
     h1 = soup.find("h1")
     raw = (
@@ -148,72 +108,60 @@ def _headline(soup: BeautifulSoup) -> str:
 
 
 # ------------------------------------------------------------
-# Summary helpers
+# Article text extraction (FULL text for summary)
 # ------------------------------------------------------------
-def _strip_window_fragment(s: str) -> str:
-    return RE_WINDOW.sub("", s)
-
-
-def _extract_impacted_regions(from_lead_sentence: str) -> List[str]:
-    if not from_lead_sentence:
-        return []
-    text_wo_window = _strip_window_fragment(from_lead_sentence)
-    m = RE_IMPACT_MAIN.search(text_wo_window)
-    if not m:
-        return []
-    segment = m.group("regions")
-    segment = re.sub(r"[^\u4e00-\u9fff、\s]", "", segment).strip()
-    segment = re.sub(r"\s+", "", segment)
-    parts = [p.strip() for p in segment.split("、") if p.strip()]
-    cleaned: List[str] = []
-    for p in parts:
-        if re.search(r"[月日时至到—–\-~：:0-9]", p):
-            continue
-        p = re.sub(r"(等地|部分地区)$", "", p).strip()
-        if re.search(r"[\u4e00-\u9fff]{2,}", p):
-            cleaned.append(p)
-    seen, out = set(), []
-    for c in cleaned:
-        if c not in seen:
-            seen.add(c)
-            out.append(c)
-    return out
-
-
-def _summarize(
-    article_text: str,
-    win_start: Optional[datetime],
-    win_end: Optional[datetime],
-    lead_sentence: str,
-) -> str:
-    parts: List[str] = []
-    if win_start and win_end:
-        parts.append(
-            f"有效期：{win_start.strftime('%m月%d日%H:%M')} 至 {win_end.strftime('%m月%d日%H:%M')}（北京时间）"
-        )
-
-    regions = _extract_impacted_regions(lead_sentence)
-    if regions:
-        parts.append("影响区域：" + "；".join(regions))
-
-    text_line = lead_sentence
-    if not text_line:
-        for line in article_text.split("\n"):
-            s = line.strip()
-            if not s:
-                continue
-            if RE_LINE_LOOKS_LIKE_WINDOW.search(s):
-                continue
-            if re.search(r"[\u4e00-\u9fff]", s) and len(s) >= 8:
-                text_line = s
+def _full_alert_text_from_article(soup: BeautifulSoup) -> str:
+    """
+    Return the full alert text from inside #text .xml:
+    - Skip the first bold header paragraph if it contains '联合发布' and not '预计'
+    - Skip paragraphs that are images-only
+    - Join remaining <p> texts with newlines
+    """
+    container = soup.select_one("#text .xml")
+    if not container:
+        # Fallbacks if structure changes
+        for sel in (
+            "#text",
+            "main",
+            "div#content",
+            "div.detail",
+            "div.article",
+            "div#article",
+            "div.container",
+            "div#main",
+        ):
+            n = soup.select_one(sel)
+            if n and n.get_text(strip=True):
+                container = n
                 break
+    if not container:
+        return soup.get_text("\n", strip=True)
 
-    if text_line:
-        if len(text_line) > 140:
-            text_line = text_line[:137] + "…"
-        parts.append(text_line)
+    out_lines: List[str] = []
+    paragraphs = container.find_all("p")
+    for idx, p in enumerate(paragraphs):
+        # Skip image-only paragraphs
+        if p.find("img"):
+            continue
+        text = p.get_text(" ", strip=True)
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            continue
+        # Skip the bold header like “自然资源部与中国气象局…联合发布…预警：”
+        if idx == 0 and ("联合发布" in text) and ("预计" not in text):
+            continue
+        out_lines.append(text)
 
-    return "  \n".join(parts) if parts else ""
+    full_text = "\n".join(out_lines).strip()
+    # As a final guard, drop stray window-looking lines if they appear alone
+    lines = []
+    for line in full_text.split("\n"):
+        if RE_LINE_LOOKS_LIKE_WINDOW.search(line.strip()):
+            # keep it — it's part of the content, but window is already shown above; harmless to keep
+            lines.append(line.strip())
+        else:
+            lines.append(line.strip())
+    return "\n".join(lines).strip()
 
 
 # ------------------------------------------------------------
@@ -291,11 +239,13 @@ def _parse_detail_html(html: str, url: str, tz) -> Optional[Dict[str, Any]]:
     if not (w_start <= now < w_end):
         return None
 
-    article_text = _article_text(soup)
-    lead = _lead_paragraph_text(soup)
-
+    # Build full summary from article body only
+    full_alert_text = _full_alert_text_from_article(soup)
     title = _headline(soup)
-    summary = _summarize(article_text, w_start, w_end, lead)
+
+    # Compose summary: window line + full alert text
+    window_line = f"有效期：{w_start.strftime('%m月%d日%H:%M')} 至 {w_end.strftime('%m月%d日%H:%M')}（北京时间）"
+    summary = f"{window_line}\n{full_alert_text}".strip()
 
     return {
         "title": title,
