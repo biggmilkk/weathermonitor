@@ -1,5 +1,23 @@
 # scraper/cma.py
 # -*- coding: utf-8 -*-
+"""
+CMA (China) scraper that mirrors exactly what's linked today on:
+  https://weather.cma.cn/web/alarm/map.html
+
+Flow:
+  1) Fetch the map page, read #disasterWarning a[href] as the whitelist.
+  2) For each whitelisted link, fetch the detail page and parse:
+     - published (optional)
+     - valid-time window (start/end)
+     - level color (蓝/黄/橙/红 → Blue/Yellow/Orange/Red)
+  3) Return an entry ONLY if start <= now < end (Asia/Shanghai)
+     (Optional) keep within a small grace after end via conf["expiry_grace_minutes"].
+
+Output entries match your CMA renderer:
+  - title, level, summary, link, published
+  (No "region" key to avoid "Region:" label in UI)
+"""
+
 from __future__ import annotations
 
 import re
@@ -34,12 +52,12 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
 
 # ------------------------------------------------------------
-# Regex patterns (detail pages share this textual shape)
+# Patterns (detail pages share this text shape)
 # ------------------------------------------------------------
 # e.g., “发布时间：2025年09月05日10时”
 RE_PUBLISHED = re.compile(r"发布时间：\s*(\d{4})年(\d{1,2})月(\d{1,2})日(\d{1,2})时")
 
-# Robust window:
+# Robust window variants:
 #   9月5日20时至6日20时
 #   9月5日20:30至6日20:00
 #   9月5日20时到9月6日20时
@@ -54,26 +72,10 @@ RE_WINDOW = re.compile(
 RE_LEVEL = re.compile(r"(蓝色|黄色|橙色|红色)\s*预警")
 CN_COLOR_MAP = {"蓝色": "Blue", "黄色": "Yellow", "橙色": "Orange", "红色": "Red"}
 
-# Quick type canonicalization (used only for internal decisions if needed)
-TYPE_RULES = [
-    (re.compile("暴雨预警"), "Rainstorm"),
-    (re.compile("台风预警"), "Typhoon"),
-    (re.compile("高温预警"), "Heat"),
-    (re.compile("强对流天气预警|强对流天气"), "Severe convection"),
-    (re.compile("地质灾害气象风险预警"), "Geo-hazard risk"),
-    (re.compile("渍涝风险气象预报|渍涝风险"), "Waterlogging risk"),
-    (re.compile("中小河流洪水气象风险预警|中小河流洪水"), "Small/medium river flood risk"),
-]
-
+# Content roots to try for nicer summaries
 _CONTENT_SELECTORS = [
     "main", "div#content", "div.detail", "div.article", "div#article", "div.container", "div#main"
 ]
-
-def _canon_type(text: str) -> str:
-    for pat, canon in TYPE_RULES:
-        if pat.search(text):
-            return canon
-    return "Alert"
 
 # ------------------------------------------------------------
 # DOM helpers
@@ -81,28 +83,25 @@ def _canon_type(text: str) -> str:
 def _abs_url(href: str) -> str:
     if href.startswith("http://") or href.startswith("https://"):
         return href
-    # CMA site base
     return f"https://weather.cma.cn{href if href.startswith('/') else '/' + href}"
 
-def _extract_whitelist_links(html: str) -> List[str]:
+def _extract_whitelist_links_from_map(html: str) -> list[str]:
+    """Return today's links shown in #disasterWarning (SSR)."""
     soup = BeautifulSoup(html, "html.parser")
     box = soup.find(id="disasterWarning")
-    urls: List[str] = []
     if not box:
-        return urls
+        return []
+    urls = []
     for a in box.find_all("a", href=True):
         urls.append(_abs_url(a["href"]))
     # de-dupe keep order
-    seen = set()
-    out = []
+    seen, out = set(), []
     for u in urls:
         if u not in seen:
-            seen.add(u)
-            out.append(u)
+            seen.add(u); out.append(u)
     return out
 
 def _page_text(soup: BeautifulSoup) -> str:
-    # Prefer a content root, else fall back to the whole page
     for sel in _CONTENT_SELECTORS:
         node = soup.select_one(sel)
         if node and node.get_text(strip=True):
@@ -110,45 +109,35 @@ def _page_text(soup: BeautifulSoup) -> str:
     return soup.get_text("\n", strip=True)
 
 def _headline(soup: BeautifulSoup) -> str:
-    # Prefer <h1>, then <title>
-    raw = None
+    # Prefer <h1>, else <title>, then clean breadcrumb & generic label
     h1 = soup.find("h1")
-    if h1 and h1.get_text(strip=True):
-        raw = h1.get_text(strip=True)
-    elif (tit := soup.find("title")):
-        raw = tit.get_text(strip=True)
-    else:
-        raw = "气象预警"
-    # Clean up: split breadcrumbs and remove redundant “气象预警”
-    # e.g., "气象预警 >> 暴雨预警" → "暴雨预警"
+    raw = h1.get_text(strip=True) if (h1 and h1.get_text(strip=True)) else (
+        soup.find("title").get_text(strip=True) if soup.find("title") else "气象预警"
+    )
     parts = re.split(r"\s*(?:>>|›|＞)\s*", raw)
-    last = parts[-1] if parts else raw
-    last = last.replace("气象预警", "").strip()
+    last = (parts[-1] if parts else raw).replace("气象预警", "").strip()
     return last or raw
 
 def _first_meaningful_line(text: str) -> str:
-    # Avoid navigation crumbs like “主站首页”
+    # Skip crumbs like “主站首页”
     for line in text.split("\n"):
         s = line.strip()
         if not s:
             continue
         if "首页" in s or "主站" in s:
             continue
-        # keep lines that are reasonably informative (contain Chinese chars and > 8 chars)
         if re.search(r"[\u4e00-\u9fff]", s) and len(s) >= 8:
             return s
-    # fallback: first non-empty line
     for line in text.split("\n"):
-        s = line.strip()
-        if s:
-            return s
+        if line.strip():
+            return line.strip()
     return ""
 
 # ------------------------------------------------------------
 # Field parsers
 # ------------------------------------------------------------
-def _parse_published(text_blob: str, tz) -> Optional[datetime]:
-    m = RE_PUBLISHED.search(text_blob)
+def _parse_published(text: str, tz) -> Optional[datetime]:
+    m = RE_PUBLISHED.search(text)
     if not m:
         return None
     y, mo, d, h = map(int, m.groups())
@@ -157,8 +146,8 @@ def _parse_published(text_blob: str, tz) -> Optional[datetime]:
     except Exception:
         return None
 
-def _parse_window(text_blob: str, pub_dt: Optional[datetime], tz) -> Tuple[Optional[datetime], Optional[datetime]]:
-    m = RE_WINDOW.search(text_blob)
+def _parse_window(text: str, pub_dt: Optional[datetime], tz) -> Tuple[Optional[datetime], Optional[datetime]]:
+    m = RE_WINDOW.search(text)
     if not m:
         return None, None
     mon = int(m.group("mon"))
@@ -190,8 +179,8 @@ def _parse_window(text_blob: str, pub_dt: Optional[datetime], tz) -> Tuple[Optio
 
     return start, end
 
-def _parse_level(text_blob: str) -> Optional[str]:
-    m = RE_LEVEL.search(text_blob)
+def _parse_level(text: str) -> Optional[str]:
+    m = RE_LEVEL.search(text)
     return CN_COLOR_MAP.get(m.group(1)) if m else None
 
 def _summarize(body_text: str, win_start: Optional[datetime], win_end: Optional[datetime]) -> str:
@@ -206,28 +195,27 @@ def _summarize(body_text: str, win_start: Optional[datetime], win_end: Optional[
     return "  \n".join(parts) if parts else ""
 
 # ------------------------------------------------------------
-# Parse a single CMA channel page (detail-style)
+# Parse a single channel detail page (requires active window)
 # ------------------------------------------------------------
 def _parse_detail_html(html: str, url: str, tz) -> Optional[Dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
-    # Search across full page (robust), but use content-root text for summary readability
-    all_text = soup.get_text("\n", strip=True)
-    content_text = _page_text(soup)
+    all_text = soup.get_text("\n", strip=True)   # robust match surface
+    body_text = _page_text(soup)                 # nicer summary surface
 
-    pub_dt = _parse_published(all_text, tz)  # optional
+    pub_dt = _parse_published(all_text, tz)      # optional
     w_start, w_end = _parse_window(all_text, pub_dt, tz)
     if not (w_start and w_end):
-        return None  # no valid window → skip
+        return None  # cannot assert active
     level = _parse_level(all_text)
 
     now = datetime.now(tz)
     if not (w_start <= now < w_end):
-        return None  # not active
+        return None  # not currently active
 
     title = _headline(soup)
-    summary = _summarize(content_text, w_start, w_end)
+    summary = _summarize(body_text, w_start, w_end)
 
-    # IMPORTANT: we intentionally DO NOT set "region" anymore
+    # IMPORTANT: do NOT include "region" to avoid "Region:" in UI
     return {
         "title": title,
         "level": level,
@@ -237,18 +225,18 @@ def _parse_detail_html(html: str, url: str, tz) -> Optional[Dict[str, Any]]:
     }
 
 # ------------------------------------------------------------
-# Public entry (async) — exactly what your registry calls
+# Public entry — matches your registry: scrape_cma_async(conf, client)
 # ------------------------------------------------------------
 async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
     """
     Conf:
       - tz_name: str (default 'Asia/Shanghai')
       - expiry_grace_minutes: int (default 0)
-      - urls: list[str] (optional; used only if #disasterWarning is empty)
-    Behavior:
-      1) Fetch MAIN_PAGE and whitelist links in #disasterWarning.
+      - urls: list[str] (optional; used ONLY if #disasterWarning is empty)
+    Behavior (strict-first):
+      1) Read today's links from /web/alarm/map.html (#disasterWarning).
       2) Scrape ONLY those links for currently-active alerts.
-      3) If the box is empty, fall back to conf["urls"] (if provided).
+      3) If the box is empty, optionally fall back to conf["urls"] (no static defaults).
     """
     tz = _tz(conf.get("tz_name", "Asia/Shanghai"))
     grace = int(conf.get("expiry_grace_minutes", 0))
@@ -256,38 +244,36 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
     entries: List[Dict[str, Any]] = []
     errors: List[str] = []
 
-    # Step 1: read the live whitelist from the main page
+    # Step 1: whitelist from main map page (source of truth)
     whitelist: List[str] = []
     try:
         resp = await client.get(MAIN_PAGE, timeout=15.0)
         resp.raise_for_status()
-        whitelist = _extract_whitelist_links(resp.text)
+        whitelist = _extract_whitelist_links_from_map(resp.text)
     except Exception as e:
         errors.append(f"main: {e}")
 
-    # Step 2: if nothing found, allow explicit conf["urls"] as a fallback (no static defaults)
+    # Step 2: strict-first — only scrape live links; if empty, allow explicit conf["urls"]
     if not whitelist:
         whitelist = list(conf.get("urls") or [])
 
-    # Step 3: fetch + parse each whitelisted page
+    # Step 3: fetch & parse each whitelisted link
     for url in whitelist:
         try:
             r = await client.get(url, timeout=15.0)
             r.raise_for_status()
             item = _parse_detail_html(r.text, url, tz)
-            if item:
-                if grace > 0:
-                    # Optional grace: allow a brief post-expiry window
-                    soup = BeautifulSoup(r.text, "html.parser")
-                    t_all = soup.get_text("\n", strip=True)
-                    pub_dt = _parse_published(t_all, tz)
-                    sdt, edt = _parse_window(t_all, pub_dt, tz)
-                    if edt and datetime.now(tz) >= edt + timedelta(minutes=grace):
-                        pass  # beyond grace → drop
-                    else:
-                        entries.append(item)
-                else:
-                    entries.append(item)
+            if not item:
+                continue
+            if grace > 0:
+                # Optional grace: allow a brief post-expiry window
+                soup = BeautifulSoup(r.text, "html.parser")
+                t_all = soup.get_text("\n", strip=True)
+                pub_dt = _parse_published(t_all, tz)
+                sdt, edt = _parse_window(t_all, pub_dt, tz)
+                if edt and datetime.now(tz) >= (edt + timedelta(minutes=grace)):
+                    continue
+            entries.append(item)
         except Exception as e:
             errors.append(f"{url}: {e}")
 
