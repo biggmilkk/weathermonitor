@@ -1,3 +1,4 @@
+# scraper/nws_active_alerts.py
 import streamlit as st
 import requests
 import logging
@@ -100,6 +101,10 @@ def scrape_nws(conf: dict) -> dict:
         enriched = _enrich_entry_from_props(props)
         if enriched:
             entries.append(enriched)
+
+    # Debug: total parsed
+    logging.warning(f"[NWS DEBUG] Parsed {len(entries)} alerts")
+
     return {"entries": entries, "source": url}
 
 async def scrape_nws_async(conf: dict, client: httpx.AsyncClient) -> dict:
@@ -125,4 +130,8 @@ async def scrape_nws_async(conf: dict, client: httpx.AsyncClient) -> dict:
         enriched = _enrich_entry_from_props(props)
         if enriched:
             entries.append(enriched)
+
+    # Debug: total parsed
+    logging.warning(f"[NWS DEBUG] Parsed {len(entries)} alerts")
+
     return {"entries": entries, "source": url}
