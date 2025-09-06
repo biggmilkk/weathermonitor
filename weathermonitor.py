@@ -21,6 +21,7 @@ from renderer import (
     # Aggregates used for main-button "❗ New" counters
     ec_remaining_new_total,
     nws_remaining_new_total,
+    ec_bucket_from_title,          # <-- needed for EC "mark all as seen"
     # Small UI + ID helpers
     draw_badge,
     safe_int,
@@ -28,7 +29,7 @@ from renderer import (
     meteoalarm_country_has_alerts,
     meteoalarm_mark_and_sort,
     meteoalarm_snapshot_ids,
-    # ⬇ NEW: show a proper empty state for generic feeds (e.g., CMA)
+    # Empty state renderer
     render_empty_state,
 )
 
@@ -209,7 +210,6 @@ if to_fetch:
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-                # compute_counts is generic; we only need to know "any new?"
                 _, new_count = compute_counts(entries, conf, last_seen_ids, alert_id_fn=alert_id)
                 if new_count == 0:
                     # If nothing new, snapshot all currently visible IDs
@@ -351,6 +351,47 @@ if active:
 
     # --- Environment Canada compact grouped (warnings+watch only) ---
     elif conf["type"] == "ec_async":
+        # ---------------- EC: Mark all as seen button ----------------
+        # Keys used by the EC renderer: "Province|Warning"
+        # We replicate that here to set all last-seen to 'now'.
+        _PROVINCE_NAMES = {
+            "AB": "Alberta", "BC": "British Columbia", "MB": "Manitoba",
+            "NB": "New Brunswick", "NL": "Newfoundland and Labrador",
+            "NT": "Northwest Territories", "NS": "Nova Scotia", "NU": "Nunavut",
+            "ON": "Ontario", "PE": "Prince Edward Island", "QC": "Quebec",
+            "SK": "Saskatchewan", "YT": "Yukon",
+        }
+        top_cols = st.columns([0.25, 0.75])
+        with top_cols[0]:
+            if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
+                lastseen_key = f"{active}_bucket_last_seen"
+                bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
+                now_ts = time.time()
+
+                # 1) Update all existing keys in the map (if any)
+                for k in list(bucket_lastseen.keys()):
+                    bucket_lastseen[k] = now_ts
+
+                # 2) Also make sure current entries' buckets are present & set
+                for e in entries:
+                    bucket = ec_bucket_from_title(e.get("title","") or "")
+                    if not bucket:
+                        continue
+                    code = e.get("province", "")
+                    prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
+                    bkey = f"{prov_name}|{bucket}"
+                    bucket_lastseen[bkey] = now_ts
+
+                st.session_state[lastseen_key] = bucket_lastseen
+
+                # Zero-out badge immediately and rerun for fresh UI
+                st.session_state[f"{active}_remaining_new_total"] = 0
+                ph = badge_placeholders.get(active)
+                if ph is not None:
+                    draw_badge(ph, 0)
+                _immediate_rerun()
+        # -------------------------------------------------------------
+
         RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
 
         # After rendering, recompute aggregate NEW using renderer's per-bucket last_seen map
@@ -364,6 +405,32 @@ if active:
 
     # --- NWS (grouped compact, US) ---
     elif conf["type"] == "nws_grouped_compact":
+        # ---------------- NWS: Mark all as seen button ----------------
+        top_cols = st.columns([0.25, 0.75])
+        with top_cols[0]:
+            if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
+                lastseen_key = f"{active}_bucket_last_seen"
+                bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
+                now_ts = time.time()
+
+                # Compute current buckets from entries: "State|Bucket"
+                for a in entries:
+                    state = (a.get("state") or a.get("state_name") or a.get("state_code") or "Unknown")
+                    bucket = (a.get("bucket") or a.get("event") or a.get("title") or "Alert")
+                    bkey = f"{state}|{bucket}"
+                    bucket_lastseen[bkey] = now_ts
+
+                st.session_state[lastseen_key] = bucket_lastseen
+
+                # Also zero-out the badge immediately for UX consistency
+                st.session_state[f"{active}_remaining_new_total"] = 0
+                ph = badge_placeholders.get(active)
+                if ph is not None:
+                    draw_badge(ph, 0)
+
+                _immediate_rerun()
+        # -------------------------------------------------------------
+
         RENDERERS["nws_grouped_compact"](entries, {**conf, "key": active})
 
         # After rendering, recompute aggregate NEW using renderer's per-bucket last_seen map
@@ -400,7 +467,7 @@ if active:
         # Generic item-per-row renderer (JSON/NWS legacy/CMA etc.)
         seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
 
-        # >>> FIX: show standard empty-state when there are no entries <<<
+        # Show standard empty-state when there are no entries
         if not data_list:
             render_empty_state()
 
