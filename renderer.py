@@ -109,7 +109,7 @@ def meteoalarm_snapshot_ids(countries_or_entries: list[dict]) -> tuple[str, ...]
 
 # Uniform empty-state for grouped renderers
 def render_empty_state():
-    st.info("No active warnings at the moment.")
+    st.info("No active warnings that meet thresholds at the moment.")
 
 # ============================================================
 # Generic JSON-like renderer
