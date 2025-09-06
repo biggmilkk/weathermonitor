@@ -1,20 +1,3 @@
-# scraper/cma.py
-# -*- coding: utf-8 -*-
-"""
-CMA (China) scraper that mirrors exactly what's linked today on:
-  https://weather.cma.cn/web/alarm/map.html
-
-Flow:
-  1) Fetch the map page, read #disasterWarning a[href] as the whitelist.
-  2) For each whitelisted link, fetch the detail page and parse:
-     - published (optional)
-     - valid-time window (start/end)
-     - level color (蓝/黄/橙/红 → Blue/Yellow/Orange/Red)
-     - FULL alert text from the article body (#text .xml), skipping header & images
-  3) Return an entry ONLY if start <= now < end (Asia/Shanghai)
-     (Optional) keep within a small grace after end via conf["expiry_grace_minutes"].
-"""
-
 from __future__ import annotations
 
 import re
@@ -144,6 +127,7 @@ def _full_alert_text_from_article(soup: BeautifulSoup) -> str:
         if p.find("img"):
             continue
         text = p.get_text(" ", strip=True)
+        # Normalize internal whitespace but keep natural sentence spacing
         text = re.sub(r"\s+", " ", text).strip()
         if not text:
             continue
@@ -153,15 +137,7 @@ def _full_alert_text_from_article(soup: BeautifulSoup) -> str:
         out_lines.append(text)
 
     full_text = "\n".join(out_lines).strip()
-    # As a final guard, drop stray window-looking lines if they appear alone
-    lines = []
-    for line in full_text.split("\n"):
-        if RE_LINE_LOOKS_LIKE_WINDOW.search(line.strip()):
-            # keep it — it's part of the content, but window is already shown above; harmless to keep
-            lines.append(line.strip())
-        else:
-            lines.append(line.strip())
-    return "\n".join(lines).strip()
+    return full_text
 
 
 # ------------------------------------------------------------
@@ -243,9 +219,9 @@ def _parse_detail_html(html: str, url: str, tz) -> Optional[Dict[str, Any]]:
     full_alert_text = _full_alert_text_from_article(soup)
     title = _headline(soup)
 
-    # Compose summary: window line + full alert text
+    # Compose summary: window line + blank line + full alert text (separate paragraph)
     window_line = f"有效期：{w_start.strftime('%m月%d日%H:%M')} 至 {w_end.strftime('%m月%d日%H:%M')}（北京时间）"
-    summary = f"{window_line}\n{full_alert_text}".strip()
+    summary = f"{window_line}\n\n{full_alert_text}".strip()
 
     return {
         "title": title,
