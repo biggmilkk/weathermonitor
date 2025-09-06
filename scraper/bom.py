@@ -103,5 +103,5 @@ async def scrape_bom_multi_async(conf: dict, client: httpx.AsyncClient) -> dict:
     for lst in results:
         entries.extend(lst)
 
-    logging.warning(f"[BOM DEBUG] Parsed {len(entries)} alerts")
+    logging.warning(f"[BOM DEBUG] Parsed {len(entries)}")
     return {"entries": entries, "source": "Australia BOM"}
