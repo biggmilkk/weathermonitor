@@ -1,23 +1,3 @@
-# scraper/cma.py
-# -*- coding: utf-8 -*-
-"""
-CMA (China) scraper that mirrors exactly what's linked today on:
-  https://weather.cma.cn/web/alarm/map.html
-
-Flow:
-  1) Fetch the map page, read #disasterWarning a[href] as the whitelist.
-  2) For each whitelisted link, fetch the detail page and parse:
-     - published (optional)
-     - valid-time window (start/end)
-     - level color (蓝/黄/橙/红 → Blue/Yellow/Orange/Red)
-  3) Return an entry ONLY if start <= now < end (Asia/Shanghai)
-     (Optional) keep within a small grace after end via conf["expiry_grace_minutes"].
-
-Output entries match your CMA renderer:
-  - title, level, summary, link, published
-  (No "region" key to avoid "Region:" label in UI)
-"""
-
 from __future__ import annotations
 
 import re
@@ -72,6 +52,12 @@ RE_WINDOW = re.compile(
 RE_LEVEL = re.compile(r"(蓝色|黄色|橙色|红色)\s*预警")
 CN_COLOR_MAP = {"蓝色": "Blue", "黄色": "Yellow", "橙色": "Orange", "红色": "Red"}
 
+# Impacted regions (best effort):
+# try to capture the list before “等地 … 发生…风险/预警”
+RE_IMPACT_1 = re.compile(r"预计[，,]\s*(?P<regions>.+?)等地.*?发生", re.S)
+# fallback: capture before first “发生…风险/预警”
+RE_IMPACT_2 = re.compile(r"预计[，,]\s*(?P<regions>.+?)(?:，|,)?\s*发生.*?(?:风险|预警)", re.S)
+
 # Content roots to try for nicer summaries
 _CONTENT_SELECTORS = [
     "main", "div#content", "div.detail", "div.article", "div#article", "div.container", "div#main"
@@ -118,20 +104,68 @@ def _headline(soup: BeautifulSoup) -> str:
     last = (parts[-1] if parts else raw).replace("气象预警", "").strip()
     return last or raw
 
+# ------------------------------------------------------------
+# Summary helpers
+# ------------------------------------------------------------
+_BLOCKLIST_SUBSTR = ("首页", "主站", "网站地图", "导航", "当前位置")  # skip nav/breadcrumb lines
+def _is_nav_line(s: str) -> bool:
+    return any(b in s for b in _BLOCKLIST_SUBSTR)
+
 def _first_meaningful_line(text: str) -> str:
-    # Skip crumbs like “主站首页”
+    # Prefer an informative sentence; skip crumbs and too-short fragments
     for line in text.split("\n"):
         s = line.strip()
-        if not s:
-            continue
-        if "首页" in s or "主站" in s:
+        if not s or _is_nav_line(s):
             continue
         if re.search(r"[\u4e00-\u9fff]", s) and len(s) >= 8:
             return s
+    # fallback: still avoid nav lines
     for line in text.split("\n"):
-        if line.strip():
-            return line.strip()
+        s = line.strip()
+        if s and not _is_nav_line(s):
+            return s
     return ""
+
+def _extract_impacted_regions(all_text: str) -> List[str]:
+    """
+    Best effort: pull the comma-separated region list from the opening sentence, e.g.
+    '预计，四川东北部、重庆北部、陕西东南部等地部分地区发生…'
+    Returns a list like ['四川东北部', '重庆北部', '陕西东南部'].
+    """
+    m = RE_IMPACT_1.search(all_text) or RE_IMPACT_2.search(all_text)
+    if not m:
+        return []
+    segment = m.group("regions")
+    # Clean: remove leading conjunctions and trailing particles
+    segment = re.sub(r"^(未来|预计|今天|今夜|明天|近日|今|当日|当晚)[，,：:\s]*", "", segment)
+    # Stop at an obvious clause marker if present
+    segment = re.split(r"[，,。；;]", segment)[0]
+    # Split by the Chinese list delimiter
+    parts = [p.strip() for p in segment.split("、") if p.strip()]
+    # Drop generic tails like “等地”, “部分地区” if any slipped in
+    cleaned = []
+    for p in parts:
+        p = re.sub(r"(等地|部分地区)$", "", p).strip()
+        if p:
+            cleaned.append(p)
+    return cleaned
+
+def _summarize(body_text: str, win_start: Optional[datetime], win_end: Optional[datetime], all_text: str) -> str:
+    parts = []
+    if win_start and win_end:
+        parts.append(f"有效期：{win_start.strftime('%m月%d日%H:%M')} 至 {win_end.strftime('%m月%d日%H:%M')}（北京时间）")
+
+    # Impacted regions (if present)
+    regions = _extract_impacted_regions(all_text)
+    if regions:
+        parts.append("影响区域：" + "；".join(regions))
+
+    first = _first_meaningful_line(body_text)
+    if len(first) > 140:
+        first = first[:137] + "…"
+    if first:
+        parts.append(first)
+    return "  \n".join(parts) if parts else ""
 
 # ------------------------------------------------------------
 # Field parsers
@@ -183,17 +217,6 @@ def _parse_level(text: str) -> Optional[str]:
     m = RE_LEVEL.search(text)
     return CN_COLOR_MAP.get(m.group(1)) if m else None
 
-def _summarize(body_text: str, win_start: Optional[datetime], win_end: Optional[datetime]) -> str:
-    parts = []
-    if win_start and win_end:
-        parts.append(f"有效期：{win_start.strftime('%m月%d日%H:%M')} 至 {win_end.strftime('%m月%d日%H:%M')}（北京时间）")
-    first = _first_meaningful_line(body_text)
-    if len(first) > 140:
-        first = first[:137] + "…"
-    if first:
-        parts.append(first)
-    return "  \n".join(parts) if parts else ""
-
 # ------------------------------------------------------------
 # Parse a single channel detail page (requires active window)
 # ------------------------------------------------------------
@@ -213,7 +236,7 @@ def _parse_detail_html(html: str, url: str, tz) -> Optional[Dict[str, Any]]:
         return None  # not currently active
 
     title = _headline(soup)
-    summary = _summarize(body_text, w_start, w_end)
+    summary = _summarize(body_text, w_start, w_end, all_text)
 
     # IMPORTANT: do NOT include "region" to avoid "Region:" in UI
     return {
