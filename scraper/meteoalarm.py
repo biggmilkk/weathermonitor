@@ -5,6 +5,7 @@ import re
 from bs4 import BeautifulSoup
 import httpx
 import asyncio
+from datetime import datetime, timezone
 
 # ------------ Severity & type maps (unchanged) ------------
 AWARENESS_LEVELS = {
@@ -96,12 +97,41 @@ def _country_rss_url(country_name: str) -> str | None:
     slug = COUNTRY_TO_RSS_SLUG.get(country_name)
     return f"https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-{slug}" if slug else None
 
+# ------------ Time helpers ------------
+def _parse_iso8601_maybe(s: str):
+    """
+    Try to parse an ISO-8601-ish timestamp like '2025-09-06T18:59:59+00:00'.
+    Return timezone-aware dt or None.
+    """
+    if not s:
+        return None
+    s = s.strip()
+    try:
+        # Python handles 'YYYY-MM-DDTHH:MM:SS+00:00' and with Z if converted
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        # Ensure timezone-aware; assume UTC if missing
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+def _fmt_utc(dt):
+    if not dt:
+        return ""
+    dt_utc = dt.astimezone(timezone.utc)
+    return dt_utc.strftime("%b %d %H:%M UTC")
+
 # ------------ Common RSS row parser (used for both EU and per-country feeds) ------------
 def _parse_table_rows(description_html: str):
     soup = BeautifulSoup(description_html, "html.parser")
     rows = soup.find_all("tr")
     current = "today"
     items = {"today": [], "tomorrow": []}
+
+    now_utc = datetime.now(timezone.utc)
 
     for row in rows:
         header = row.find("th")
@@ -133,16 +163,30 @@ def _parse_table_rows(description_html: str):
 
         type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
 
-        from_m = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
-        until_m = re.search(r"Until:\s*</b>\s*<i>(.*?)</i>", str(cells[1]), re.IGNORECASE)
-        from_time = from_m.group(1) if from_m else "?"
-        until_time = until_m.group(1) if until_m else "?"
+        # Pull From/Until; normalize & filter expired
+        # We accept either the <i> content or raw fallback
+        cell_html = str(cells[1])
+        from_m = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", cell_html, re.IGNORECASE)
+        until_m = re.search(r"Until:\s*</b>\s*<i>(.*?)</i>", cell_html, re.IGNORECASE)
+        from_raw = from_m.group(1).strip() if from_m else ""
+        until_raw = until_m.group(1).strip() if until_m else ""
+
+        from_dt = _parse_iso8601_maybe(from_raw)
+        until_dt = _parse_iso8601_maybe(until_raw)
+
+        # If there's an until time and it's already passed, drop this row
+        if until_dt and until_dt <= now_utc:
+            continue
+
+        # Format for display
+        from_label = _fmt_utc(from_dt) if from_dt else ""
+        until_label = _fmt_utc(until_dt) if until_dt else (until_raw or "")
 
         items[current].append({
             "level": level_name,
             "type": type_name,
-            "from": from_time,
-            "until": until_time,
+            "from": from_label or None,
+            "until": until_label or None,
         })
     return items
 
@@ -155,7 +199,7 @@ def _parse_europe(feed):
         description_html = entry.get("description", "")
         alerts_by_day = _parse_table_rows(description_html)
 
-        # Skip if no Orange/Red alerts
+        # Skip if no Orange/Red (after expiry filtering)
         if not alerts_by_day["today"] and not alerts_by_day["tomorrow"]:
             continue
 
@@ -202,6 +246,7 @@ def scrape_meteoalarm(conf: dict):
         logging.warning(f"[METEOALARM ERROR] Failed to fetch EU feed: {e}")
         return {"entries": [], "error": str(e), "source": url}
 
+    # augment counts sequentially
     for item in base_entries:
         country = item.get("region", "")
         rss_url = _country_rss_url(country)
@@ -261,6 +306,6 @@ async def scrape_meteoalarm_async(conf: dict, client: httpx.AsyncClient):
     base_entries.sort(key=lambda x: (x.get("region") or x.get("title","")).lower())
 
     # Debug message
-    logging.warning(f"[METEOALARM DEBUG] Parsed {len(base_entries)}")
+    logging.warning(f"[METEOALARM DEBUG] Parsed {len(base_entries)} alerts")
 
     return {"entries": base_entries, "source": url}
