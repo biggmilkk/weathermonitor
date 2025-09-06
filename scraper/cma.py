@@ -200,9 +200,53 @@ def _parse_level(text: str) -> Optional[str]:
 
 
 # ------------------------------------------------------------
-# Parse detail page
+# Translation (optional)
 # ------------------------------------------------------------
-def _parse_detail_html(html: str, url: str, tz) -> Optional[Dict[str, Any]]:
+async def _translate_text_google(text: str, target_lang: str, client: httpx.AsyncClient) -> Optional[str]:
+    """
+    Use Google's lightweight public translate endpoint.
+    If it fails for any reason, return None (we'll fall back gracefully).
+    """
+    try:
+        # Split long text into chunks (~4500 chars) to be safe
+        chunks: List[str] = []
+        buf = []
+        total = 0
+        for line in text.split("\n"):
+            if total + len(line) + 1 > 4500 and buf:
+                chunks.append("\n".join(buf))
+                buf = [line]
+                total = len(line) + 1
+            else:
+                buf.append(line)
+                total += len(line) + 1
+        if buf:
+            chunks.append("\n".join(buf))
+
+        out_parts: List[str] = []
+        for ch in chunks:
+            params = {
+                "client": "gtx",
+                "sl": "auto",
+                "tl": target_lang,
+                "dt": "t",
+                "q": ch,
+            }
+            r = await client.get("https://translate.googleapis.com/translate_a/single", params=params, timeout=15.0)
+            r.raise_for_status()
+            data = r.json()
+            # data[0] is list of [translated_sentence, original, ...]
+            segs = data[0] if isinstance(data, list) and data else []
+            out_parts.append("".join(seg[0] for seg in segs if isinstance(seg, list) and seg))
+        return "\n".join(out_parts).strip() if out_parts else None
+    except Exception:
+        return None
+
+
+# ------------------------------------------------------------
+# Parse detail page (returns structured pieces; summary built outside)
+# ------------------------------------------------------------
+def _parse_detail_html_struct(html: str, url: str, tz) -> Optional[Dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
     all_text = soup.get_text("\n", strip=True)
 
@@ -216,18 +260,15 @@ def _parse_detail_html(html: str, url: str, tz) -> Optional[Dict[str, Any]]:
     if not (w_start <= now < w_end):
         return None
 
-    # Build full summary from article body only
     full_alert_text = _full_alert_text_from_article(soup)
     title = _headline(soup)
-
-    # Compose summary: window line + blank line + full alert text (separate paragraph)
-    window_line = f"有效期：{w_start.strftime('%m月%d日%H:%M')} 至 {w_end.strftime('%m月%d日%H:%M')}（北京时间）"
-    summary = f"{window_line}\n\n{full_alert_text}".strip()
 
     return {
         "title": title,
         "level": level,
-        "summary": summary,
+        "full_text": full_alert_text,  # return raw alert body so caller can translate/compose
+        "window_start": w_start,
+        "window_end": w_end,
         "link": url,
         "published": _iso(pub_dt),
     }
@@ -237,8 +278,16 @@ def _parse_detail_html(html: str, url: str, tz) -> Optional[Dict[str, Any]]:
 # Public entry
 # ------------------------------------------------------------
 async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
+    """
+    Optional conf:
+      - tz_name: 'Asia/Shanghai' (default)
+      - expiry_grace_minutes: int (default 0)
+      - urls: list[str] (fallback if #disasterWarning is empty)
+      - translate_to_en: bool (default False) → append automatic English translation paragraph
+    """
     tz = _tz(conf.get("tz_name", "Asia/Shanghai"))
     grace = int(conf.get("expiry_grace_minutes", 0))
+    want_en = bool(conf.get("translate_to_en", False))
 
     entries: List[Dict[str, Any]] = []
     errors: List[str] = []
@@ -258,22 +307,40 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
         try:
             r = await client.get(url, timeout=15.0)
             r.raise_for_status()
-            item = _parse_detail_html(r.text, url, tz)
-            if not item:
+            data = _parse_detail_html_struct(r.text, url, tz)
+            if not data:
                 continue
+
+            # Optional grace after expiry
             if grace > 0:
-                soup = BeautifulSoup(r.text, "html.parser")
-                t_all = soup.get_text("\n", strip=True)
-                pub_dt = _parse_published(t_all, tz)
-                sdt, edt = _parse_window(t_all, pub_dt, tz)
-                if edt and datetime.now(tz) >= (edt + timedelta(minutes=grace)):
+                sdt = data.get("window_start")
+                edt = data.get("window_end")
+                if isinstance(edt, datetime) and datetime.now(tz) >= (edt + timedelta(minutes=grace)):
                     continue
-            entries.append(item)
+
+            # Compose summary
+            w_start: datetime = data["window_start"]  # type: ignore
+            w_end: datetime = data["window_end"]      # type: ignore
+            window_line = f"有效期：{w_start.strftime('%m月%d日%H:%M')} 至 {w_end.strftime('%m月%d日%H:%M')}（北京时间）"
+            summary = f"{window_line}\n\n{data['full_text']}"
+
+            # Optional automatic English translation as a second paragraph
+            if want_en:
+                translated = await _translate_text_google(data["full_text"], "en", client)
+                if translated:
+                    summary = f"{summary}\n\n**English (auto):**\n{translated}"
+
+            entries.append({
+                "title": data["title"],
+                "level": data.get("level"),
+                "summary": summary.strip(),
+                "link": data["link"],
+                "published": data["published"],
+            })
         except Exception as e:
             errors.append(f"{url}: {e}")
 
-    # Single debug line (match EC/BOM/JMA style)
-    logging.warning(f"[CMA DEBUG] Parsed {len(entries)} alerts")
+    logging.warning(f"[CMA DEBUG] Parsed {len(entries)}")
 
     out: Dict[str, Any] = {"entries": entries, "source": "CMA"}
     if errors:
