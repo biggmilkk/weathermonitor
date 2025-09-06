@@ -1,3 +1,4 @@
+# scraper/cma.py
 from __future__ import annotations
 
 import re
@@ -200,7 +201,7 @@ def _parse_level(text: str) -> Optional[str]:
 
 
 # ------------------------------------------------------------
-# Translation (optional)
+# Translation (optional, with debug logs)
 # ------------------------------------------------------------
 async def _translate_text_google(text: str, target_lang: str, client: httpx.AsyncClient) -> Optional[str]:
     """
@@ -210,7 +211,7 @@ async def _translate_text_google(text: str, target_lang: str, client: httpx.Asyn
     try:
         # Split long text into chunks (~4500 chars) to be safe
         chunks: List[str] = []
-        buf = []
+        buf: List[str] = []
         total = 0
         for line in text.split("\n"):
             if total + len(line) + 1 > 4500 and buf:
@@ -232,14 +233,19 @@ async def _translate_text_google(text: str, target_lang: str, client: httpx.Asyn
                 "dt": "t",
                 "q": ch,
             }
-            r = await client.get("https://translate.googleapis.com/translate_a/single", params=params, timeout=15.0)
+            r = await client.get(
+                "https://translate.googleapis.com/translate_a/single",
+                params=params,
+                timeout=15.0,
+            )
             r.raise_for_status()
             data = r.json()
-            # data[0] is list of [translated_sentence, original, ...]
             segs = data[0] if isinstance(data, list) and data else []
             out_parts.append("".join(seg[0] for seg in segs if isinstance(seg, list) and seg))
-        return "\n".join(out_parts).strip() if out_parts else None
-    except Exception:
+        result = "\n".join(out_parts).strip() if out_parts else None
+        return result if result else None
+    except Exception as e:
+        logging.warning(f"[CMA DEBUG] Translation failed: {e}")
         return None
 
 
@@ -288,6 +294,7 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
     tz = _tz(conf.get("tz_name", "Asia/Shanghai"))
     grace = int(conf.get("expiry_grace_minutes", 0))
     want_en = bool(conf.get("translate_to_en", False))
+    logging.warning(f"[CMA DEBUG] translate_to_en={want_en}")
 
     entries: List[Dict[str, Any]] = []
     errors: List[str] = []
@@ -326,9 +333,13 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
 
             # Optional automatic English translation as a second paragraph
             if want_en:
+                logging.warning(f"[CMA DEBUG] Translating alert from {url}")
                 translated = await _translate_text_google(data["full_text"], "en", client)
                 if translated:
                     summary = f"{summary}\n\n**English (auto):**\n{translated}"
+                    logging.warning("[CMA DEBUG] Translation success")
+                else:
+                    logging.warning("[CMA DEBUG] Translation empty or unavailable")
 
             entries.append({
                 "title": data["title"],
@@ -340,7 +351,8 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
         except Exception as e:
             errors.append(f"{url}: {e}")
 
-    logging.warning(f"[CMA DEBUG] Parsed {len(entries)}")
+    # Single debug line (match EC/BOM/JMA style)
+    logging.warning(f"[CMA DEBUG] Parsed {len(entries)} alerts")
 
     out: Dict[str, Any] = {"entries": entries, "source": "CMA"}
     if errors:
