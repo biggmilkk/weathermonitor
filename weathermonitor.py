@@ -146,8 +146,19 @@ async def _fetch_all_feeds(configs: dict):
         async def bound_fetch(key, conf):
             async with sem:
                 async def call():
+                    # ---- Build a merged conf for the scraper ----
+                    # Merge top-level keys (except label/type) + expand nested "conf" dict.
+                    call_conf = {}
+                    for k, v in conf.items():
+                        if k in ("label", "type"):
+                            continue
+                        if k == "conf" and isinstance(v, dict):
+                            call_conf.update(v)
+                        else:
+                            call_conf[k] = v
+
                     t0 = time.perf_counter()
-                    data = await SCRAPER_REGISTRY[conf["type"]](conf, client)
+                    data = await SCRAPER_REGISTRY[conf["type"]](call_conf, client)
                     dt_ms = (time.perf_counter() - t0) * 1000
                     logging.info(f"[{key}] {len(data.get('entries', []))} entries in {dt_ms:.1f} ms")
                     return data
