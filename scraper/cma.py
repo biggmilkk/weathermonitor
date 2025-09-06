@@ -51,8 +51,6 @@ RE_WINDOW = re.compile(
 RE_LEVEL = re.compile(r"(蓝色|黄色|橙色|红色)\s*预警")
 CN_COLOR_MAP = {"蓝色": "Blue", "黄色": "Yellow", "橙色": "Orange", "红色": "Red"}
 
-RE_LINE_LOOKS_LIKE_WINDOW = re.compile(r"^\d{1,2}月\d{1,2}日.*(至|到|—|–|-|~|～).*$")
-
 
 # ------------------------------------------------------------
 # DOM helpers
@@ -281,7 +279,7 @@ def _parse_detail_html_struct(html: str, url: str, tz) -> Optional[Dict[str, Any
 
 
 # ------------------------------------------------------------
-# Public entry
+# Public entry (CONCURRENT fetch/parse)
 # ------------------------------------------------------------
 async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
     """
@@ -299,6 +297,7 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
     entries: List[Dict[str, Any]] = []
     errors: List[str] = []
 
+    # 1) Discover today's live links from the main page (SSR box)
     whitelist: List[str] = []
     try:
         resp = await client.get(MAIN_PAGE, timeout=15.0)
@@ -307,29 +306,38 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
     except Exception as e:
         errors.append(f"main: {e}")
 
+    # Fallback list if configured
     if not whitelist:
         whitelist = list(conf.get("urls") or [])
 
-    for url in whitelist:
+    if not whitelist:
+        # No links to fetch → still log and return empty
+        logging.warning(f"[CMA DEBUG] Parsed 0 alerts")
+        out: Dict[str, Any] = {"entries": [], "source": "CMA"}
+        if errors:
+            out["error"] = "; ".join(errors)
+        return out
+
+    # 2) Concurrent fetch+parse for each active link
+    async def fetch_and_build(url: str) -> Optional[Dict[str, Any]]:
         try:
             r = await client.get(url, timeout=15.0)
             r.raise_for_status()
             data = _parse_detail_html_struct(r.text, url, tz)
             if not data:
-                continue
+                return None
 
             # Optional grace after expiry
             if grace > 0:
-                sdt = data.get("window_start")
                 edt = data.get("window_end")
                 if isinstance(edt, datetime) and datetime.now(tz) >= (edt + timedelta(minutes=grace)):
-                    continue
+                    return None
 
-            # Compose summary
+            # Compose summary: window line + CN paragraph
             w_start: datetime = data["window_start"]  # type: ignore
             w_end: datetime = data["window_end"]      # type: ignore
             window_line = f"有效期：{w_start.strftime('%m月%d日%H:%M')} 至 {w_end.strftime('%m月%d日%H:%M')}（北京时间）"
-            summary = f"{window_line}\n\n{data['full_text']}"
+            summary = f"{window_line}\n\n{data['full_text']}".strip()
 
             # Optional automatic English translation as a second paragraph
             if want_en:
@@ -341,18 +349,22 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
                 else:
                     logging.warning("[CMA DEBUG] Translation empty or unavailable")
 
-            entries.append({
+            return {
                 "title": data["title"],
                 "level": data.get("level"),
-                "summary": summary.strip(),
+                "summary": summary,
                 "link": data["link"],
                 "published": data["published"],
-            })
+            }
         except Exception as e:
             errors.append(f"{url}: {e}")
+            return None
 
-    # Single debug line (match EC/BOM/JMA style)
-    logging.warning(f"[CMA DEBUG] Parsed {len(entries)}")
+    results = await asyncio.gather(*(fetch_and_build(u) for u in whitelist), return_exceptions=False)
+    entries = [r for r in results if r]
+
+    # 3) Final debug + return
+    logging.warning(f"[CMA DEBUG] Parsed {len(entries)} alerts")
 
     out: Dict[str, Any] = {"entries": entries, "source": "CMA"}
     if errors:
