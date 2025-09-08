@@ -37,12 +37,12 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
 
 
-# -------------------------------------------------------
+# ------------------------------------------------------------
 # Regex patterns
 # ------------------------------------------------------------
 RE_PUBLISHED = re.compile(r"发布时间：\s*(\d{4})年(\d{1,2})月(\d{1,2})日(\d{1,2})时")
 
-#  9月5日20时至6日20时 / 9月5日20:30至6日20:00 / 9月5日20时到9月6日20时 / 9月5日20时—6日20时 / - / ～ …
+# 9月5日20时至6日20时 / 9月5日20:30至6日20:00 / 9月5日20时到9月6日20时 / 9月5日20时—6日20时 / - / ～ …
 RE_WINDOW = re.compile(
     r"(?P<mon>\d{1,2})月(?P<d1>\d{1,2})日(?P<h1>\d{1,2})(?:时|:)?(?P<m1>\d{2})?"
     r"\s*(?:至|到|—|–|-|~|～)\s*"
@@ -60,74 +60,68 @@ def _abs_url(href: str) -> str:
 
 
 def _extract_whitelist_links_from_map(html: str) -> list[str]:
-    """Return today's links shown in #disasterWarning (SSR)."""
+    """
+    Robustly discover the three 'active' category links from the CMA map page.
+
+    The page used to expose <div id="disasterWarning">…</div>. It no longer does in SSR.
+    So we:
+      1) Prefer any element with anchors whose text ends with '预警'
+      2) Filter to URLs under /web/channel-*.html (including hashed IDs)
+      3) De-dup and absolutize
+    """
     soup = BeautifulSoup(html, "html.parser")
-    box = soup.find(id="disasterWarning")
-    if not box:
-        return []
-    urls = []
-    for a in box.find_all("a", href=True):
-        urls.append(_abs_url(a["href"]))
+
+    # Collect all anchors that *look* like category links
+    candidates = []
+    for a in soup.find_all("a", href=True):
+        txt = (a.get_text(strip=True) or "")
+        href = a["href"]
+        if not txt:
+            continue
+        # The visible text is like: 暴雨预警 / 台风预警 / 地质灾害气象风险预警
+        if not txt.endswith("预警"):
+            continue
+        # Accept both numeric channels and hashed channels
+        if not re.search(r"/web/channel-[\w-]+\.html", href):
+            continue
+        candidates.append(_abs_url(href))
+
+    # Fallback: if nothing matched (structure change), try broader scan
+    if not candidates:
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if re.search(r"/web/channel-[\w-]+\.html", href):
+                candidates.append(_abs_url(href))
+
+    # De-dup, keep order
     seen, out = set(), []
-    for u in urls:
+    for u in candidates:
         if u not in seen:
             seen.add(u)
             out.append(u)
+
     return out
-
-
-def _headline(soup: BeautifulSoup) -> str:
-    """
-    Prefer <h1> if present, else <title>, and trim leading breadcrumbs like “气象预警 >> 暴雨预警”.
-    """
-    h1 = soup.find("h1")
-    raw = (
-        h1.get_text(strip=True)
-        if (h1 and h1.get_text(strip=True))
-        else (soup.find("title").get_text(strip=True) if soup.find("title") else "气象预警")
-    )
-    parts = re.split(r"\s*(?:>>|›|＞)\s*", raw)
-    last = (parts[-1] if parts else raw).replace("气象预警", "").strip()
-    return last or raw
 
 
 # ------------------------------------------------------------
 # Article text extraction (FULL text for summary)
 # ------------------------------------------------------------
 def _full_alert_text_from_article(soup: BeautifulSoup) -> str:
-    """
-    Return the full alert text from inside #text .xml:
-    - Skip the first bold header paragraph if it contains '联合发布' and not '预计'
-    - Skip paragraphs that are images-only
-    - Join remaining <p> texts with newlines
-    """
     container = soup.select_one("#text .xml")
     if not container:
-        # Fallbacks if structure changes
-        for sel in (
-            "#text",
-            "main",
-            "div#content",
-            "div.detail",
-            "div.article",
-            "article",
-        ):
+        for sel in ("#text", "main", "div#content", "div.detail", "div.article", "article"):
             container = soup.select_one(sel)
             if container:
                 break
-
     if not container:
-        # fallback to entire document text
         return soup.get_text("\n", strip=True)
 
     ps = list(container.find_all("p"))
     out_lines: List[str] = []
     for i, p in enumerate(ps):
         t = p.get_text(" ", strip=True)
-        # Skip image-only
         if not t and p.find("img"):
             continue
-        # heuristic: skip the very first bold header if it's joint-issue boilerplate without forecast text
         if i == 0:
             b = p.find("b") or p.find("strong")
             if b:
@@ -156,10 +150,6 @@ def _parse_published(all_text: str, tz) -> Optional[datetime]:
 # Forecast window parsing
 # ------------------------------------------------------------
 def _parse_window(all_text: str, pub_dt: Optional[datetime], tz) -> Tuple[Optional[datetime], Optional[datetime]]:
-    """
-    Parse windows like “9月5日20时至6日20时” and variants with/without minutes or month on the RHS.
-    Use pub_dt’s year/month as anchor when month is omitted.
-    """
     m = RE_WINDOW.search(all_text.replace("\n", ""))
     if not m:
         return None, None
@@ -190,7 +180,7 @@ def _parse_window(all_text: str, pub_dt: Optional[datetime], tz) -> Tuple[Option
     except Exception:
         start = None
     try:
-        end = datetime(year, m2, d2, h2, min2, tzinfo=tz)
+        end = datetime(year, mon2 if mon2 else m1, d2, h2, min2, tzinfo=tz)
         if start and end < start and not mon2:
             nm = m1 + 1
             ny = year + (1 if nm == 13 else 0)
@@ -208,15 +198,10 @@ def _parse_level(text: str) -> Optional[str]:
 
 
 # ------------------------------------------------------------
-# Translation (optional, with debug logs)
+# Translation (optional)
 # ------------------------------------------------------------
 async def _translate_text_google(text: str, target_lang: str, client: httpx.AsyncClient) -> Optional[str]:
-    """
-    Use Google's lightweight public translate endpoint.
-    If it fails for any reason, return None (we'll fall back gracefully).
-    """
     try:
-        # Split long text into chunks (~4500 chars) to be safe
         chunks: List[str] = []
         acc = []
         total = 0
@@ -233,19 +218,11 @@ async def _translate_text_google(text: str, target_lang: str, client: httpx.Asyn
 
         out_parts: List[str] = []
         for chunk in chunks:
-            # undocumented endpoint used by translate site XHR
             url = "https://translate.googleapis.com/translate_a/single"
-            params = {
-                "client": "gtx",
-                "sl": "auto",
-                "tl": target_lang,
-                "dt": "t",
-                "q": chunk,
-            }
+            params = {"client": "gtx", "sl": "auto", "tl": target_lang, "dt": "t", "q": chunk}
             r = await client.get(url, params=params, timeout=10.0)
             r.raise_for_status()
             data = r.json()
-            # data[0] is a list of [translated, original, ...]
             out_parts.append("".join(seg[0] for seg in data[0]))
         return "\n".join(out_parts).strip()
     except Exception as e:
@@ -254,7 +231,7 @@ async def _translate_text_google(text: str, target_lang: str, client: httpx.Asyn
 
 
 # ------------------------------------------------------------
-# Parse detail page (returns structured pieces; summary built outside)
+# Parse detail page (structured)
 # ------------------------------------------------------------
 def _parse_detail_html_struct(html: str, url: str, tz) -> Optional[Dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
@@ -266,16 +243,13 @@ def _parse_detail_html_struct(html: str, url: str, tz) -> Optional[Dict[str, Any
         return None
     level = _parse_level(all_text)
 
-    # NOTE: Do not enforce active-time filtering here.
-    # If the link is shown on CMA's active map box, we trust it and parse it
-    # regardless of whether the window has started yet.
     full_alert_text = _full_alert_text_from_article(soup)
     title = _headline(soup)
 
     return {
         "title": title,
         "level": level,
-        "full_text": full_alert_text,  # return raw alert body so caller can translate/compose
+        "full_text": full_alert_text,
         "window_start": w_start,
         "window_end": w_end,
         "link": url,
@@ -283,92 +257,11 @@ def _parse_detail_html_struct(html: str, url: str, tz) -> Optional[Dict[str, Any
     }
 
 
-# ------------------------------------------------------------
-# Public entry (CONCURRENT fetch/parse)
-# ------------------------------------------------------------
-async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
-    """
-    Optional conf:
-      - tz_name: 'Asia/Shanghai' (default)
-      - expiry_grace_minutes: int (default 0)
-      - urls: list[str] (fallback if #disasterWarning is empty)
-      - translate_to_en: bool (default False) → append automatic English translation paragraph
-    """
-    tz = _tz(conf.get("tz_name", "Asia/Shanghai"))
-    grace = int(conf.get("expiry_grace_minutes", 0))
-    want_en = bool(conf.get("translate_to_en", False))
-    logging.warning(f"[CMA DEBUG] translate_to_en={want_en}")
-
-    entries: List[Dict[str, Any]] = []
-    errors: List[str] = []
-
-    # 1) Discover today's live links from the main page (SSR box)
-    whitelist: List[str] = []
-    try:
-        resp = await client.get(MAIN_PAGE, timeout=15.0)
-        resp.raise_for_status()
-        whitelist = _extract_whitelist_links_from_map(resp.text)
-    except Exception as e:
-        errors.append(f"main: {e}")
-
-    # Fallback list if configured
-    if (not whitelist) and isinstance(conf.get("urls"), list):
-        whitelist = [str(u) for u in conf["urls"] if isinstance(u, str)]
-
-    if not whitelist:
-        out: Dict[str, Any] = {"entries": [], "source": "CMA"}
-        if errors:
-            out["error"] = "; ".join(errors)
-        return out
-
-    # 2) Concurrent fetch+parse for each active link
-    async def fetch_and_build(url: str) -> Optional[Dict[str, Any]]:
-        try:
-            r = await client.get(url, timeout=15.0)
-            r.raise_for_status()
-            data = _parse_detail_html_struct(r.text, url, tz)
-            if not data:
-                return None
-
-            # Optional grace after expiry
-            if grace > 0:
-                edt = data.get("window_end")
-                if isinstance(edt, datetime) and datetime.now(tz) >= (edt + timedelta(minutes=grace)):
-                    return None
-
-            w_start = data["window_start"]
-            w_end = data["window_end"]
-            window_line = f"有效期：{w_start.strftime('%m月%d日%H:%M')} 至 {w_end.strftime('%m月%d日%H:%M')}（北京时间）"
-            summary = f"{window_line}\n\n{data['full_text']}".strip()
-
-            # Optional automatic English translation as a second paragraph
-            if want_en:
-                logging.warning(f"[CMA DEBUG] Translating alert from {url}")
-                translated = await _translate_text_google(data["full_text"], "en", client)
-                if translated:
-                    summary = f"{summary}\n\n**English (auto):**\n{translated}"
-                    logging.warning("[CMA DEBUG] Translation success")
-                else:
-                    logging.warning("[CMA DEBUG] Translation empty or unavailable")
-
-            return {
-                "title": data["title"],
-                "level": data.get("level"),
-                "summary": summary,
-                "link": data["link"],
-                "published": data["published"],
-            }
-        except Exception as e:
-            errors.append(f"{url}: {e}")
-            return None
-
-    results = await asyncio.gather(*(fetch_and_build(u) for u in whitelist), return_exceptions=False)
-    entries = [r for r in results if r]
-
-    # 3) Final debug + return
-    logging.warning(f"[CMA DEBUG] Parsed {len(entries)} alerts")
-
-    out: Dict[str, Any] = {"entries": entries, "source": "CMA"}
-    if errors:
-        out["error"] = "; ".join(errors)
-    return out
+def _headline(soup: BeautifulSoup) -> str:
+    h1 = soup.find("h1")
+    raw = (
+        h1.get_text(strip=True)
+        if (h1 and h1.get_text(strip=True))
+        else (soup.find("title").get_text(strip=True) if soup.find("title") else "气象预警")
+    )
+    parts = re.split(r"\s*(?:>>|›|＞)\s*", raw)
