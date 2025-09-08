@@ -16,7 +16,7 @@ MAIN_PAGE = "https://weather.cma.cn/web/alarm/map.html"
 # Timezone helpers
 # ------------------------------------------------------------
 try:
-    import zoneinfo  # Python 3.9+
+    import zoneinfo  # py3.9+
     _HAS_ZONEINFO = True
 except Exception:
     _HAS_ZONEINFO = False
@@ -37,7 +37,7 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
 
 
-# ------------------------------------------------------------
+# -------------------------------------------------------
 # Regex patterns
 # ------------------------------------------------------------
 RE_PUBLISHED = re.compile(r"发布时间：\s*(\d{4})年(\d{1,2})月(\d{1,2})日(\d{1,2})时")
@@ -53,9 +53,6 @@ RE_LEVEL = re.compile(r"(蓝色|黄色|橙色|红色)\s*预警")
 CN_COLOR_MAP = {"蓝色": "Blue", "黄色": "Yellow", "橙色": "Orange", "红色": "Red"}
 
 
-# ------------------------------------------------------------
-# DOM helpers
-# ------------------------------------------------------------
 def _abs_url(href: str) -> str:
     if href.startswith("http://") or href.startswith("https://"):
         return href
@@ -80,6 +77,9 @@ def _extract_whitelist_links_from_map(html: str) -> list[str]:
 
 
 def _headline(soup: BeautifulSoup) -> str:
+    """
+    Prefer <h1> if present, else <title>, and trim leading breadcrumbs like “气象预警 >> 暴雨预警”.
+    """
     h1 = soup.find("h1")
     raw = (
         h1.get_text(strip=True)
@@ -110,73 +110,81 @@ def _full_alert_text_from_article(soup: BeautifulSoup) -> str:
             "div#content",
             "div.detail",
             "div.article",
-            "div#article",
-            "div.container",
-            "div#main",
+            "article",
         ):
-            n = soup.select_one(sel)
-            if n and n.get_text(strip=True):
-                container = n
+            container = soup.select_one(sel)
+            if container:
                 break
+
     if not container:
+        # fallback to entire document text
         return soup.get_text("\n", strip=True)
 
+    ps = list(container.find_all("p"))
     out_lines: List[str] = []
-    paragraphs = container.find_all("p")
-    for idx, p in enumerate(paragraphs):
-        # Skip image-only paragraphs
-        if p.find("img"):
+    for i, p in enumerate(ps):
+        t = p.get_text(" ", strip=True)
+        # Skip image-only
+        if not t and p.find("img"):
             continue
-        text = p.get_text(" ", strip=True)
-        # Normalize internal whitespace but keep natural sentence spacing
-        text = re.sub(r"\s+", " ", text).strip()
-        if not text:
-            continue
-        # Skip the bold header like “自然资源部与中国气象局…联合发布…预警：”
-        if idx == 0 and ("联合发布" in text) and ("预计" not in text):
-            continue
-        out_lines.append(text)
-
-    full_text = "\n".join(out_lines).strip()
-    return full_text
+        # heuristic: skip the very first bold header if it's joint-issue boilerplate without forecast text
+        if i == 0:
+            b = p.find("b") or p.find("strong")
+            if b:
+                bt = b.get_text(" ", strip=True)
+                if "联合发布" in bt and "预计" not in bt:
+                    continue
+        out_lines.append(t)
+    return "\n".join([ln for ln in out_lines if ln]).strip()
 
 
 # ------------------------------------------------------------
-# Field parsers
+# Published time parsing
 # ------------------------------------------------------------
-def _parse_published(text: str, tz) -> Optional[datetime]:
-    m = RE_PUBLISHED.search(text)
+def _parse_published(all_text: str, tz) -> Optional[datetime]:
+    m = RE_PUBLISHED.search(all_text)
     if not m:
         return None
-    y, mo, d, h = map(int, m.groups())
     try:
-        return datetime(y, mo, d, h, 0, tzinfo=tz)
+        y, mon, d, h = [int(g) for g in m.groups()]
+        return datetime(y, mon, d, h, 0, tzinfo=tz)
     except Exception:
         return None
 
 
-def _parse_window(
-    text: str, pub_dt: Optional[datetime], tz
-) -> Tuple[Optional[datetime], Optional[datetime]]:
-    m = RE_WINDOW.search(text)
+# ------------------------------------------------------------
+# Forecast window parsing
+# ------------------------------------------------------------
+def _parse_window(all_text: str, pub_dt: Optional[datetime], tz) -> Tuple[Optional[datetime], Optional[datetime]]:
+    """
+    Parse windows like “9月5日20时至6日20时” and variants with/without minutes or month on the RHS.
+    Use pub_dt’s year/month as anchor when month is omitted.
+    """
+    m = RE_WINDOW.search(all_text.replace("\n", ""))
     if not m:
         return None, None
-    mon = int(m.group("mon"))
-    d1 = int(m.group("d1"))
-    h1 = int(m.group("h1"))
-    m1s = m.group("m1")
-    min1 = int(m1s) if m1s else 0
-    mon2 = m.group("mon2")
-    d2 = int(m.group("d2"))
-    h2 = int(m.group("h2"))
-    m2s = m.group("m2")
-    min2 = int(m2s) if m2s else 0
 
-    year = pub_dt.year if pub_dt else datetime.now(tz).year
-    m1 = mon
-    m2 = int(mon2) if mon2 else m1
+    def _int_or(groups: re.Match, key: str, default: Optional[int]) -> Optional[int]:
+        v = groups.group(key)
+        return int(v) if v and v.isdigit() else default
 
-    start = end = None
+    if pub_dt:
+        year = pub_dt.year
+        base_mon = pub_dt.month
+    else:
+        now = datetime.now(tz)
+        year = now.year
+        base_mon = now.month
+
+    m1 = _int_or(m, "mon", base_mon) or base_mon
+    d1 = _int_or(m, "d1", None)
+    h1 = _int_or(m, "h1", 0) or 0
+    min1 = _int_or(m, "m1", 0) or 0
+    mon2 = _int_or(m, "mon2", None)
+    d2 = _int_or(m, "d2", None)
+    h2 = _int_or(m, "h2", 0) or 0
+    min2 = _int_or(m, "m2", 0) or 0
+
     try:
         start = datetime(year, m1, d1, h1, min1, tzinfo=tz)
     except Exception:
@@ -210,39 +218,36 @@ async def _translate_text_google(text: str, target_lang: str, client: httpx.Asyn
     try:
         # Split long text into chunks (~4500 chars) to be safe
         chunks: List[str] = []
-        buf: List[str] = []
+        acc = []
         total = 0
-        for line in text.split("\n"):
-            if total + len(line) + 1 > 4500 and buf:
-                chunks.append("\n".join(buf))
-                buf = [line]
+        for line in text.splitlines():
+            if total + len(line) + 1 > 4500:
+                chunks.append("\n".join(acc))
+                acc = [line]
                 total = len(line) + 1
             else:
-                buf.append(line)
+                acc.append(line)
                 total += len(line) + 1
-        if buf:
-            chunks.append("\n".join(buf))
+        if acc:
+            chunks.append("\n".join(acc))
 
         out_parts: List[str] = []
-        for ch in chunks:
+        for chunk in chunks:
+            # undocumented endpoint used by translate site XHR
+            url = "https://translate.googleapis.com/translate_a/single"
             params = {
                 "client": "gtx",
                 "sl": "auto",
                 "tl": target_lang,
                 "dt": "t",
-                "q": ch,
+                "q": chunk,
             }
-            r = await client.get(
-                "https://translate.googleapis.com/translate_a/single",
-                params=params,
-                timeout=15.0,
-            )
+            r = await client.get(url, params=params, timeout=10.0)
             r.raise_for_status()
             data = r.json()
-            segs = data[0] if isinstance(data, list) and data else []
-            out_parts.append("".join(seg[0] for seg in segs if isinstance(seg, list) and seg))
-        result = "\n".join(out_parts).strip() if out_parts else None
-        return result if result else None
+            # data[0] is a list of [translated, original, ...]
+            out_parts.append("".join(seg[0] for seg in data[0]))
+        return "\n".join(out_parts).strip()
     except Exception as e:
         logging.warning(f"[CMA DEBUG] Translation failed: {e}")
         return None
@@ -261,10 +266,9 @@ def _parse_detail_html_struct(html: str, url: str, tz) -> Optional[Dict[str, Any
         return None
     level = _parse_level(all_text)
 
-    now = datetime.now(tz)
-    if not (w_start <= now < w_end):
-        return None
-
+    # NOTE: Do not enforce active-time filtering here.
+    # If the link is shown on CMA's active map box, we trust it and parse it
+    # regardless of whether the window has started yet.
     full_alert_text = _full_alert_text_from_article(soup)
     title = _headline(soup)
 
@@ -308,12 +312,10 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
         errors.append(f"main: {e}")
 
     # Fallback list if configured
-    if not whitelist:
-        whitelist = list(conf.get("urls") or [])
+    if (not whitelist) and isinstance(conf.get("urls"), list):
+        whitelist = [str(u) for u in conf["urls"] if isinstance(u, str)]
 
     if not whitelist:
-        # No links to fetch → still log and return empty
-        logging.warning(f"[CMA DEBUG] Parsed 0 alerts")
         out: Dict[str, Any] = {"entries": [], "source": "CMA"}
         if errors:
             out["error"] = "; ".join(errors)
@@ -334,9 +336,8 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
                 if isinstance(edt, datetime) and datetime.now(tz) >= (edt + timedelta(minutes=grace)):
                     return None
 
-            # Compose summary: window line + CN paragraph
-            w_start: datetime = data["window_start"]  # type: ignore
-            w_end: datetime = data["window_end"]      # type: ignore
+            w_start = data["window_start"]
+            w_end = data["window_end"]
             window_line = f"有效期：{w_start.strftime('%m月%d日%H:%M')} 至 {w_end.strftime('%m月%d日%H:%M')}（北京时间）"
             summary = f"{window_line}\n\n{data['full_text']}".strip()
 
