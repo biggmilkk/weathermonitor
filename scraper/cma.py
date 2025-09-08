@@ -162,8 +162,20 @@ def _parse_window(all_text: str, pub_dt: Optional[datetime], tz) -> Tuple[Option
     return start, end
 
 def _parse_level(text: str) -> Optional[str]:
-    m = RE_LEVEL.search(text)
-    return CN_COLOR_MAP.get(m.group(1)) if m else None
+    # 1) normalize whitespace so variants like "黄 色 预 警" still match
+    compact = re.sub(r"\s+", "", text)
+
+    # 2) direct match on the normalized string
+    m = re.search(r"(蓝色|黄色|橙色|红色)预警", compact)
+    if m:
+        return CN_COLOR_MAP.get(m.group(1))
+
+    # 3) fallback: tolerate rare variants like “红色Ⅹ级预警” by looking near “预警”
+    m2 = re.search(r"([蓝黄橙红])色.*?预警", compact)
+    if m2:
+        return {"蓝": "Blue", "黄": "Yellow", "橙": "Orange", "红": "Red"}[m2.group(1)]
+
+    return None
 
 # ---------------- Translation (optional) ----------------
 async def _translate_text_google(text: str, target_lang: str, client: httpx.AsyncClient) -> Optional[str]:
