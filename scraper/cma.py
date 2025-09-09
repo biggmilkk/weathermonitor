@@ -10,7 +10,7 @@ from typing import Optional, Tuple, List, Dict, Any
 import httpx
 from bs4 import BeautifulSoup
 
-__all__ = ["scrape_cma_async", "scrape_async", "scrape"]  # for registry flexibility
+__all__ = ["scrape_cma_async", "scrape_async", "scrape"]
 
 MAIN_PAGE = "https://weather.cma.cn/web/alarm/map.html"
 
@@ -20,6 +20,7 @@ try:
     _HAS_ZONEINFO = True
 except Exception:
     _HAS_ZONEINFO = False
+
 
 def _tz(tz_name: str) -> timezone:
     if _HAS_ZONEINFO:
@@ -31,46 +32,61 @@ def _tz(tz_name: str) -> timezone:
         return timezone(timedelta(hours=8), name=tz_name)
     return timezone.utc
 
+
 def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
 
+
 # ---------------- Regex patterns ----------------
 RE_PUBLISHED = re.compile(r"发布时间：\s*(\d{4})年(\d{1,2})月(\d{1,2})日(\d{1,2})时")
+
+# Matches:
+#  9月5日20时至6日20时 / 9月5日20:30至6日20:00 / 9月5日20时到9月6日20时 / 9月5日20时—6日20时 / 9月5日20时~6日20时 …
 RE_WINDOW = re.compile(
     r"(?P<mon>\d{1,2})月(?P<d1>\d{1,2})日(?P<h1>\d{1,2})(?:时|:)?(?P<m1>\d{2})?"
     r"\s*(?:至|到|—|–|-|~|～)\s*"
     r"(?:(?P<mon2>\d{1,2})月)?(?P<d2>\d{1,2})日(?P<h2>\d{1,2})(?:时|:)?(?P<m2>\d{2})?"
 )
-RE_LEVEL = re.compile(r"(蓝色|黄色|橙色|红色)\s*预警")
+
+RE_LEVEL_CANON = re.compile(r"(蓝色|黄色|橙色|红色)预警")
+RE_LEVEL_FALLBACK = re.compile(r"([蓝黄橙红])色.*?预警")
 CN_COLOR_MAP = {"蓝色": "Blue", "黄色": "Yellow", "橙色": "Orange", "红色": "Red"}
+CN_COLOR_CHAR_MAP = {"蓝": "Blue", "黄": "Yellow", "橙": "Orange", "红": "Red"}
+
 
 def _abs_url(href: str) -> str:
     if href.startswith(("http://", "https://")):
         return href
     return f"https://weather.cma.cn{href if href.startswith('/') else '/' + href}"
 
-# -------- Robust discovery of the 3 “active” category links --------
+
+# -------- Discover links from the map page --------
 def _extract_whitelist_links_from_map(html: str) -> list[str]:
+    """
+    Prefer grabbing ALL channel links inside #disasterWarning (CMA's own 'active' box).
+    If that box isn't present in SSR, fall back to scanning the full page.
+    Accept both numeric and hashed channel slugs.
+    """
     soup = BeautifulSoup(html, "html.parser")
-    candidates: List[str] = []
-    for a in soup.find_all("a", href=True):
-        txt = (a.get_text(strip=True) or "")
+    urls: list[str] = []
+
+    box = soup.find(id="disasterWarning")
+    anchors = box.find_all("a", href=True) if box else soup.find_all("a", href=True)
+
+    for a in anchors:
         href = a["href"]
-        if not re.search(r"/web/channel-[\w-]+\.html", href):
-            continue
-        if txt.endswith("预警"):
-            candidates.append(_abs_url(href))
-    if not candidates:
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if re.search(r"/web/channel-[\w-]+\.html", href):
-                candidates.append(_abs_url(href))
+        # Only keep CMA "channel" pages (numeric or hashed id), ending with .html
+        if re.search(r"/web/channel-[\w-]+\.html$", href):
+            urls.append(_abs_url(href))
+
+    # De-dup while preserving order
     seen, out = set(), []
-    for u in candidates:
+    for u in urls:
         if u not in seen:
             seen.add(u)
             out.append(u)
     return out
+
 
 # ---------------- Article extraction ----------------
 def _headline(soup: BeautifulSoup) -> str:
@@ -80,19 +96,27 @@ def _headline(soup: BeautifulSoup) -> str:
         if (h1 and h1.get_text(strip=True))
         else (soup.find("title").get_text(strip=True) if soup.find("title") else "气象预警")
     )
+    # Drop breadcrumb-ish prefixes like “气象预警 >> 暴雨预警”
     parts = re.split(r"\s*(?:>>|›|＞)\s*", raw)
     last = (parts[-1] if parts else raw).replace("气象预警", "").strip()
     return last or raw
 
+
 def _full_alert_text_from_article(soup: BeautifulSoup) -> str:
+    """
+    Return the full alert text from inside #text .xml; fall back sanely if structure changes.
+    Skip image-only paragraphs and boilerplate-only first bold paragraph.
+    """
     container = soup.select_one("#text .xml")
     if not container:
         for sel in ("#text", "main", "div#content", "div.detail", "div.article", "article"):
             container = soup.select_one(sel)
             if container:
                 break
+
     if not container:
         return soup.get_text("\n", strip=True)
+
     ps = list(container.find_all("p"))
     out_lines: List[str] = []
     for i, p in enumerate(ps):
@@ -104,9 +128,12 @@ def _full_alert_text_from_article(soup: BeautifulSoup) -> str:
             if b:
                 bt = b.get_text(" ", strip=True)
                 if "联合发布" in bt and "预计" not in bt:
+                    # header-only line; skip
                     continue
-        out_lines.append(t)
-    return "\n".join([ln for ln in out_lines if ln]).strip()
+        if t:
+            out_lines.append(t)
+    return "\n".join(out_lines).strip()
+
 
 # ---------------- Published & window parsing ----------------
 def _parse_published(all_text: str, tz) -> Optional[datetime]:
@@ -119,7 +146,12 @@ def _parse_published(all_text: str, tz) -> Optional[datetime]:
     except Exception:
         return None
 
+
 def _parse_window(all_text: str, pub_dt: Optional[datetime], tz) -> Tuple[Optional[datetime], Optional[datetime]]:
+    """
+    Parse windows like “9月5日20时至6日20时” and variants with/without minutes or month on RHS.
+    Anchor to pub_dt's year/month when omitted.
+    """
     m = RE_WINDOW.search(all_text.replace("\n", ""))
     if not m:
         return None, None
@@ -151,6 +183,7 @@ def _parse_window(all_text: str, pub_dt: Optional[datetime], tz) -> Tuple[Option
         start = None
     try:
         end = datetime(year, mon2 if mon2 else m1, d2, h2, min2, tzinfo=tz)
+        # if month omitted and end < start, roll to next month
         if start and end < start and not mon2:
             nm = m1 + 1
             ny = year + (1 if nm == 13 else 0)
@@ -161,34 +194,40 @@ def _parse_window(all_text: str, pub_dt: Optional[datetime], tz) -> Tuple[Option
 
     return start, end
 
-def _parse_level(text: str) -> Optional[str]:
-    # 1) normalize whitespace so variants like "黄 色 预 警" still match
-    compact = re.sub(r"\s+", "", text)
 
-    # 2) direct match on the normalized string
-    m = re.search(r"(蓝色|黄色|橙色|红色)预警", compact)
+def _parse_level(text: str) -> Optional[str]:
+    """
+    Robustly detect alert color. CMA sometimes inserts spaces like “黄 色预警”.
+    """
+    compact = re.sub(r"\s+", "", text)
+    m = RE_LEVEL_CANON.search(compact)
     if m:
         return CN_COLOR_MAP.get(m.group(1))
-
-    # 3) fallback: tolerate rare variants like “红色Ⅹ级预警” by looking near “预警”
-    m2 = re.search(r"([蓝黄橙红])色.*?预警", compact)
+    m2 = RE_LEVEL_FALLBACK.search(compact)
     if m2:
-        return {"蓝": "Blue", "黄": "Yellow", "橙": "Orange", "红": "Red"}[m2.group(1)]
-
+        return CN_COLOR_CHAR_MAP.get(m2.group(1))
     return None
+
 
 # ---------------- Translation (optional) ----------------
 async def _translate_text_google(text: str, target_lang: str, client: httpx.AsyncClient) -> Optional[str]:
+    """
+    Lightweight use of Google's public translate endpoint (best-effort).
+    """
     try:
         chunks: List[str] = []
         acc = []
         total = 0
         for line in text.splitlines():
             if total + len(line) + 1 > 4500:
-                chunks.append("\n".join(acc)); acc = [line]; total = len(line) + 1
+                chunks.append("\n".join(acc))
+                acc = [line]
+                total = len(line) + 1
             else:
-                acc.append(line); total += len(line) + 1
-        if acc: chunks.append("\n".join(acc))
+                acc.append(line)
+                total += len(line) + 1
+        if acc:
+            chunks.append("\n".join(acc))
 
         out_parts: List[str] = []
         for chunk in chunks:
@@ -203,16 +242,19 @@ async def _translate_text_google(text: str, target_lang: str, client: httpx.Asyn
         logging.warning(f"[CMA DEBUG] Translation failed: {e}")
         return None
 
+
 # ---------------- Parse a detail page → struct ----------------
 def _parse_detail_html_struct(html: str, url: str, tz) -> Optional[Dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
     all_text = soup.get_text("\n", strip=True)
 
     pub_dt = _parse_published(all_text, tz)
+
+    # NOTE: windows are optional—don't drop an entry just because we can't parse them
     w_start, w_end = _parse_window(all_text, pub_dt, tz)
-    if not (w_start and w_end):
-        return None
-    level = _parse_level(all_text)
+
+    # Try level from <h1> first (often cleaner), then body
+    level = _parse_level((soup.find("h1").get_text(" ", strip=True) if soup.find("h1") else "") + all_text)
 
     full_alert_text = _full_alert_text_from_article(soup)
     title = _headline(soup)
@@ -227,12 +269,13 @@ def _parse_detail_html_struct(html: str, url: str, tz) -> Optional[Dict[str, Any
         "published": _iso(pub_dt),
     }
 
+
 # ---------------- Public entry (concurrent) ----------------
 async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
     """
     Optional conf:
       - tz_name: 'Asia/Shanghai' (default)
-      - expiry_grace_minutes: int (default 0)
+      - expiry_grace_minutes: int (default 0) → if window_end exists, drop after end+grace
       - urls: list[str] (fallback if discovery finds nothing)
       - translate_to_en: bool (default False)
     """
@@ -243,7 +286,7 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
 
     errors: List[str] = []
 
-    # 1) discover
+    # 1) discover today's links
     whitelist: List[str] = []
     try:
         resp = await client.get(MAIN_PAGE, timeout=15.0)
@@ -252,6 +295,7 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
     except Exception as e:
         errors.append(f"main: {e}")
 
+    # fallback if explicitly configured
     if not whitelist and isinstance(conf.get("urls"), list):
         whitelist = [str(u) for u in conf["urls"] if isinstance(u, str)]
 
@@ -261,7 +305,7 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
             out["error"] = "; ".join(errors)
         return out
 
-    # 2) fetch+parse
+    # 2) fetch + parse concurrently
     async def fetch_and_build(url: str) -> Optional[Dict[str, Any]]:
         try:
             r = await client.get(url, timeout=15.0)
@@ -270,15 +314,21 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
             if not data:
                 return None
 
-            # Optional drop after expiry (+grace)
+            # Optional drop after expiry (+grace) IF we know the window_end
             if grace > 0:
                 edt = data.get("window_end")
                 if isinstance(edt, datetime) and datetime.now(tz) >= (edt + timedelta(minutes=grace)):
                     return None
 
-            w_start = data["window_start"]; w_end = data["window_end"]
-            window_line = f"有效期：{w_start.strftime('%m月%d日%H:%M')} 至 {w_end.strftime('%m月%d日%H:%M')}（北京时间）"
-            summary = f"{window_line}\n\n{data['full_text']}".strip()
+            w_start = data.get("window_start")
+            w_end = data.get("window_end")
+
+            # Compose summary (include window line only if parsed)
+            window_line = ""
+            if isinstance(w_start, datetime) and isinstance(w_end, datetime):
+                window_line = f"有效期：{w_start.strftime('%m月%d日%H:%M')} 至 {w_end.strftime('%m月%d日%H:%M')}（北京时间）\n\n"
+
+            summary = f"{window_line}{data['full_text']}".strip()
 
             if want_en:
                 translated = await _translate_text_google(data["full_text"], "en", client)
@@ -304,9 +354,11 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
         out["error"] = "; ".join(errors)
     return out
 
-# Compatibility aliases for registry variants (belt & suspenders)
+
+# Compatibility aliases for registry variants
 async def scrape_async(conf, client):
     return await scrape_cma_async(conf, client)
+
 
 async def scrape(conf, client):
     return await scrape_cma_async(conf, client)
