@@ -51,7 +51,7 @@ def get_feed_definitions():
                 "South West England",
                 "London & South East England",
             ],
-        }
+        },
         "meteoalarm": {
             "label": "Meteoalarm (Europe)",
             "type": "rss_meteoalarm",
