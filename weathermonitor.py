@@ -128,6 +128,23 @@ def _immediate_rerun():
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
 
+# Helper function to initialize bucket last seen for UK feed
+def _initialize_uk_bucket_last_seen(key, entries):
+    """Initialize UK bucket last_seen map if it doesn't exist"""
+    lastseen_key = f"{key}_bucket_last_seen"
+    bucket_lastseen = st.session_state.get(lastseen_key, {})
+    
+    if not bucket_lastseen:
+        # First time opening - set all buckets to 0.0 to show everything as NEW
+        for e in entries:
+            region = e.get("region", "Unknown")
+            bucket = e.get("bucket", e.get("title", "Alert"))
+            bkey = f"{region}|{bucket}"
+            bucket_lastseen[bkey] = 0.0
+        st.session_state[lastseen_key] = bucket_lastseen
+    
+    return bucket_lastseen
+
 # --------------------------------------------------------------------
 # Refresh
 # --------------------------------------------------------------------
@@ -164,6 +181,8 @@ if to_fetch:
         elif conf["type"] == "nws_grouped_compact":
             st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
         elif conf["type"] == "uk_grouped_compact":
+            # Initialize bucket tracking for UK if needed
+            _initialize_uk_bucket_last_seen(key, entries)
             st.session_state[f"{key}_remaining_new_total"] = uk_remaining_new_total(key, entries)
 
         gc.collect()
@@ -277,27 +296,17 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
             st.session_state[f"{active}_remaining_new_total"] = 0
             return
 
+        # Initialize bucket tracking if needed
+        bucket_lastseen = _initialize_uk_bucket_last_seen(active, entries)
         lastseen_key = f"{active}_bucket_last_seen"
-        bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
-
-        # --- FIRST-LOAD SNAPSHOT FOR UK ---
-        # On the first time this feed is opened (no last-seen map yet),
-        # set last-seen to 0.0 for each Region|Bucket so EVERYTHING shows as NEW.
-        if not bucket_lastseen:
-            for a in entries:
-                region = (a.get("state") or a.get("region") or "Unknown")
-                bucket = (a.get("bucket") or a.get("event") or a.get("title") or "Alert")
-                bkey = f"{region}|{bucket}"
-                bucket_lastseen[bkey] = 0.0  # ensures NEW on first open
-            st.session_state[lastseen_key] = bucket_lastseen
 
         cols = st.columns([0.25, 0.75])
         with cols[0]:
             if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
                 now_ts = time.time()
                 for a in entries:
-                    region = (a.get("state") or a.get("region") or "Unknown")
-                    bucket = (a.get("bucket") or a.get("event") or a.get("title") or "Alert")
+                    region = (a.get("region") or "Unknown")
+                    bucket = (a.get("bucket") or a.get("title") or "Alert")
                     bkey = f"{region}|{bucket}"
                     bucket_lastseen[bkey] = now_ts
                 st.session_state[lastseen_key] = bucket_lastseen
@@ -397,7 +406,10 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         nws_total = st.session_state.get(f"{key}_remaining_new_total")
         new_count = nws_total if isinstance(nws_total, int) else nws_remaining_new_total(key, entries)
         st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
-    elif conf["type"] == "uk_grouped_compact":   # UK handled like NWS
+    elif conf["type"] == "uk_grouped_compact":
+        # Initialize UK bucket tracking and compute new count
+        if entries:
+            _initialize_uk_bucket_last_seen(key, entries)
         uk_total = st.session_state.get(f"{key}_remaining_new_total")
         new_count = uk_total if isinstance(uk_total, int) else uk_remaining_new_total(key, entries)
         st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
