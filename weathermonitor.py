@@ -359,7 +359,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
 
         RENDERERS["uk_grouped_compact"](entries, {**conf, "key": active})
 
-        uk_total_now = nws_remaining_new_total(active, entries)
+        uk_total_now = uk_remaining_new_total(active, entries)
         st.session_state[f"{active}_remaining_new_total"] = int(uk_total_now)
         if badge_placeholders:
             ph = badge_placeholders.get(active)
