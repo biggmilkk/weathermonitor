@@ -62,6 +62,9 @@ SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
 
     # --- Environment Canada ---
     "ec_async": ScraperEntry("environment_canada", "scrape_ec_async", loader=_load_ec_conf),
+    
+    # --- Met OFfice UK ---
+    "uk_grouped_compact": ScraperEntry("metoffice_uk", "scrape_metoffice_uk_async"),
 
     # --- MeteoAlarm countries ---
     "rss_meteoalarm": ScraperEntry("meteoalarm", "scrape_meteoalarm_async"),
