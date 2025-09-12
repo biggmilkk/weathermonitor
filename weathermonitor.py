@@ -29,78 +29,78 @@ nest_asyncio.apply()
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
 
-st.markdown("""
-<style>
-/* Remove top padding/decoration and default margins to kill the white bar */
-section.main > div.block-container { padding-top: 0 !important; }
-div[data-testid="stDecoration"] { display: none !important; }
-.stMarkdown, [data-testid="stMarkdown"], [data-testid="stMarkdownContainer"] { margin: 0 !important; padding: 0 !important; }
+#st.markdown("""
+#<style>
+#/* Remove top padding/decoration and default margins to kill the white bar */
+#section.main > div.block-container { padding-top: 0 !important; }
+#div[data-testid="stDecoration"] { display: none !important; }
+#.stMarkdown, [data-testid="stMarkdown"], [data-testid="stMarkdownContainer"] { margin: 0 !important; padding: 0 !important; }
 
-[data-testid="stRadio"] { margin-bottom: 0 !important; }
-[data-testid="stRadio"] > div { display: flex; align-items: center; }
-[data-testid="stRadio"] div[role="radiogroup"] { display: flex; gap: 20px; }
+#[data-testid="stRadio"] { margin-bottom: 0 !important; }
+#[data-testid="stRadio"] > div { display: flex; align-items: center; }
+#[data-testid="stRadio"] div[role="radiogroup"] { display: flex; gap: 20px; }
 
-[data-testid="stRadio"] div[role="radiogroup"] label {
-  border: none !important;
-  background: transparent !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  min-width: auto !important;
-  justify-content: flex-start;
-}
+#[data-testid="stRadio"] div[role="radiogroup"] label {
+#  border: none !important;
+#  background: transparent !important;
+#  padding: 0 !important;
+#  margin: 0 !important;
+#  min-width: auto !important;
+#  justify-content: flex-start;
+#}
 
-/* Hide text inside label */
-[data-testid="stRadio"] div[role="radiogroup"] label p,
-[data-testid="stRadio"] div[role="radiogroup"] label span {
-  font-size: 0 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-}
+#/* Hide text inside label */
+#[data-testid="stRadio"] div[role="radiogroup"] label p,
+#[data-testid="stRadio"] div[role="radiogroup"] label span {
+#  font-size: 0 !important;
+#  margin: 0 !important;
+#  padding: 0 !important;
+#}
 
-/* Icons appear after the radio circle */
-[data-testid="stRadio"] div[role="radiogroup"] label::after {
-  content: "";
-  width: 16px;
-  height: 16px;
-  display: inline-block;
-  margin-left: 6px;
-  background: currentColor;
-  vertical-align: -2px;
-  -webkit-mask-size: cover;
-  mask-size: cover;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-}
+#/* Icons appear after the radio circle */
+#[data-testid="stRadio"] div[role="radiogroup"] label::after {
+#  content: "";
+#  width: 16px;
+#  height: 16px;
+#  display: inline-block;
+#  margin-left: 6px;
+#  background: currentColor;
+#  vertical-align: -2px;
+#  -webkit-mask-size: cover;
+#  mask-size: cover;
+#  -webkit-mask-repeat: no-repeat;
+#  mask-repeat: no-repeat;
+#}
 
-/* Desktop icon */
-[data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(1)::after {
-  -webkit-mask-image: url('data:image/svg+xml;utf8,\
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
-<rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/>\
-<rect x="9" y="18" width="6" height="2" fill="black"/>\
-</svg>');
-  mask-image: url('data:image/svg+xml;utf8,\
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
-<rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/>\
-<rect x="9" y="18" width="6" height="2" fill="black"/>\
-</svg>');
-}
+#/* Desktop icon */
+#[data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(1)::after {
+#  -webkit-mask-image: url('data:image/svg+xml;utf8,\
+#<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
+#<rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/>\
+#<rect x="9" y="18" width="6" height="2" fill="black"/>\
+#</svg>');
+#  mask-image: url('data:image/svg+xml;utf8,\
+#<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
+#<rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/>\
+#<rect x="9" y="18" width="6" height="2" fill="black"/>\
+#</svg>');
+#}
 
-/* Mobile icon */
-[data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(2)::after {
-  -webkit-mask-image: url('data:image/svg+xml;utf8,\
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
-<rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/>\
-<circle cx="12" cy="18" r="1" fill="black"/>\
-</svg>');
-  mask-image: url('data:image/svg+xml;utf8,\
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
-<rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/>\
-<circle cx="12" cy="18" r="1" fill="black"/>\
-</svg>');
-}
-</style>
-""", unsafe_allow_html=True)
+#/* Mobile icon */
+#[data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(2)::after {
+#  -webkit-mask-image: url('data:image/svg+xml;utf8,\
+#<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
+#<rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/>\
+#<circle cx="12" cy="18" r="1" fill="black"/>\
+#</svg>');
+#  mask-image: url('data:image/svg+xml;utf8,\
+#<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
+#<rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/>\
+#<circle cx="12" cy="18" r="1" fill="black"/>\
+#</svg>');
+#}
+#</style>
+#""", unsafe_allow_html=True)
 
 vm = psutil.virtual_memory()
 MEMORY_LIMIT = int(min(0.5 * vm.total, 4 * 1024**3))
