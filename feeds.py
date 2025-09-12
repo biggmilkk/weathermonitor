@@ -12,7 +12,7 @@ def get_feed_definitions():
             "type": "ec_async",
             "source_file": "environment_canada_sources.json",
         },
-                "metoffice_uk": {
+        "metoffice_uk": {
             "label": "Met Office (UK)",
             "type": "uk_grouped_compact",
             "urls": [
