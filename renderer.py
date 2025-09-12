@@ -584,100 +584,61 @@ def render_nws_grouped_compact(entries, conf):
         _safe_rerun()
 
 # ============================================================
-# UK (Met Office), BOM-style rendering (no bucket buttons)
+# UK (Met Office), BOM-style rendering, no "Mark all as seen"
 # ============================================================
-
-def uk_remaining_new_total(feed_key: str, entries: list) -> int:
-    """
-    Count remaining NEW for UK using per-bucket last_seen (Region|Bucket),
-    so we stay compatible with weathermonitor's 'Mark all as seen' logic.
-    """
-    lastseen_map = st.session_state.get(f"{feed_key}_bucket_last_seen", {}) or {}
-    total = 0
-    for e in _as_list(entries):
-        region = _norm(e.get("region") or e.get("state") or "")
-        bucket = _norm(e.get("bucket") or e.get("event") or e.get("title") or "")
-        if not region or not bucket:
-            continue
-        bkey = f"{region}|{bucket}"
-        last_seen = float(lastseen_map.get(bkey, 0.0))
-        ts = _to_ts(e.get("published"))
-        if ts > last_seen:
-            total += 1
-    return int(max(0, total))
 
 def render_uk_grouped(entries, conf):
     """
     Render UK like BOM:
       Region header
         → flat list of items
-    No bucket buttons; avoids repeating region text in rows.
-    NEW logic still uses per-bucket last_seen (Region|Bucket) so badges
-    and 'Mark all as seen' in weathermonitor keep working.
+    Uses a single feed-level last_seen_time.
+    No 'Mark all as seen' or per-bucket logic.
     """
     feed_key = conf.get("key", "uk")
-    lastseen_key = f"{feed_key}_bucket_last_seen"
-    bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
-
     items = _as_list(entries)
     if not items:
         render_empty_state()
-        st.session_state[f"{feed_key}_remaining_new_total"] = 0
         return
 
-    # attach ts & normalize keys, newest first
     for e in items:
         e["timestamp"] = _to_ts(e.get("published"))
-        e["region"] = _norm(e.get("region") or e.get("state") or "Unknown")
-        e["bucket"] = _norm(e.get("bucket") or e.get("event") or e.get("title") or "Alert")
+        e["region"] = _norm(e.get("region") or "Unknown")
+        e["bucket"] = _norm(e.get("bucket") or e.get("title") or "Alert")
     items.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    # group by region only
+    # Last seen is a single timestamp
+    last_seen = float(st.session_state.get(f"{feed_key}_last_seen_time") or 0.0)
+
+    # Group by region
     groups = OrderedDict()
     for e in items:
-        if e["region"]:
-            groups.setdefault(e["region"], []).append(e)
+        groups.setdefault(e["region"], []).append(e)
 
-    if not groups:
-        render_empty_state()
-        st.session_state[f"{feed_key}_remaining_new_total"] = 0
-        return
-
-    total_remaining_new = 0
-
+    any_rendered = False
     for region, alerts in groups.items():
         if not alerts:
             continue
+        any_rendered = True
 
-        # region is NEW if any item timestamp > last_seen for its bucket
-        def _region_has_new() -> bool:
-            for a in alerts:
-                bkey = f"{region}|{a['bucket']}"
-                if a.get("timestamp", 0.0) > float(bucket_lastseen.get(bkey, 0.0)):
-                    return True
-            return False
+        # Stripe region if any alert is NEW
+        region_header = _stripe_wrap(
+            f"<h2>{html.escape(region)}</h2>",
+            any(a.get("timestamp",0.0) > last_seen for a in alerts)
+        )
+        st.markdown(region_header, unsafe_allow_html=True)
 
-        st.markdown(_stripe_wrap(f"<h2>{html.escape(region)}</h2>", _region_has_new()), unsafe_allow_html=True)
-
-        # For each item, compute NEW using Region|Bucket last_seen
         for a in alerts:
-            bkey = f"{region}|{a['bucket']}"
-            last_seen = float(bucket_lastseen.get(bkey, 0.0))
-            is_new = a.get("timestamp", 0.0) > last_seen
-            if is_new:
-                total_remaining_new += 1
-
-            # Display: prefer bucket as concise title; avoid repeating region line
-            display_title = a.get("bucket") or _norm(a.get("title",""))
+            is_new = a.get("timestamp",0.0) > last_seen
             prefix = "[NEW] " if is_new else ""
+            title  = a.get("bucket") or _norm(a.get("title",""))
             link   = _norm(a.get("link"))
 
-            if display_title and link:
-                st.markdown(f"{prefix}**[{display_title}]({link})**")
+            if title and link:
+                st.markdown(f"{prefix}**[{title}]({link})**")
             else:
-                st.markdown(f"{prefix}**{display_title}**")
+                st.markdown(f"{prefix}**{title}**")
 
-            # Show summary if present; omit Region: (we already have header)
             if a.get("summary"):
                 st.write(a["summary"])
 
@@ -687,7 +648,10 @@ def render_uk_grouped(entries, conf):
 
         st.markdown("---")
 
-    st.session_state[f"{feed_key}_remaining_new_total"] = int(max(0, total_remaining_new or 0))
+    if not any_rendered:
+        render_empty_state()
+
+    st.session_state[f"{feed_key}_last_seen_time"] = time.time()
 
 # ============================================================
 # CMA renderer
