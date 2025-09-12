@@ -12,14 +12,7 @@ def get_feed_definitions():
             "type": "ec_async",
             "source_file": "environment_canada_sources.json",
         },
-        "meteoalarm": {
-            "label": "Meteoalarm (Europe)",
-            "type": "rss_meteoalarm",
-            "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe",
-        },
-
-        # --- Met Office UK (REGIONAL) ---
-        "metoffice_uk": {
+                "metoffice_uk": {
             "label": "Met Office (UK)",
             "type": "uk_grouped_compact",
             "urls": [
@@ -59,7 +52,11 @@ def get_feed_definitions():
                 "London & South East England",
             ],
         },
-
+        "meteoalarm": {
+            "label": "Meteoalarm (Europe)",
+            "type": "rss_meteoalarm",
+            "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe",
+        },
         "cma_china": {
             "label": "CMA (China)",
             "type": "rss_cma",
