@@ -425,7 +425,7 @@ else:
             new_count = ec_total if isinstance(ec_total,int) else ec_remaining_new_total(key, entries)
             st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
         elif conf["type"] == "nws_grouped_compact":
-            nws_total = st.session_state.get(f"{key}_remaining_new_total"]
+            nws_total = st.session_state.get(f"{key}_remaining_new_total")
             new_count = nws_total if isinstance(nws_total,int) else nws_remaining_new_total(key, entries)
             st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
         else:
