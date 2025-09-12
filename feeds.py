@@ -69,6 +69,7 @@ def get_feed_definitions():
         "jma": {
             "label": "JMA (Japan)",
             "type": "rss_jma",
+            "region_map_file": "scraper/region_area_codes.json",
             "office_codes": [
                 "011000","012000","013000","014100","014030","015000","016000","017000",
                 "020000","030000","040000","050000","060000","070000","080000","090000",
