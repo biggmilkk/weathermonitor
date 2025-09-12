@@ -36,63 +36,64 @@ section.main > div.block-container { padding-top: 0 !important; }
 div[data-testid="stDecoration"] { display: none !important; }
 .stMarkdown, [data-testid="stMarkdown"], [data-testid="stMarkdownContainer"] { margin: 0 !important; padding: 0 !important; }
 
-/* Mobile detail sticky top bar */
-.topbar { position: sticky; top: 0; z-index: 3; background: var(--background-color, white);
-          padding: 6px 4px 6px 4px; margin: 0 !important; border-bottom: none; }
-
-/* Icon-only radio toggle (left) */
-.icon-radio-wrap { display:flex; gap:8px; align-items:center; }
 [data-testid="stRadio"] { margin-bottom: 0 !important; }
-[data-testid="stRadio"] > div { display:flex; align-items:center; }
-[data-testid="stRadio"] div[role="radiogroup"] { display:flex; gap:8px; }
+[data-testid="stRadio"] > div { display: flex; align-items: center; }
+[data-testid="stRadio"] div[role="radiogroup"] { display: flex; gap: 20px; }
 
-/* Style each radio label as a small rounded button with an icon */
 [data-testid="stRadio"] div[role="radiogroup"] label {
-  border: 1px solid #e0e0e0; background:#f4f4f4; color:#333;
-  padding: 6px 10px; border-radius: 8px; min-width: 40px; justify-content: center;
+  border: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  min-width: auto !important;
+  justify-content: flex-start;
 }
-[data-testid="stRadio"] div[role="radiogroup"] label:hover { filter: brightness(0.98); }
 
-/* Hide the text inside radio labels (we’ll show icons only) */
+/* Hide text inside label */
 [data-testid="stRadio"] div[role="radiogroup"] label p,
 [data-testid="stRadio"] div[role="radiogroup"] label span {
-  font-size: 0 !important; line-height: 0 !important; margin: 0 !important; padding: 0 !important;
+  font-size: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
 }
 
-/* Selected state tint */
-[data-testid="stRadio"] div[role="radiogroup"] input:checked + div {
-  background: #0f62fe !important; color: #fff !important; border-color: #0f62fe !important;
-}
-
-/* Inject icons after the radio circle (to the right) */
+/* Icons appear after the radio circle */
 [data-testid="stRadio"] div[role="radiogroup"] label::after {
-  content: ""; width: 16px; height:16px; display:inline-block; margin-left: 6px;
-  background: currentColor; vertical-align: -2px;
-  -webkit-mask-size: cover; mask-size: cover; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  content: "";
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+  margin-left: 6px;
+  background: currentColor;
+  vertical-align: -2px;
+  -webkit-mask-size: cover;
+  mask-size: cover;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
 }
 
-/* First option = Desktop icon */
+/* Desktop icon */
 [data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(1)::after {
   -webkit-mask-image: url('data:image/svg+xml;utf8,\
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
 <rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/>\
 <rect x="9" y="18" width="6" height="2" fill="black"/>\
 </svg>');
-          mask-image: url('data:image/svg+xml;utf8,\
+  mask-image: url('data:image/svg+xml;utf8,\
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
 <rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/>\
 <rect x="9" y="18" width="6" height="2" fill="black"/>\
 </svg>');
 }
 
-/* Second option = Mobile icon */
+/* Mobile icon */
 [data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(2)::after {
   -webkit-mask-image: url('data:image/svg+xml;utf8,\
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
 <rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/>\
 <circle cx="12" cy="18" r="1" fill="black"/>\
 </svg>');
-          mask-image: url('data:image/svg+xml;utf8,\
+  mask-image: url('data:image/svg+xml;utf8,\
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
 <rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/>\
 <circle cx="12" cy="18" r="1" fill="black"/>\
