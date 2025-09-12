@@ -249,22 +249,23 @@ st.caption(
     f"{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
 )
 
-# ------------------------------
-# Layout toggle (Desktop/Mobile)
-# ------------------------------
-st.markdown("---")
+# Subtle toggle (top-right). No header, no hint.
 st.session_state.setdefault("layout_mode", "Desktop")
-layout_mode = st.radio(
-    "Layout",
-    options=["Desktop", "Mobile"],
-    index=(0 if st.session_state["layout_mode"] == "Desktop" else 1),
-    help="Choose Desktop (row of buttons + details below) or Mobile (accordion under each button).",
-)
-if layout_mode != st.session_state["layout_mode"]:
-    st.session_state["layout_mode"] = layout_mode
-    _immediate_rerun()
+spacer, toggle_col = st.columns([0.85, 0.15])
+with toggle_col:
+    layout_mode = st.radio(
+        "",
+        options=["Desktop", "Mobile"],
+        index=(0 if st.session_state["layout_mode"] == "Desktop" else 1),
+        label_visibility="collapsed",
+        horizontal=True,
+    )
+    if layout_mode != st.session_state["layout_mode"]:
+        st.session_state["layout_mode"] = layout_mode
+        _immediate_rerun()
 
 IS_MOBILE = (st.session_state["layout_mode"] == "Mobile")
+
 st.markdown("---")
 
 # --------------------------------------------------------------------
