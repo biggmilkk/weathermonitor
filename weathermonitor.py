@@ -64,15 +64,15 @@ div[data-testid="stDecoration"] { display: none !important; }
   background: #0f62fe !important; color: #fff !important; border-color: #0f62fe !important;
 }
 
-/* Inject icons via ::before on each label */
-[data-testid="stRadio"] div[role="radiogroup"] label::before {
-  content: ""; width: 16px; height:16px; display:inline-block; margin: 0;
+/* Inject icons after the radio circle (to the right) */
+[data-testid="stRadio"] div[role="radiogroup"] label::after {
+  content: ""; width: 16px; height:16px; display:inline-block; margin-left: 6px;
   background: currentColor; vertical-align: -2px;
   -webkit-mask-size: cover; mask-size: cover; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
 }
 
 /* First option = Desktop icon */
-[data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(1)::before {
+[data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(1)::after {
   -webkit-mask-image: url('data:image/svg+xml;utf8,\
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
 <rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/>\
@@ -86,7 +86,7 @@ div[data-testid="stDecoration"] { display: none !important; }
 }
 
 /* Second option = Mobile icon */
-[data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(2)::before {
+[data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(2)::after {
   -webkit-mask-image: url('data:image/svg+xml;utf8,\
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
 <rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/>\
