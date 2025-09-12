@@ -11,7 +11,7 @@ from renderer import (
     RENDERERS,
     ec_remaining_new_total,
     nws_remaining_new_total,
-    uk_remaining_new_total,  # <-- ADDED
+    uk_remaining_new_total,  # <-- UK helper import
     ec_bucket_from_title,
     draw_badge,
     safe_int,
@@ -36,11 +36,9 @@ logging.basicConfig(level=logging.WARNING)
 #section.main > div.block-container { padding-top: 0 !important; }
 #div[data-testid="stDecoration"] { display: none !important; }
 #.stMarkdown, [data-testid="stMarkdown"], [data-testid="stMarkdownContainer"] { margin: 0 !important; padding: 0 !important; }
-
 #[data-testid="stRadio"] { margin-bottom: 0 !important; }
 #[data-testid="stRadio"] > div { display: flex; align-items: center; }
 #[data-testid="stRadio"] div[role="radiogroup"] { display: flex; gap: 20px; }
-
 #[data-testid="stRadio"] div[role="radiogroup"] label {
 #  border: none !important;
 #  background: transparent !important;
@@ -49,7 +47,6 @@ logging.basicConfig(level=logging.WARNING)
 #  min-width: auto !important;
 #  justify-content: flex-start;
 #}
-
 #/* Hide text inside label */
 #[data-testid="stRadio"] div[role="radiogroup"] label p,
 #[data-testid="stRadio"] div[role="radiogroup"] label span {
@@ -57,7 +54,6 @@ logging.basicConfig(level=logging.WARNING)
 #  margin: 0 !important;
 #  padding: 0 !important;
 #}
-
 #/* Icons appear after the radio circle */
 #[data-testid="stRadio"] div[role="radiogroup"] label::after {
 #  content: "";
@@ -72,7 +68,6 @@ logging.basicConfig(level=logging.WARNING)
 #  -webkit-mask-repeat: no-repeat;
 #  mask-repeat: no-repeat;
 #}
-
 #/* Desktop icon */
 #[data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(1)::after {
 #  -webkit-mask-image: url('data:image/svg+xml;utf8,\
@@ -86,7 +81,6 @@ logging.basicConfig(level=logging.WARNING)
 #<rect x="9" y="18" width="6" height="2" fill="black"/>\
 #</svg>');
 #}
-
 #/* Mobile icon */
 #[data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(2)::after {
 #  -webkit-mask-image: url('data:image/svg+xml;utf8,\
@@ -223,7 +217,7 @@ if to_fetch:
             st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
         elif conf["type"] == "nws_grouped_compact":
             st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
-        elif conf["type"] == "uk_grouped_compact":  # <-- ADDED
+        elif conf["type"] == "uk_grouped_compact":  # <-- ensure UK total is computed
             st.session_state[f"{key}_remaining_new_total"] = uk_remaining_new_total(key, entries)
         gc.collect()
 
@@ -235,23 +229,6 @@ if rss_after > MEMORY_HIGH_WATER: st.session_state["concurrency"] = max(MIN_CONC
 # --------------------------------------------------------------------
 st.title("Global Weather Monitor")
 st.caption(f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
-
-# left_tgl, _ = st.columns([0.25, 0.75])
-#with left_tgl:
-#    # Radio (icon-only via CSS; options order matters for icons)
-#    prev = st.session_state["layout_mode"]
-#    choice = st.radio(
-#        label="",
-#        options=["Desktop", "Mobile"],
-#        index=(0 if prev == "Desktop" else 1),
-#        horizontal=True,
-#        label_visibility="collapsed",
-#        key="layout_toggle_radio",
-#    )
-#    if choice != prev:
-#        st.session_state["layout_mode"] = choice
-#        st.session_state["mobile_view"] = "list"
-#        _immediate_rerun()
 
 st.markdown("---")
 
@@ -363,8 +340,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                 _immediate_rerun()
 
         RENDERERS["uk_grouped_compact"](entries, {**conf, "key": active})
-
-        uk_total_now = uk_remaining_new_total(active, entries)  # <-- uses UK helper
+        uk_total_now = uk_remaining_new_total(active, entries)
         st.session_state[f"{active}_remaining_new_total"] = int(uk_total_now)
         if badge_placeholders:
             ph = badge_placeholders.get(active)
@@ -396,7 +372,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                 except Exception: ts = 0.0
                 item["is_new"] = bool(ts > seen_ts)
                 RENDERERS.get(conf["type"], lambda i,c: None)(item, conf)
-            pkey = f"{active}_pending_seen_time"
+            pkey = f"{active}_pending_seen_time"]
             pending = st.session_state.get(pkey, None)
             if pending is not None: st.session_state[f"{active}_last_seen_time"] = float(pending)
             st.session_state.pop(pkey, None)
@@ -412,7 +388,7 @@ def _new_count_for(key, conf, entries):
     if conf["type"] == "nws_grouped_compact":
         val = st.session_state.get(f"{key}_remaining_new_total")
         return int(val) if isinstance(val,int) else int(nws_remaining_new_total(key, entries) or 0)
-    if conf["type"] == "uk_grouped_compact":  # <-- CHANGED to use UK helper
+    if conf["type"] == "uk_grouped_compact":
         val = st.session_state.get(f"{key}_remaining_new_total")
         return int(val) if isinstance(val, int) else int(uk_remaining_new_total(key, entries) or 0)
     seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
@@ -456,7 +432,7 @@ if st.session_state["layout_mode"] == "Mobile":
             if st.button("✕", key="m_detail_close", use_container_width=True):
                 if conf["type"] == "rss_meteoalarm":
                     st.session_state[f"{active}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                elif conf["type"] not in ("ec_async","nws_grouped_compact"):
+                elif conf["type"] not in ("ec_async","nws_grouped_compact","uk_grouped_compact"):
                     st.session_state[f"{active}_last_seen_time"] = time.time()
                 st.session_state["mobile_view"] = "list"
                 st.session_state["active_feed"] = None
@@ -489,6 +465,10 @@ else:
             nws_total = st.session_state.get(f"{key}_remaining_new_total")
             new_count = nws_total if isinstance(nws_total,int) else nws_remaining_new_total(key, entries)
             st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
+        elif conf["type"] == "uk_grouped_compact":  # <-- NEW: UK handled like NWS here
+            uk_total = st.session_state.get(f"{key}_remaining_new_total")
+            new_count = uk_total if isinstance(uk_total,int) else uk_remaining_new_total(key, entries)
+            st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
         else:
             seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
             _, new_count = compute_counts(entries, conf, seen_ts)
@@ -505,7 +485,7 @@ else:
                 if st.session_state.get("active_feed") == key:
                     if conf["type"] == "rss_meteoalarm":
                         st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                    elif conf["type"] in ("ec_async","nws_grouped_compact"):
+                    elif conf["type"] in ("ec_async","nws_grouped_compact","uk_grouped_compact"):
                         pass
                     else:
                         st.session_state[f"{key}_last_seen_time"] = time.time()
@@ -514,7 +494,7 @@ else:
                     st.session_state["active_feed"] = key
                     if conf["type"] == "rss_meteoalarm":
                         st.session_state[f"{key}_pending_seen_time"] = time.time()
-                    elif conf["type"] in ("ec_async","nws_grouped_compact"):
+                    elif conf["type"] in ("ec_async","nws_grouped_compact","uk_grouped_compact"):
                         st.session_state[f"{key}_pending_seen_time"] = None
                     else:
                         st.session_state[f"{key}_pending_seen_time"] = time.time()
