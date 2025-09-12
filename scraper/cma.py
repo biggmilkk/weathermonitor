@@ -40,18 +40,32 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
 # ---------------- Regex patterns ----------------
 RE_PUBLISHED = re.compile(r"发布时间：\s*(\d{4})年(\d{1,2})月(\d{1,2})日(\d{1,2})时")
 
-# Matches:
-#  9月5日20时至6日20时 / 9月5日20:30至6日20:00 / 9月5日20时到9月6日20时 / 9月5日20时—6日20时 / 9月5日20时~6日20时 …
+# 9月5日20时至6日20时 / 9月5日20:30至6日20:00 / 9月5日20时到9月6日20时 / 9月5日20时—6日20时 / 9月5日20时~6日20时 …
 RE_WINDOW = re.compile(
     r"(?P<mon>\d{1,2})月(?P<d1>\d{1,2})日(?P<h1>\d{1,2})(?:时|:)?(?P<m1>\d{2})?"
     r"\s*(?:至|到|—|–|-|~|～)\s*"
     r"(?:(?P<mon2>\d{1,2})月)?(?P<d2>\d{1,2})日(?P<h2>\d{1,2})(?:时|:)?(?P<m2>\d{2})?"
 )
 
+# robust color extraction (normalize whitespace first)
 RE_LEVEL_CANON = re.compile(r"(蓝色|黄色|橙色|红色)预警")
 RE_LEVEL_FALLBACK = re.compile(r"([蓝黄橙红])色.*?预警")
 CN_COLOR_MAP = {"蓝色": "Blue", "黄色": "Yellow", "橙色": "Orange", "红色": "Red"}
 CN_COLOR_CHAR_MAP = {"蓝": "Blue", "黄": "Yellow", "橙": "Orange", "红": "Red"}
+
+# Canonical English for frequent titles (fallback to auto translate otherwise)
+TITLE_EN_MAP: Dict[str, str] = {
+    "暴雨预警": "Heavy Rain Warning",
+    "强对流天气预警": "Severe Convective Weather Warning",
+    "台风预警": "Typhoon Warning",
+    "地质灾害气象风险预警": "Geological Disaster Meteorological Risk Warning",
+    "渍涝风险气象预报": "Waterlogging Risk Forecast",
+    "高温预警": "High Temperature Warning",
+    "寒潮预警": "Cold Wave Warning",
+    "大风预警": "Gale Warning",
+    "沙尘暴预警": "Sandstorm Warning",
+    "低温雨雪冰冻预警": "Low-Temperature Rain/Snow/Icing Warning",
+}
 
 
 def _abs_url(href: str) -> str:
@@ -277,7 +291,7 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
       - tz_name: 'Asia/Shanghai' (default)
       - expiry_grace_minutes: int (default 0) → if window_end exists, drop after end+grace
       - urls: list[str] (fallback if discovery finds nothing)
-      - translate_to_en: bool (default False)
+      - translate_to_en: bool (default False) → add English body and bilingual title
     """
     tz = _tz(conf.get("tz_name", "Asia/Shanghai"))
     grace = int(conf.get("expiry_grace_minutes", 0))
@@ -320,10 +334,19 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
                 if isinstance(edt, datetime) and datetime.now(tz) >= (edt + timedelta(minutes=grace)):
                     return None
 
+            # ---- Build title (bilingual when translate_to_en=True) ----
+            title_out = data["title"]
+            if want_en:
+                title_en = TITLE_EN_MAP.get(title_out)
+                if not title_en:
+                    title_en = await _translate_text_google(title_out, "en", client)
+                if title_en:
+                    title_out = f"{title_out} ({title_en})"
+
+            # ---- Build summary ----
             w_start = data.get("window_start")
             w_end = data.get("window_end")
 
-            # Compose summary (include window line only if parsed)
             window_line = ""
             if isinstance(w_start, datetime) and isinstance(w_end, datetime):
                 window_line = f"有效期：{w_start.strftime('%m月%d日%H:%M')} 至 {w_end.strftime('%m月%d日%H:%M')}（北京时间）\n\n"
@@ -335,12 +358,15 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
                 if translated:
                     summary = f"{summary}\n\n**English (auto):**\n{translated}"
 
+            # Fallback for missing 'published' so 'new' highlighting still works
+            pub = data.get("published") or _iso(w_start)
+
             return {
-                "title": data["title"],
+                "title": title_out,
                 "level": data.get("level"),
                 "summary": summary,
                 "link": data["link"],
-                "published": data["published"],
+                "published": pub,
             }
         except Exception as e:
             errors.append(f"{url}: {e}")
