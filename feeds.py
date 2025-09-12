@@ -12,6 +12,11 @@ def get_feed_definitions():
             "type": "ec_async",
             "source_file": "environment_canada_sources.json",
         },
+        "metoffice_uk": {
+            "label": "Met Office (UK)",
+            "type": "uk_grouped_compact",
+            "url": "https://www.metoffice.gov.uk/public/data/PWSCache/WarningsRSS/Region/UK",
+        },
         "meteoalarm": {
             "label": "Meteoalarm (Europe)",
             "type": "rss_meteoalarm",
