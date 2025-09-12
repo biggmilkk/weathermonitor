@@ -584,156 +584,46 @@ def render_nws_grouped_compact(entries, conf):
         _safe_rerun()
 
 # ============================================================
-# UK grouped-compact (Met Office)
+# UK (Met Office) grouped-compact
 # ============================================================
-
-def uk_remaining_new_total(feed_key: str, entries: list) -> int:
-    """
-    Count remaining NEW across UK buckets using per-bucket last_seen.
-    Key format: "Region|Bucket".
-    """
-    lastseen_map = st.session_state.get(f"{feed_key}_bucket_last_seen", {}) or {}
-    total = 0
-    for e in _as_list(entries):
-        region = _norm(e.get("region") or e.get("state") or "")
-        bucket = _norm(e.get("bucket") or e.get("event") or e.get("title") or "")
-        if not region or not bucket:
-            continue
-        bkey = f"{region}|{bucket}"
-        last_seen = float(lastseen_map.get(bkey, 0.0))
-        ts = _to_ts(e.get("published"))
-        if ts > last_seen:
-            total += 1
-    return int(max(0, total))
 
 def render_uk_grouped_compact(entries, conf):
     """
-    Grouped compact renderer for Met Office UK:
-      Region → Warning bucket → list of alerts.
-    Works like EC grouped view but uses 'region' instead of 'province'.
+    Thin adapter to reuse the NWS grouped-compact renderer for UK:
+      Region (e.g., "East Midlands", "Wales")
+        → Bucket (e.g., "Yellow – Wind")
+          → list of alerts
+
+    We map entry['region'] -> entry['state'] so the NWS renderer will group
+    correctly, and ensure 'bucket' is present.
     """
-    feed_key = conf.get("key", "uk")
-    open_key        = f"{feed_key}_active_bucket"
-    pending_map_key = f"{feed_key}_bucket_pending_seen"
-    lastseen_key    = f"{feed_key}_bucket_last_seen"
-    rerun_guard_key = f"{feed_key}_rerun_guard"
-
-    def _safe_rerun():
-        if hasattr(st, "rerun"):
-            st.rerun()
-        elif hasattr(st, "experimental_rerun"):
-            st.experimental_rerun()
-
-    if st.session_state.get(rerun_guard_key):
-        st.session_state.pop(rerun_guard_key, None)
-
-    st.session_state.setdefault(open_key, None)
-    st.session_state.setdefault(pending_map_key, {})
-    st.session_state.setdefault(lastseen_key, {})
-
-    active_bucket   = st.session_state[open_key]
-    pending_seen    = st.session_state[pending_map_key]
-    bucket_lastseen = st.session_state[lastseen_key]
-
     entries = _as_list(entries)
+    patched = []
     for e in entries:
-        e["timestamp"] = _to_ts(e.get("published"))
-        e["region"]  = _norm(e.get("region") or "Unknown")
-        e["bucket"]  = _norm(e.get("bucket") or e.get("event") or e.get("title") or "Alert")
-    entries.sort(key=lambda x: x["timestamp"], reverse=True)
+        e = dict(e)  # shallow copy so we don't mutate upstream
+        if not e.get("state"):
+            e["state"] = _norm(e.get("region") or "Unknown")
+        if not e.get("bucket"):
+            e["bucket"] = _norm(e.get("event") or e.get("title") or "Alert")
+        patched.append(e)
 
-    filtered = [e for e in entries if e.get("region") and e.get("bucket")]
-    if not filtered:
-        render_empty_state()
-        st.session_state[f"{feed_key}_remaining_new_total"] = 0
-        return
+    # hand off to the existing NWS grouped-compact renderer
+    render_nws_grouped_compact(patched, conf)
 
-    groups = OrderedDict()
-    for e in filtered:
-        groups.setdefault(e["region"], []).append(e)
 
-    regions = sorted(groups.keys(), key=lambda r: r.lower())
-
-    total_remaining_new = 0
-    did_close_toggle    = False
-
-    for region in regions:
-        alerts = groups.get(region, [])
-        if not alerts:
-            continue
-
-        def _region_has_new() -> bool:
-            for a in alerts:
-                bkey = f"{region}|{a['bucket']}"
-                if a.get("timestamp", 0.0) > float(bucket_lastseen.get(bkey, 0.0)):
-                    return True
-            return False
-
-        st.markdown(_stripe_wrap(f"<h2>{html.escape(region)}</h2>", _region_has_new()), unsafe_allow_html=True)
-
-        buckets = OrderedDict()
-        for a in alerts:
-            buckets.setdefault(a["bucket"], []).append(a)
-
-        for label, items in buckets.items():
-            bkey = f"{region}|{label}"
-            cols = st.columns([0.7, 0.3])
-
-            with cols[0]:
-                if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
-                    if active_bucket == bkey:
-                        ts_opened = float(pending_seen.pop(bkey, time.time()))
-                        bucket_lastseen[bkey] = ts_opened
-                        st.session_state[open_key] = None
-                        active_bucket = None
-                        did_close_toggle = True
-                    else:
-                        st.session_state[open_key] = bkey
-                        active_bucket = bkey
-                        pending_seen[bkey] = time.time()
-
-            last_seen = float(bucket_lastseen.get(bkey, 0.0))
-            new_count = sum(1 for x in items if x.get("timestamp", 0.0) > last_seen)
-            total_remaining_new += new_count
-
-            with cols[1]:
-                active_count = len(items)
-                st.markdown(
-                    f"<span style='margin-left:6px;padding:2px 6px;"
-                    f"border-radius:4px;background:#eef0f3;color:#000;font-size:0.9em;"
-                    f"font-weight:600;display:inline-block;'>{active_count} Active</span>",
-                    unsafe_allow_html=True,
-                )
-                if new_count > 0:
-                    st.markdown(
-                        f"<span style='margin-left:6px;padding:2px 6px;"
-                        f"border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
-                        f"font-weight:bold;display:inline-block;'>❗ {new_count} New</span>",
-                        unsafe_allow_html=True,
-                    )
-
-            if st.session_state.get(open_key) == bkey:
-                for a in items:
-                    is_new = a.get("timestamp", 0.0) > last_seen
-                    prefix = "[NEW] " if is_new else ""
-                    title  = _norm(a.get("title", ""))
-                    link   = _norm(a.get("link"))
-                    if title and link:
-                        st.markdown(f"{prefix}**[{title}]({link})**")
-                    else:
-                        st.markdown(f"{prefix}**{title}**")
-                    pub_label = _to_utc_label(a.get("published"))
-                    if pub_label:
-                        st.caption(f"Published: {pub_label}")
-                    st.markdown("---")
-
-        st.markdown("---")
-
-    st.session_state[f"{feed_key}_remaining_new_total"] = int(max(0, total_remaining_new or 0))
-
-    if did_close_toggle and not st.session_state.get(rerun_guard_key, False):
-        st.session_state[rerun_guard_key] = True
-        _safe_rerun()
+def uk_remaining_new_total(feed_key: str, entries: list) -> int:
+    """
+    Reuse the NWS 'remaining new' math by projecting UK entries into the shape
+    it expects: ('state', 'bucket', 'published').
+    """
+    projected = []
+    for e in _as_list(entries):
+        projected.append({
+            "state": _norm(e.get("state") or e.get("region") or ""),
+            "bucket": _norm(e.get("bucket") or e.get("event") or e.get("title") or ""),
+            "published": e.get("published"),
+        })
+    return nws_remaining_new_total(feed_key, projected)
 
 # ============================================================
 # CMA renderer
