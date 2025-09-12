@@ -407,6 +407,9 @@ def _new_count_for(key, conf, entries):
     if conf["type"] == "nws_grouped_compact":
         val = st.session_state.get(f"{key}_remaining_new_total")
         return int(val) if isinstance(val,int) else int(nws_remaining_new_total(key, entries) or 0)
+    if conf["type"] == "uk_grouped_compact":
+        val = st.session_state.get(f"{key}_remaining_new_total")
+        return int(val) if isinstance(val, int) else int(nws_remaining_new_total(key, entries) or 0)
     seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
     _, new_count = compute_counts(entries, conf, seen_ts)
     return new_count
