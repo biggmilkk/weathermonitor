@@ -584,6 +584,48 @@ def render_nws_grouped_compact(entries, conf):
         _safe_rerun()
 
 # ============================================================
+# UK (Met Office) grouped-compact
+# ============================================================
+
+def render_uk_grouped_compact(entries, conf):
+    """
+    Thin adapter to reuse the NWS grouped-compact renderer for UK:
+      Region (e.g., "East Midlands", "Wales")
+        → Bucket (e.g., "Yellow – Wind")
+          → list of alerts
+
+    We map entry['region'] -> entry['state'] so the NWS renderer will group
+    correctly, and ensure 'bucket' is present.
+    """
+    entries = _as_list(entries)
+    patched = []
+    for e in entries:
+        e = dict(e)  # shallow copy so we don't mutate upstream
+        if not e.get("state"):
+            e["state"] = _norm(e.get("region") or "Unknown")
+        if not e.get("bucket"):
+            e["bucket"] = _norm(e.get("event") or e.get("title") or "Alert")
+        patched.append(e)
+
+    # hand off to the existing NWS grouped-compact renderer
+    render_nws_grouped_compact(patched, conf)
+
+
+def uk_remaining_new_total(feed_key: str, entries: list) -> int:
+    """
+    Reuse the NWS 'remaining new' math by projecting UK entries into the shape
+    it expects: ('state', 'bucket', 'published').
+    """
+    projected = []
+    for e in _as_list(entries):
+        projected.append({
+            "state": _norm(e.get("state") or e.get("region") or ""),
+            "bucket": _norm(e.get("bucket") or e.get("event") or e.get("title") or ""),
+            "published": e.get("published"),
+        })
+    return nws_remaining_new_total(feed_key, projected)
+
+# ============================================================
 # CMA renderer
 # ============================================================
 
@@ -878,4 +920,5 @@ RENDERERS = {
     'rss_meteoalarm': render_meteoalarm,
     'rss_bom_multi': render_bom_grouped,
     'rss_jma': render_jma_grouped,
+    'uk_grouped_compact': render_uk_grouped_compact,
 }
