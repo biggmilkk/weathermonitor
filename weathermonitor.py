@@ -260,19 +260,32 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
         RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
 
     elif conf["type"] == "ec_async":
-        _PROVINCE_NAMES = {"AB":"Alberta","BC":"British Columbia","MB":"Manitoba","NB":"New Brunswick","NL":"Newfoundland and Labrador","NT":"Northwest Territories","NS":"Nova Scotia","NU":"Nunavut","ON":"Ontario","PE":"Prince Edward Island","QC":"Quebec","SK":"Saskatchewan","YT":"Yukon"}
+        if not entries:
+            st.info("No active warnings that meet thresholds at the moment.")
+            st.session_state[f"{active}_remaining_new_total"] = 0
+            return
+
+        _PROVINCE_NAMES = {
+            "AB": "Alberta", "BC": "British Columbia", "MB": "Manitoba",
+            "NB": "New Brunswick", "NL": "Newfoundland and Labrador",
+            "NT": "Northwest Territories", "NS": "Nova Scotia", "NU": "Nunavut",
+            "ON": "Ontario", "PE": "Prince Edward Island", "QC": "Quebec",
+            "SK": "Saskatchewan", "YT": "Yukon",
+        }
         cols = st.columns([0.25, 0.75])
         with cols[0]:
             if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
                 lastseen_key = f"{active}_bucket_last_seen"
                 bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
                 now_ts = time.time()
-                for k in list(bucket_lastseen.keys()): bucket_lastseen[k] = now_ts
+                for k in list(bucket_lastseen.keys()):
+                    bucket_lastseen[k] = now_ts
                 for e in entries:
                     bucket = ec_bucket_from_title(e.get("title","") or "")
-                    if not bucket: continue
-                    code = e.get("province","")
-                    prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code,str) else str(code)
+                    if not bucket:
+                        continue
+                    code = e.get("province", "")
+                    prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
                     bkey = f"{prov_name}|{bucket}"
                     bucket_lastseen[bkey] = now_ts
                 st.session_state[lastseen_key] = bucket_lastseen
@@ -281,6 +294,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                     ph = badge_placeholders.get(active)
                     if ph: draw_badge(ph, 0)
                 _immediate_rerun()
+
         RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
         ec_total_now = ec_remaining_new_total(active, entries)
         st.session_state[f"{active}_remaining_new_total"] = int(ec_total_now)
@@ -288,7 +302,13 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
             ph = badge_placeholders.get(active)
             if ph: draw_badge(ph, safe_int(ec_total_now))
 
+
     elif conf["type"] == "nws_grouped_compact":
+        if not entries:
+            st.info("No active warnings that meet thresholds at the moment.")
+            st.session_state[f"{active}_remaining_new_total"] = 0
+            return
+
         cols = st.columns([0.25, 0.75])
         with cols[0]:
             if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
@@ -306,12 +326,14 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                     ph = badge_placeholders.get(active)
                     if ph: draw_badge(ph, 0)
                 _immediate_rerun()
+
         RENDERERS["nws_grouped_compact"](entries, {**conf, "key": active})
         nws_total_now = nws_remaining_new_total(active, entries)
         st.session_state[f"{active}_remaining_new_total"] = int(nws_total_now)
         if badge_placeholders:
             ph = badge_placeholders.get(active)
             if ph: draw_badge(ph, safe_int(nws_total_now))
+
 
     elif conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{active}_last_seen_alerts"])
