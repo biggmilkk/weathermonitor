@@ -610,12 +610,7 @@ def render_uk_grouped_compact(entries, conf):
     # hand off to the existing NWS grouped-compact renderer
     render_nws_grouped_compact(patched, conf)
 
-
 def uk_remaining_new_total(feed_key: str, entries: list) -> int:
-    """
-    Reuse the NWS 'remaining new' math by projecting UK entries into the shape
-    it expects: ('state', 'bucket', 'published').
-    """
     projected = []
     for e in _as_list(entries):
         projected.append({
