@@ -372,7 +372,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                 except Exception: ts = 0.0
                 item["is_new"] = bool(ts > seen_ts)
                 RENDERERS.get(conf["type"], lambda i,c: None)(item, conf)
-            pkey = f"{active}_pending_seen_time"]
+            pkey = f"{active}_pending_seen_time"
             pending = st.session_state.get(pkey, None)
             if pending is not None: st.session_state[f"{active}_last_seen_time"] = float(pending)
             st.session_state.pop(pkey, None)
