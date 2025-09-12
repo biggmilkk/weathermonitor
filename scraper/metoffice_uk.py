@@ -59,6 +59,13 @@ def _parse_feed(content: bytes, region_label: str) -> list[dict]:
         title = _norm(getattr(e, "title", ""))
         if re.search(r"\b(cancellation|cancelled|final)\b", title, re.I):
             continue
+            
+        # Keep only Amber/Red (drop Yellow) warnings
+        m = BUCKET_PAT.search(title or "")
+        if not m:
+            continue
+        if m.group(1).lower() == "yellow":
+            continue
         
         # Try to get item-specific published date, fall back to channel date
         item_published = (
