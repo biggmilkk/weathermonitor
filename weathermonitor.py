@@ -13,9 +13,6 @@ from dateutil import parser as dateparser
 from streamlit_autorefresh import st_autorefresh
 import nest_asyncio
 
-# NEW: custom component for viewport width
-from mobile_detect import mobile_viewport_width, is_mobile_width
-
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from computation import compute_counts
@@ -49,9 +46,6 @@ nest_asyncio.apply()
 # Page config FIRST (avoid emitting UI before this)
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
-
-st.markdown("<style>[data-testid='stSkeleton']{display:none!important}</style>", unsafe_allow_html=True)
-
 
 # --------------------------------------------------------------------
 # Adaptive memory & concurrency autotuning
@@ -257,78 +251,109 @@ st.caption(
 st.markdown("---")
 
 # --------------------------------------------------------------------
-# ONE-LAYOUT SWITCH with AUTO-DETECT (custom component)
-#   Priority: query (?view=mobile/desktop) > env/secrets > auto width (component)
+# Feed buttons row — professional highlight using Streamlit's primary style
 # --------------------------------------------------------------------
 
-# Ask the invisible component for viewport width; returns int after first render
-vw = mobile_viewport_width(default=None)  # None until first value arrives
+if not FEED_CONFIG:
+    st.info("No feeds configured.")
+    st.stop()
 
-# Read overrides
-try:
-    qp = st.query_params  # Streamlit >= 1.31
-    view_override = (qp.get("view") or "").lower()
-except Exception:
-    try:
-        view_override = (st.experimental_get_query_params().get("view", [""])[0] or "").lower()
-    except Exception:
-        view_override = ""
+cols = st.columns(len(FEED_CONFIG))
+badge_placeholders = {}
+_toggled = False  # track whether we toggled so we can rerun exactly once
 
-FORCE_MOBILE_ENV = os.environ.get("FORCE_MOBILE", "")
-FORCE_MOBILE_SECRET = (st.secrets.get("FORCE_MOBILE", "") if hasattr(st, "secrets") else "")
+for i, (key, conf) in enumerate(FEED_CONFIG.items()):
+    entries = st.session_state[f"{key}_data"]
 
-if view_override == "mobile" or FORCE_MOBILE_ENV == "1" or FORCE_MOBILE_SECRET == "1":
-    IS_MOBILE_COMPACT = True
-elif view_override == "desktop":
-    IS_MOBILE_COMPACT = False
-else:
-    # AUTO: fall back to component-reported width (works in iOS Safari)
-    IS_MOBILE_COMPACT = is_mobile_width(vw, threshold=768)
-
-# Optional smoothing: remember last decision until component reports
-if vw is None and "last_layout_mobile" in st.session_state:
-    IS_MOBILE_COMPACT = st.session_state["last_layout_mobile"]
-else:
-    st.session_state["last_layout_mobile"] = IS_MOBILE_COMPACT
-
-# --------------------------------------------------------------------
-# Shared helpers
-# --------------------------------------------------------------------
-
-def _compute_new_count_for_feed(key, conf, entries):
-    # Compute baseline NEW count (per-feed strategy) — mirrors original logic
+    # Compute baseline NEW count (per-feed strategy)
     if conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
         _, new_count = compute_counts(entries, conf, seen_ids, alert_id_fn=alert_id)
-        return new_count
+
     elif conf["type"] == "ec_async":
         ec_total = st.session_state.get(f"{key}_remaining_new_total")
         if isinstance(ec_total, int):
-            return ec_total
-        new_count = ec_remaining_new_total(key, entries)
-        st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
-        return new_count
+            new_count = ec_total
+        else:
+            new_count = ec_remaining_new_total(key, entries)
+            st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
+
     elif conf["type"] == "nws_grouped_compact":
         nws_total = st.session_state.get(f"{key}_remaining_new_total")
         if isinstance(nws_total, int):
-            return nws_total
-        new_count = nws_remaining_new_total(key, entries)
-        st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
-        return new_count
+            new_count = nws_total
+        else:
+            new_count = nws_remaining_new_total(key, entries)
+            st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
+
     else:
         seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
         _, new_count = compute_counts(entries, conf, seen_ts)
-        return new_count
 
-def _render_feed_inline(key, conf, entries, badge_placeholders):
-    """Inline renderer under the active button, reusing your existing per-feed logic."""
+    with cols[i]:
+        is_active = (st.session_state.get("active_feed") == key)
+
+        # Professional, minimal highlight: use primary button type for the active feed
+        clicked = st.button(
+            conf.get("label", key.upper()),
+            key=f"btn_{key}_{i}",
+            use_container_width=True,
+            type=("primary" if is_active else "secondary"),
+        )
+
+        # Badge placeholder and draw
+        badge_ph = st.empty()
+        badge_placeholders[key] = badge_ph
+        draw_badge(badge_ph, safe_int(new_count))
+
+        # Click handling with immediate rerun to avoid "extra click" artifacts
+        if clicked:
+            if st.session_state.get("active_feed") == key:
+                # Closing an open feed → snapshot "seen" where appropriate
+                if conf["type"] == "rss_meteoalarm":
+                    st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
+                elif conf["type"] in ("ec_async", "nws_grouped_compact"):
+                    # EC/NWS per-bucket close/open handled inside their renderers
+                    pass
+                else:
+                    st.session_state[f"{key}_last_seen_time"] = time.time()
+                st.session_state["active_feed"] = None
+            else:
+                # Opening a feed
+                st.session_state["active_feed"] = key
+                if conf["type"] == "rss_meteoalarm":
+                    st.session_state[f"{key}_pending_seen_time"] = time.time()
+                elif conf["type"] in ("ec_async", "nws_grouped_compact"):
+                    # Renderers manage per-bucket pending snapshots
+                    st.session_state[f"{key}_pending_seen_time"] = None
+                else:
+                    st.session_state[f"{key}_pending_seen_time"] = time.time()
+            _toggled = True
+
+# Force a single rerun if any button toggled, so the highlight/badges are fresh immediately
+if _toggled:
+    _immediate_rerun()
+
+# --------------------------------------------------------------------
+# Display details for the active feed
+# --------------------------------------------------------------------
+
+active = st.session_state["active_feed"]
+if active:
+    st.markdown("---")
+    conf = FEED_CONFIG[active]
+    entries = st.session_state[f"{active}_data"]
     data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
 
+    # --- BOM (grouped) ---
     if conf["type"] == "rss_bom_multi":
-        RENDERERS["rss_bom_multi"](entries, {**conf, "key": key})
+        RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
 
+    # --- Environment Canada compact grouped (warnings+watch only) ---
     elif conf["type"] == "ec_async":
-        # Mark all as seen (inline)
+        # ---------------- EC: Mark all as seen button ----------------
+        # Keys used by the EC renderer: "Province|Warning"
+        # We replicate that here to set all last-seen to 'now'.
         _PROVINCE_NAMES = {
             "AB": "Alberta", "BC": "British Columbia", "MB": "Manitoba",
             "NB": "New Brunswick", "NL": "Newfoundland and Labrador",
@@ -336,83 +361,123 @@ def _render_feed_inline(key, conf, entries, badge_placeholders):
             "ON": "Ontario", "PE": "Prince Edward Island", "QC": "Quebec",
             "SK": "Saskatchewan", "YT": "Yukon",
         }
-        top_cols = st.columns([0.5, 0.5])
+        top_cols = st.columns([0.25, 0.75])
         with top_cols[0]:
-            if st.button("Mark all as seen", key=f"{key}_mark_all_seen_inline"):
-                lastseen_key = f"{key}_bucket_last_seen"
+            if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
+                lastseen_key = f"{active}_bucket_last_seen"
                 bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
                 now_ts = time.time()
-                for k2 in list(bucket_lastseen.keys()):
-                    bucket_lastseen[k2] = now_ts
+
+                # 1) Update all existing keys in the map (if any)
+                for k in list(bucket_lastseen.keys()):
+                    bucket_lastseen[k] = now_ts
+
+                # 2) Also make sure current entries' buckets are present & set
                 for e in entries:
                     bucket = ec_bucket_from_title(e.get("title","") or "")
                     if not bucket:
                         continue
                     code = e.get("province", "")
                     prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
-                    bkey2 = f"{prov_name}|{bucket}"
-                    bucket_lastseen[bkey2] = now_ts
+                    bkey = f"{prov_name}|{bucket}"
+                    bucket_lastseen[bkey] = now_ts
+
                 st.session_state[lastseen_key] = bucket_lastseen
-                st.session_state[f"{key}_remaining_new_total"] = 0
-                ph2 = badge_placeholders.get(key)
-                if ph2 is not None:
-                    draw_badge(ph2, 0)
+
+                # Zero-out badge immediately and rerun for fresh UI
+                st.session_state[f"{active}_remaining_new_total"] = 0
+                ph = badge_placeholders.get(active)
+                if ph is not None:
+                    draw_badge(ph, 0)
                 _immediate_rerun()
+        # -------------------------------------------------------------
 
-        RENDERERS["ec_grouped_compact"](entries, {**conf, "key": key})
-        ec_total_now = ec_remaining_new_total(key, entries)
-        st.session_state[f"{key}_remaining_new_total"] = int(ec_total_now)
-        ph2 = badge_placeholders.get(key)
-        if ph2 is not None:
-            draw_badge(ph2, safe_int(ec_total_now))
+        RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
 
+        # After rendering, recompute aggregate NEW using renderer's per-bucket last_seen map
+        ec_total_now = ec_remaining_new_total(active, entries)
+        st.session_state[f"{active}_remaining_new_total"] = int(ec_total_now)
+
+        # Repaint the main badge now so closing a bucket updates the count immediately
+        ph = badge_placeholders.get(active)
+        if ph is not None:
+            draw_badge(ph, safe_int(ec_total_now))
+
+    # --- NWS (grouped compact, US) ---
     elif conf["type"] == "nws_grouped_compact":
-        top_cols = st.columns([0.5, 0.5])
+        # ---------------- NWS: Mark all as seen button ----------------
+        top_cols = st.columns([0.25, 0.75])
         with top_cols[0]:
-            if st.button("Mark all as seen", key=f"{key}_mark_all_seen_inline"):
-                lastseen_key = f"{key}_bucket_last_seen"
+            if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
+                lastseen_key = f"{active}_bucket_last_seen"
                 bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
                 now_ts = time.time()
+
+                # Compute current buckets from entries: "State|Bucket"
                 for a in entries:
                     state = (a.get("state") or a.get("state_name") or a.get("state_code") or "Unknown")
                     bucket = (a.get("bucket") or a.get("event") or a.get("title") or "Alert")
-                    bkey2 = f"{state}|{bucket}"
-                    bucket_lastseen[bkey2] = now_ts
+                    bkey = f"{state}|{bucket}"
+                    bucket_lastseen[bkey] = now_ts
+
                 st.session_state[lastseen_key] = bucket_lastseen
-                st.session_state[f"{key}_remaining_new_total"] = 0
-                ph2 = badge_placeholders.get(key)
-                if ph2 is not None:
-                    draw_badge(ph2, 0)
+
+                # Also zero-out the badge immediately for UX consistency
+                st.session_state[f"{active}_remaining_new_total"] = 0
+                ph = badge_placeholders.get(active)
+                if ph is not None:
+                    draw_badge(ph, 0)
+
                 _immediate_rerun()
+        # -------------------------------------------------------------
 
-        RENDERERS["nws_grouped_compact"](entries, {**conf, "key": key})
-        nws_total_now = nws_remaining_new_total(key, entries)
-        st.session_state[f"{key}_remaining_new_total"] = int(nws_total_now)
-        ph2 = badge_placeholders.get(key)
-        if ph2 is not None:
-            draw_badge(ph2, safe_int(nws_total_now))
+        RENDERERS["nws_grouped_compact"](entries, {**conf, "key": active})
 
+        # After rendering, recompute aggregate NEW using renderer's per-bucket last_seen map
+        nws_total_now = nws_remaining_new_total(active, entries)
+        st.session_state[f"{active}_remaining_new_total"] = int(nws_total_now)
+
+        # Repaint the main badge now so closing a bucket updates the count immediately
+        ph = badge_placeholders.get(active)
+        if ph is not None:
+            draw_badge(ph, safe_int(nws_total_now))
+
+    # --- Meteoalarm (countries) ---
     elif conf["type"] == "rss_meteoalarm":
-        seen_ids_inline = set(st.session_state[f"{key}_last_seen_alerts"])
-        countries = [c for c in data_list if meteoalarm_country_has_alerts(c)]
-        countries = meteoalarm_mark_and_sort(countries, seen_ids_inline)
-        for country in countries:
-            RENDERERS["rss_meteoalarm"](country, {**conf, "key": key})
-        st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(countries)
+        seen_ids = set(st.session_state[f"{active}_last_seen_alerts"])
 
+        # Filter to countries that actually have alerts
+        countries = [c for c in data_list if meteoalarm_country_has_alerts(c)]
+
+        # Mark new vs seen (per-alert) and sort by country title
+        countries = meteoalarm_mark_and_sort(countries, seen_ids)
+
+        # Render per country
+        for country in countries:
+            RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
+
+        # Commit snapshot of all currently visible alerts
+        st.session_state[f"{active}_last_seen_alerts"] = meteoalarm_snapshot_ids(countries)
+
+    # --- JMA ---
     elif conf["type"] == "rss_jma":
-        RENDERERS["rss_jma"](entries, {**conf, "key": key})
+        RENDERERS["rss_jma"](entries, {**conf, "key": active})
 
     else:
         # Generic item-per-row renderer (JSON/NWS legacy/CMA etc.)
-        seen_ts_inline = st.session_state.get(f"{key}_last_seen_time") or 0.0
+        seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
+
+        # Show standard empty-state when there are no entries
         if not data_list:
             render_empty_state()
-            pkey = f"{key}_pending_seen_time"
+
+            # Snapshot "seen" to avoid perpetual NEW highlight on next non-empty refresh
+            pkey = f"{active}_pending_seen_time"
             pending = st.session_state.get(pkey, None)
             if pending is not None:
-                st.session_state[f"{key}_last_seen_time"] = float(pending)
+                st.session_state[f"{active}_last_seen_time"] = float(pending)
             st.session_state.pop(pkey, None)
+
         else:
             for item in data_list:
                 pub = item.get("published")
@@ -420,282 +485,12 @@ def _render_feed_inline(key, conf, entries, badge_placeholders):
                     ts = dateparser.parse(pub).timestamp() if pub else 0.0
                 except Exception:
                     ts = 0.0
-                item["is_new"] = bool(ts > seen_ts_inline)
+                item["is_new"] = bool(ts > seen_ts)  # renderer will draw left stripe if True
                 RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
-            pkey = f"{key}_pending_seen_time"
+
+            # Snapshot last seen timestamp for generic feeds
+            pkey = f"{active}_pending_seen_time"
             pending = st.session_state.get(pkey, None)
             if pending is not None:
-                st.session_state[f"{key}_last_seen_time"] = float(pending)
+                st.session_state[f"{active}_last_seen_time"] = float(pending)
             st.session_state.pop(pkey, None)
-
-# --------------------------------------------------------------------
-# Render either MOBILE (stacked + inline) OR DESKTOP (original row)
-# --------------------------------------------------------------------
-
-if IS_MOBILE_COMPACT:
-    # ---- MOBILE: stacked list; active feed renders inline under its button ----
-    if not FEED_CONFIG:
-        st.info("No feeds configured.")
-        st.stop()
-
-    badge_placeholders = {}
-    _toggled = False
-
-    for i, (key, conf) in enumerate(FEED_CONFIG.items()):
-        entries = st.session_state[f"{key}_data"]
-        new_count = _compute_new_count_for_feed(key, conf, entries)
-
-        with st.container():
-            is_active = (st.session_state.get("active_feed") == key)
-            clicked = st.button(
-                conf.get("label", key.upper()),
-                key=f"btn_mobile_{key}_{i}",
-                use_container_width=True,
-                type=("primary" if is_active else "secondary"),
-            )
-
-            ph = st.empty()
-            badge_placeholders[key] = ph
-            draw_badge(ph, safe_int(new_count))
-
-            if clicked:
-                if is_active:
-                    if conf["type"] == "rss_meteoalarm":
-                        st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                    elif conf["type"] not in ("ec_async", "nws_grouped_compact"):
-                        st.session_state[f"{key}_last_seen_time"] = time.time()
-                    st.session_state["active_feed"] = None
-                else:
-                    st.session_state["active_feed"] = key
-                    if conf["type"] == "rss_meteoalarm":
-                        st.session_state[f"{key}_pending_seen_time"] = time.time()
-                    elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                        st.session_state[f"{key}_pending_seen_time"] = None
-                    else:
-                        st.session_state[f"{key}_pending_seen_time"] = time.time()
-                _toggled = True
-
-            if st.session_state.get("active_feed") == key:
-                st.markdown("---")
-                _render_feed_inline(key, conf, entries, badge_placeholders)
-
-    if _toggled:
-        _immediate_rerun()
-
-else:
-    # ---- DESKTOP: original row of buttons; content rendered after all buttons ----
-    if not FEED_CONFIG:
-        st.info("No feeds configured.")
-        st.stop()
-
-    cols = st.columns(len(FEED_CONFIG))
-    badge_placeholders = {}
-    _toggled = False
-
-    for i, (key, conf) in enumerate(FEED_CONFIG.items()):
-        entries = st.session_state[f"{key}_data"]
-        new_count = _compute_new_count_for_feed(key, conf, entries)
-
-        with cols[i]:
-            is_active = (st.session_state.get("active_feed") == key)
-
-            # Professional, minimal highlight: use primary button type for the active feed
-            clicked = st.button(
-                conf.get("label", key.upper()),
-                key=f"btn_{key}_{i}",
-                use_container_width=True,
-                type=("primary" if is_active else "secondary"),
-            )
-
-            # Badge placeholder and draw
-            badge_ph = st.empty()
-            badge_placeholders[key] = badge_ph
-            draw_badge(badge_ph, safe_int(new_count))
-
-            # Click handling with immediate rerun to avoid "extra click" artifacts
-            if clicked:
-                if st.session_state.get("active_feed") == key:
-                    # Closing an open feed → snapshot "seen" where appropriate
-                    if conf["type"] == "rss_meteoalarm":
-                        st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                    elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                        # EC/NWS per-bucket close/open handled inside their renderers
-                        pass
-                    else:
-                        st.session_state[f"{key}_last_seen_time"] = time.time()
-                    st.session_state["active_feed"] = None
-                else:
-                    # Opening a feed
-                    st.session_state["active_feed"] = key
-                    if conf["type"] == "rss_meteoalarm":
-                        st.session_state[f"{key}_pending_seen_time"] = time.time()
-                    elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                        # Renderers manage per-bucket pending snapshots
-                        st.session_state[f"{key}_pending_seen_time"] = None
-                    else:
-                        st.session_state[f"{key}_pending_seen_time"] = time.time()
-                _toggled = True
-
-    # Force a single rerun if any button toggled, so the highlight/badges are fresh immediately
-    if _toggled:
-        _immediate_rerun()
-
-    # --------------------------------------------------------------------
-    # Display details for the active feed (original desktop behavior)
-    # --------------------------------------------------------------------
-    active = st.session_state["active_feed"]
-    if active:
-        st.markdown("---")
-        conf = FEED_CONFIG[active]
-        entries = st.session_state[f"{active}_data"]
-        data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
-
-        # --- BOM (grouped) ---
-        if conf["type"] == "rss_bom_multi":
-            RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
-
-        # --- Environment Canada compact grouped (warnings+watch only) ---
-        elif conf["type"] == "ec_async":
-            # ---------------- EC: Mark all as seen button ----------------
-            # Keys used by the EC renderer: "Province|Warning"
-            # We replicate that here to set all last-seen to 'now'.
-            _PROVINCE_NAMES = {
-                "AB": "Alberta", "BC": "British Columbia", "MB": "Manitoba",
-                "NB": "New Brunswick", "NL": "Newfoundland and Labrador",
-                "NT": "Northwest Territories", "NS": "Nova Scotia", "NU": "Nunavut",
-                "ON": "Ontario", "PE": "Prince Edward Island", "QC": "Quebec",
-                "SK": "Saskatchewan", "YT": "Yukon",
-            }
-            top_cols = st.columns([0.25, 0.75])
-            with top_cols[0]:
-                if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
-                    lastseen_key = f"{active}_bucket_last_seen"
-                    bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
-                    now_ts = time.time()
-
-                    # 1) Update all existing keys in the map (if any)
-                    for k in list(bucket_lastseen.keys()):
-                        bucket_lastseen[k] = now_ts
-
-                    # 2) Also make sure current entries' buckets are present & set
-                    for e in entries:
-                        bucket = ec_bucket_from_title(e.get("title","") or "")
-                        if not bucket:
-                            continue
-                        code = e.get("province", "")
-                        prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
-                        bkey = f"{prov_name}|{bucket}"
-                        bucket_lastseen[bkey] = now_ts
-
-                    st.session_state[lastseen_key] = bucket_lastseen
-
-                    # Zero-out badge immediately and rerun for fresh UI
-                    st.session_state[f"{active}_remaining_new_total"] = 0
-                    ph = badge_placeholders.get(active)
-                    if ph is not None:
-                        draw_badge(ph, 0)
-                    _immediate_rerun()
-            # -------------------------------------------------------------
-
-            RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
-
-            # After rendering, recompute aggregate NEW using renderer's per-bucket last_seen map
-            ec_total_now = ec_remaining_new_total(active, entries)
-            st.session_state[f"{active}_remaining_new_total"] = int(ec_total_now)
-
-            # Repaint the main badge now so closing a bucket updates the count immediately
-            ph = badge_placeholders.get(active)
-            if ph is not None:
-                draw_badge(ph, safe_int(ec_total_now))
-
-        # --- NWS (grouped compact, US) ---
-        elif conf["type"] == "nws_grouped_compact":
-            # ---------------- NWS: Mark all as seen button ----------------
-            top_cols = st.columns([0.25, 0.75])
-            with top_cols[0]:
-                if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
-                    lastseen_key = f"{active}_bucket_last_seen"
-                    bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
-                    now_ts = time.time()
-
-                    # Compute current buckets from entries: "State|Bucket"
-                    for a in entries:
-                        state = (a.get("state") or a.get("state_name") or a.get("state_code") or "Unknown")
-                        bucket = (a.get("bucket") or a.get("event") or a.get("title") or "Alert")
-                        bkey = f"{state}|{bucket}"
-                        bucket_lastseen[bkey] = now_ts
-
-                    st.session_state[lastseen_key] = bucket_lastseen
-
-                    # Also zero-out the badge immediately for UX consistency
-                    st.session_state[f"{active}_remaining_new_total"] = 0
-                    ph = badge_placeholders.get(active)
-                    if ph is not None:
-                        draw_badge(ph, 0)
-
-                    _immediate_rerun()
-            # -------------------------------------------------------------
-
-            RENDERERS["nws_grouped_compact"](entries, {**conf, "key": active})
-
-            # After rendering, recompute aggregate NEW using renderer's per-bucket last_seen map
-            nws_total_now = nws_remaining_new_total(active, entries)
-            st.session_state[f"{active}_remaining_new_total"] = int(nws_total_now)
-
-            # Repaint the main badge now so closing a bucket updates the count immediately
-            ph = badge_placeholders.get(active)
-            if ph is not None:
-                draw_badge(ph, safe_int(nws_total_now))
-
-        # --- Meteoalarm (countries) ---
-        elif conf["type"] == "rss_meteoalarm":
-            seen_ids = set(st.session_state[f"{active}_last_seen_alerts"])
-
-            # Filter to countries that actually have alerts
-            countries = [c for c in data_list if meteoalarm_country_has_alerts(c)]
-
-            # Mark new vs seen (per-alert) and sort by country title
-            countries = meteoalarm_mark_and_sort(countries, seen_ids)
-
-            # Render per country
-            for country in countries:
-                RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
-
-            # Commit snapshot of all currently visible alerts
-            st.session_state[f"{active}_last_seen_alerts"] = meteoalarm_snapshot_ids(countries)
-
-        # --- JMA ---
-        elif conf["type"] == "rss_jma":
-            RENDERERS["rss_jma"](entries, {**conf, "key": active})
-
-        else:
-            # Generic item-per-row renderer (JSON/NWS legacy/CMA etc.)
-            seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
-
-            # Show standard empty-state when there are no entries
-            if not data_list:
-                render_empty_state()
-
-                # Snapshot "seen" to avoid perpetual NEW highlight on next non-empty refresh
-                pkey = f"{active}_pending_seen_time"
-                pending = st.session_state.get(pkey, None)
-                if pending is not None:
-                    st.session_state[f"{active}_last_seen_time"] = float(pending)
-                st.session_state.pop(pkey, None)
-
-            else:
-                for item in data_list:
-                    pub = item.get("published")
-                    try:
-                        ts = dateparser.parse(pub).timestamp() if pub else 0.0
-                    except Exception:
-                        ts = 0.0
-                    item["is_new"] = bool(ts > seen_ts)  # renderer will draw left stripe if True
-                    RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
-
-                # Snapshot last seen timestamp for generic feeds
-                pkey = f"{active}_pending_seen_time"
-                pending = st.session_state.get(pkey, None)
-                if pending is not None:
-                    st.session_state[f"{active}_last_seen_time"] = float(pending)
-                st.session_state.pop(pkey, None)
