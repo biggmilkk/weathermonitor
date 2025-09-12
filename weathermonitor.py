@@ -231,22 +231,22 @@ if rss_after > MEMORY_HIGH_WATER: st.session_state["concurrency"] = max(MIN_CONC
 st.title("Global Weather Monitor")
 st.caption(f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
 
-left_tgl, _ = st.columns([0.25, 0.75])
-with left_tgl:
-    # Radio (icon-only via CSS; options order matters for icons)
-    prev = st.session_state["layout_mode"]
-    choice = st.radio(
-        label="",
-        options=["Desktop", "Mobile"],
-        index=(0 if prev == "Desktop" else 1),
-        horizontal=True,
-        label_visibility="collapsed",
-        key="layout_toggle_radio",
-    )
-    if choice != prev:
-        st.session_state["layout_mode"] = choice
-        st.session_state["mobile_view"] = "list"
-        _immediate_rerun()
+# left_tgl, _ = st.columns([0.25, 0.75])
+#with left_tgl:
+#    # Radio (icon-only via CSS; options order matters for icons)
+#    prev = st.session_state["layout_mode"]
+#    choice = st.radio(
+#        label="",
+#        options=["Desktop", "Mobile"],
+#        index=(0 if prev == "Desktop" else 1),
+#        horizontal=True,
+#        label_visibility="collapsed",
+#        key="layout_toggle_radio",
+#    )
+#    if choice != prev:
+#        st.session_state["layout_mode"] = choice
+#        st.session_state["mobile_view"] = "list"
+#        _immediate_rerun()
 
 st.markdown("---")
 
