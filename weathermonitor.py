@@ -53,7 +53,6 @@ logging.basicConfig(level=logging.WARNING)
 st.markdown(
     """
     <style>
-    /* Hide skeleton placeholder divs inserted by Streamlit */
     [data-testid="stSkeleton"] {
         display: none !important;
     }
