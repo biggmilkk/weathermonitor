@@ -38,7 +38,6 @@ nest_asyncio.apply()
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
 
-# Global CSS (top padding removal, topbar, and icon toggle)
 st.markdown("""
 <style>
 section.main > div.block-container { padding-top: 0.25rem !important; }
@@ -48,36 +47,44 @@ div[data-testid="stDecoration"] { display: none !important; }
           background: var(--background-color, white);
           padding: 6px 4px 6px 4px; border-bottom: none; }
 
-/* Minimal icon toggle (left-aligned) */
-.toggle-wrap { display: flex; gap: 8px; align-items: center; }
-.toggle-btn { font-weight: 600; padding: 0.35rem 0.6rem; border-radius: 8px; border: 1px solid transparent; }
-.toggle-active { background: #0f62fe; color: #fff; border-color: #0f62fe; }
-.toggle-inactive { background: #f4f4f4; color: #333; border-color: #e0e0e0; }
-
-/* Icon via CSS mask (no emoji) */
-.toggle-desktop button::before,
-.toggle-mobile button::before {
-  content: ""; display: inline-block; width: 14px; height: 14px; margin-right: 6px;
-  background: currentColor; -webkit-mask-size: cover; mask-size: cover;
-  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
-  vertical-align: -2px;
+/* Icon toggle */
+.icon-toggle { display: inline-flex; gap: 8px; align-items: center; }
+.icon-toggle .it-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 8px; text-decoration: none;
+  font-weight: 600; border: 1px solid #e0e0e0; color: #333; background: #f6f7f9;
 }
-/* Desktop icon (simple monitor) */
-.toggle-desktop button::before {
-  -webkit-mask-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/><rect x="9" y="18" width="6" height="2" fill="black"/></svg>');
-          mask-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/><rect x="9" y="18" width="6" height="2" fill="black"/></svg>');
+.icon-toggle .it-btn.active { background: #0f62fe; color: #fff; border-color: #0f62fe; }
+.icon-toggle .it-btn::before {
+  content: ""; width: 16px; height: 16px; background: currentColor;
+  -webkit-mask-size: cover; mask-size: cover; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  display: inline-block;
 }
-/* Mobile icon (simple phone) */
-.toggle-mobile button::before {
-  -webkit-mask-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/><circle cx="12" cy="18" r="1" fill="black"/></svg>');
-          mask-image: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/><circle cx="12" cy="18" r="1" fill="black"/></svg>');
+/* Desktop icon */
+.icon-toggle .desktop::before {
+  -webkit-mask-image: url('data:image/svg+xml;utf8,\
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
+<rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/>\
+<rect x="9" y="18" width="6" height="2" fill="black"/>\
+</svg>');
+          mask-image: url('data:image/svg+xml;utf8,\
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
+<rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/>\
+<rect x="9" y="18" width="6" height="2" fill="black"/>\
+</svg>');
 }
-
-/* Make our two toggle buttons compact */
-.toggle-desktop button, .toggle-mobile button {
-  width: 100%;
-  padding: 0.35rem 0.6rem;
-  border-radius: 8px;
+/* Mobile icon */
+.icon-toggle .mobile::before {
+  -webkit-mask-image: url('data:image/svg+xml;utf8,\
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
+<rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/>\
+<circle cx="12" cy="18" r="1" fill="black"/>\
+</svg>');
+          mask-image: url('data:image/svg+xml;utf8,\
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
+<rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/>\
+<circle cx="12" cy="18" r="1" fill="black"/>\
+</svg>');
 }
 </style>
 """, unsafe_allow_html=True)
@@ -126,7 +133,23 @@ for key, conf in FEED_CONFIG.items():
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
 st.session_state.setdefault("layout_mode", "Desktop")
-st.session_state.setdefault("mobile_view", "list")  # list | detail
+st.session_state.setdefault("mobile_view", "list")
+
+# Sync layout via query params
+qp = {}
+try:
+    qp = st.query_params  # new API
+except Exception:
+    try:
+        qp = st.experimental_get_query_params()
+    except Exception:
+        qp = {}
+q_layout = (qp.get("layout") if isinstance(qp.get("layout"), str) else (qp.get("layout", [None])[0])) if qp else None
+if q_layout:
+    target = "Desktop" if q_layout.lower().startswith("desk") else "Mobile"
+    if target != st.session_state["layout_mode"]:
+        st.session_state["layout_mode"] = target
+        st.session_state["mobile_view"] = "list"
 
 # --------------------------------------------------------------------
 # Fetching
@@ -156,9 +179,7 @@ async def _fetch_all_feeds(configs: dict):
                         if k in ("label", "type"): continue
                         if k == "conf" and isinstance(v, dict): call_conf.update(v)
                         else: call_conf[k] = v
-                    t0 = time.perf_counter()
                     data = await SCRAPER_REGISTRY[conf["type"]](call_conf, client)
-                    _ = (time.perf_counter() - t0) * 1000
                     return data
                 try:
                     data = await with_retries(call)
@@ -167,7 +188,6 @@ async def _fetch_all_feeds(configs: dict):
                     logging.warning(traceback.format_exc())
                     data = {"entries": [], "error": str(ex), "source": conf}
                 return key, data
-
         tasks = [bound_fetch(k, cfg) for k, cfg in FEED_CONFIG.items() if k in configs]
         return await asyncio.gather(*tasks)
 
@@ -228,27 +248,23 @@ if rss_after > MEMORY_HIGH_WATER:
 st.title("Global Weather Monitor")
 st.caption(f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
 
-# Icon toggle (left-aligned, button style, no emoji)
-left_tgl, _ = st.columns([0.3, 0.7])
+# Icon toggle (left-aligned)
+desktop_active = (st.session_state["layout_mode"] == "Desktop")
+mobile_active = (st.session_state["layout_mode"] == "Mobile")
+desk_class = "it-btn desktop active" if desktop_active else "it-btn desktop"
+mob_class = "it-btn mobile active" if mobile_active else "it-btn mobile"
+
+left_tgl, _ = st.columns([0.5, 0.5])
 with left_tgl:
-    st.markdown('<div class="toggle-wrap">', unsafe_allow_html=True)
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        cls = "toggle-btn toggle-active" if st.session_state["layout_mode"] == "Desktop" else "toggle-btn toggle-inactive"
-        st.markdown(f'<div class="toggle-desktop"><span></span></div>', unsafe_allow_html=True)
-        if st.button("Desktop", key="toggle_desktop_btn", use_container_width=True, type=("primary" if "active" in cls else "secondary")):
-            if st.session_state["layout_mode"] != "Desktop":
-                st.session_state["layout_mode"] = "Desktop"
-                st.session_state["mobile_view"] = "list"
-                _immediate_rerun()
-    with c2:
-        cls = "toggle-btn toggle-active" if st.session_state["layout_mode"] == "Mobile" else "toggle-btn toggle-inactive"
-        st.markdown(f'<div class="toggle-mobile"><span></span></div>', unsafe_allow_html=True)
-        if st.button("Mobile", key="toggle_mobile_btn", use_container_width=True, type=("primary" if "active" in cls else "secondary")):
-            if st.session_state["layout_mode"] != "Mobile":
-                st.session_state["layout_mode"] = "Mobile"
-                st.session_state["mobile_view"] = "list"
-                _immediate_rerun()
+    st.markdown(
+        f"""
+        <div class="icon-toggle">
+          <a class="{desk_class}" href="?layout=desktop">Desktop</a>
+          <a class="{mob_class}" href="?layout=mobile">Mobile</a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 st.markdown("---")
 
 # --------------------------------------------------------------------
@@ -274,8 +290,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                 lastseen_key = f"{active}_bucket_last_seen"
                 bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
                 now_ts = time.time()
-                for k in list(bucket_lastseen.keys()):
-                    bucket_lastseen[k] = now_ts
+                for k in list(bucket_lastseen.keys()): bucket_lastseen[k] = now_ts
                 for e in entries:
                     bucket = ec_bucket_from_title(e.get("title","") or "")
                     if not bucket: continue
@@ -408,7 +423,6 @@ if st.session_state["layout_mode"] == "Mobile":
         conf = FEED_CONFIG[active]
         entries = st.session_state[f"{active}_data"]
 
-        # topbar (flush, no white bar)
         with st.container():
             st.markdown('<div class="topbar">', unsafe_allow_html=True)
             tb = st.columns([0.15, 0.70, 0.15])
@@ -426,6 +440,7 @@ if st.session_state["layout_mode"] == "Mobile":
             with tb[2]:
                 pass
             st.markdown("</div>", unsafe_allow_html=True)
+
         _render_feed_details(active, conf, entries, badge_placeholders=None)
 
 # --------------------------------------------------------------------
