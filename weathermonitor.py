@@ -11,7 +11,6 @@ from renderer import (
     RENDERERS,
     ec_remaining_new_total,
     nws_remaining_new_total,
-    uk_remaining_new_total,   # UK helper for NEW math
     ec_bucket_from_title,
     draw_badge,
     safe_int,
@@ -65,7 +64,7 @@ now = time.time()
 for key, conf in FEED_CONFIG.items():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
-    st.session_state.setdefault(f"{key}_last_seen_time", 0.0)
+    st.session_state.setdefault(f"{key}_last_seen_time", 0.0) 
     st.session_state.setdefault(f"{key}_pending_seen_time", None)
     if conf["type"] == "rss_meteoalarm":
         st.session_state.setdefault(f"{key}_last_seen_alerts", tuple())
@@ -128,23 +127,6 @@ def _immediate_rerun():
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
 
-# Helper function to initialize bucket last seen for UK feed
-def _initialize_uk_bucket_last_seen(key, entries):
-    """Initialize UK bucket last_seen map if it doesn't exist"""
-    lastseen_key = f"{key}_bucket_last_seen"
-    bucket_lastseen = st.session_state.get(lastseen_key, {})
-    
-    if not bucket_lastseen:
-        # First time opening - set all buckets to 0.0 to show everything as NEW
-        for e in entries:
-            region = e.get("region", "Unknown")
-            bucket = e.get("bucket", e.get("title", "Alert"))
-            bkey = f"{region}|{bucket}"
-            bucket_lastseen[bkey] = 0.0
-        st.session_state[lastseen_key] = bucket_lastseen
-    
-    return bucket_lastseen
-
 # --------------------------------------------------------------------
 # Refresh
 # --------------------------------------------------------------------
@@ -159,31 +141,34 @@ if to_fetch:
         st.session_state["last_refreshed"] = now
         conf = FEED_CONFIG[key]
 
-        # When the details pane is open, some feeds snapshot "seen" differently
+        # When the details pane is open, snapshot seen (feed-dependent)
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
                 _, new_count = compute_counts(entries, conf, last_seen_ids, alert_id_fn=alert_id)
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-            elif conf["type"] in ("ec_async", "nws_grouped_compact", "uk_grouped_compact"):
-                # grouped feeds rely on per-bucket last-seen; do nothing here
+            elif conf["type"] in ("ec_async", "nws_grouped_compact"):
+                # grouped feeds use per-bucket last-seen inside renderer
                 pass
+            elif conf["type"] == "uk_grouped_compact":
+                # UK now uses a single feed-level last_seen_time (like BOM/JMA)
+                last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
+                _, new_count = compute_counts(entries, conf, last_seen_ts)
+                if new_count == 0:
+                    st.session_state[f"{key}_last_seen_time"] = now
             else:
                 last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
                 _, new_count = compute_counts(entries, conf, last_seen_ts)
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_time"] = now
 
-        # Precompute remaining NEW totals for badge row
+        # Precompute remaining NEW totals for badge row (where applicable)
         if conf["type"] == "ec_async":
             st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
         elif conf["type"] == "nws_grouped_compact":
             st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
-        elif conf["type"] == "uk_grouped_compact":
-            # Initialize bucket tracking for UK if needed
-            _initialize_uk_bucket_last_seen(key, entries)
-            st.session_state[f"{key}_remaining_new_total"] = uk_remaining_new_total(key, entries)
+        # UK: no precompute via uk_remaining_new_total anymore — handled like generic feeds
 
         gc.collect()
 
@@ -293,37 +278,14 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
     elif conf["type"] == "uk_grouped_compact":
         if not entries:
             st.info("No active warnings that meet thresholds at the moment.")
-            st.session_state[f"{active}_remaining_new_total"] = 0
             return
 
-        # Initialize bucket tracking if needed
-        bucket_lastseen = _initialize_uk_bucket_last_seen(active, entries)
-        lastseen_key = f"{active}_bucket_last_seen"
-
-        cols = st.columns([0.25, 0.75])
-        with cols[0]:
-            if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
-                now_ts = time.time()
-                for a in entries:
-                    region = (a.get("region") or "Unknown")
-                    bucket = (a.get("bucket") or a.get("title") or "Alert")
-                    bkey = f"{region}|{bucket}"
-                    bucket_lastseen[bkey] = now_ts
-                st.session_state[lastseen_key] = bucket_lastseen
-                st.session_state[f"{active}_remaining_new_total"] = 0
-                if badge_placeholders:
-                    ph = badge_placeholders.get(active)
-                    if ph:
-                        draw_badge(ph, 0)
-                _immediate_rerun()
-
         RENDERERS["uk_grouped_compact"](entries, {**conf, "key": active})
-        uk_total_now = uk_remaining_new_total(active, entries)
-        st.session_state[f"{active}_remaining_new_total"] = int(uk_total_now)
+
         if badge_placeholders:
             ph = badge_placeholders.get(active)
             if ph:
-                draw_badge(ph, safe_int(uk_total_now))
+                draw_badge(ph, 0)
 
     elif conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{active}_last_seen_alerts"])
@@ -376,8 +338,10 @@ def _new_count_for(key, conf, entries):
         val = st.session_state.get(f"{key}_remaining_new_total")
         return int(val) if isinstance(val, int) else int(nws_remaining_new_total(key, entries) or 0)
     if conf["type"] == "uk_grouped_compact":
-        val = st.session_state.get(f"{key}_remaining_new_total")
-        return int(val) if isinstance(val, int) else int(uk_remaining_new_total(key, entries) or 0)
+        # UK now uses feed-level last_seen_time like BOM/JMA
+        seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
+        _, new_count = compute_counts(entries, conf, seen_ts)
+        return new_count
     seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
     _, new_count = compute_counts(entries, conf, seen_ts)
     return new_count
@@ -407,16 +371,9 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         new_count = nws_total if isinstance(nws_total, int) else nws_remaining_new_total(key, entries)
         st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
     elif conf["type"] == "uk_grouped_compact":
-        # Initialize UK bucket tracking and compute new count
-        if entries:
-            _initialize_uk_bucket_last_seen(key, entries)
-            # Debug UK entries
-            for e in entries[:3]:  # Log first 3 entries for debugging
-                logging.info(f"[UK-MET Badge] Entry: region={e.get('region')}, bucket={e.get('bucket')}, published={e.get('published')}")
-        uk_total = st.session_state.get(f"{key}_remaining_new_total")
-        new_count = uk_total if isinstance(uk_total, int) else uk_remaining_new_total(key, entries)
-        st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
-        logging.info(f"[UK-MET Badge] Final new_count for {key}: {new_count}")
+        # UK badges computed like BOM/JMA using a single last_seen_time
+        seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
+        _, new_count = compute_counts(entries, conf, seen_ts)
     else:
         seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
         _, new_count = compute_counts(entries, conf, seen_ts)
@@ -435,9 +392,12 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 # Closing the panel: mark seen per feed type
                 if conf["type"] == "rss_meteoalarm":
                     st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                elif conf["type"] in ("ec_async", "nws_grouped_compact", "uk_grouped_compact"):
+                elif conf["type"] in ("ec_async", "nws_grouped_compact"):
                     # Grouped feeds rely on per-bucket last-seen; do nothing here
                     pass
+                elif conf["type"] == "uk_grouped_compact":
+                    # Feed-level last_seen like BOM/JMA
+                    st.session_state[f"{key}_last_seen_time"] = time.time()
                 else:
                     st.session_state[f"{key}_last_seen_time"] = time.time()
                 st.session_state["active_feed"] = None
@@ -446,8 +406,10 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
                 st.session_state["active_feed"] = key
                 if conf["type"] == "rss_meteoalarm":
                     st.session_state[f"{key}_pending_seen_time"] = time.time()
-                elif conf["type"] in ("ec_async", "nws_grouped_compact", "uk_grouped_compact"):
+                elif conf["type"] in ("ec_async", "nws_grouped_compact"):
                     st.session_state[f"{key}_pending_seen_time"] = None
+                elif conf["type"] == "uk_grouped_compact":
+                    st.session_state[f"{key}_pending_seen_time"] = time.time()
                 else:
                     st.session_state[f"{key}_pending_seen_time"] = time.time()
             _toggled = True
