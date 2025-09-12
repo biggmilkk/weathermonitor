@@ -652,7 +652,7 @@ def render_meteoalarm(item, conf):
         total_severe = 0
 
     title = _norm(item.get("title", ""))
-    header_txt  = f"{title} ({total_severe})" if total_severe > 0 else title
+    header_txt  = f"{title} ({total_severe} active)" if total_severe > 0 else title
     header_html = _stripe_wrap(f"<h2>{html.escape(header_txt)}</h2>", _any_new(item))
     st.markdown(header_html, unsafe_allow_html=True)
 
@@ -693,7 +693,7 @@ def render_meteoalarm(item, conf):
                 prefix = "[NEW] " if e.get("is_new") else ""
 
                 n = _day_level_type_count(day, level, typ)
-                count_str = f" ({n})" if isinstance(n, int) and n > 0 else ""
+                count_str = f" ({n} active)" if isinstance(n, int) and n > 0 else ""
 
                 text = f"{prefix}[{level}] {typ}{count_str} – {dt1} to {dt2}"
                 st.markdown(
