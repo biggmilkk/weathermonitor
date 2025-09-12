@@ -410,9 +410,13 @@ for i, (key, conf) in enumerate(FEED_CONFIG.items()):
         # Initialize UK bucket tracking and compute new count
         if entries:
             _initialize_uk_bucket_last_seen(key, entries)
+            # Debug UK entries
+            for e in entries[:3]:  # Log first 3 entries for debugging
+                logging.info(f"[UK-MET Badge] Entry: region={e.get('region')}, bucket={e.get('bucket')}, published={e.get('published')}")
         uk_total = st.session_state.get(f"{key}_remaining_new_total")
         new_count = uk_total if isinstance(uk_total, int) else uk_remaining_new_total(key, entries)
         st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
+        logging.info(f"[UK-MET Badge] Final new_count for {key}: {new_count}")
     else:
         seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
         _, new_count = compute_counts(entries, conf, seen_ts)
