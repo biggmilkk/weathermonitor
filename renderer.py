@@ -372,12 +372,12 @@ def render_ec_grouped_compact(entries, conf):
                 )
                 if new_count > 0:
                     st.markdown(
-                        "<span style='margin-left:6px;padding:2px 6px;"
-                        "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
-                        "font-weight:bold;display:inline-block;'>"
-                        f"❗ {new_count} New</span>",
-                        unsafe_allow_html=True,
-                    )
+                        "<span style='margin-left:6px;padding:2px 6px;"""
+                    "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
+                    "font-weight:bold;display:inline-block;'>"
+                    f"❗ {new_count} New</span>",
+                    unsafe_allow_html=True,
+                )
                 else:
                     st.write("")
 
@@ -548,10 +548,10 @@ def render_nws_grouped_compact(entries, conf):
                 if new_count > 0:
                     st.markdown(
                         "<span style='margin-left:6px;padding:2px 6px;"
-                        "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
-                        "font-weight:bold;display:inline-block;'>"
-                        f"❗ {new_count} New</span>",
-                        unsafe_allow_html=True,
+                    "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
+                    "font-weight:bold;display:inline-block;'>"
+                    f"❗ {new_count} New</span>",
+                    unsafe_allow_html=True,
                     )
                 else:
                     st.write("")
