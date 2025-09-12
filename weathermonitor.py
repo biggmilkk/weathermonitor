@@ -13,6 +13,9 @@ from dateutil import parser as dateparser
 from streamlit_autorefresh import st_autorefresh
 import nest_asyncio
 
+# NEW: custom component for viewport width
+from mobile_detect import mobile_viewport_width, is_mobile_width
+
 from feeds import get_feed_definitions
 from utils.scraper_registry import SCRAPER_REGISTRY
 from computation import compute_counts
@@ -251,10 +254,14 @@ st.caption(
 st.markdown("---")
 
 # --------------------------------------------------------------------
-# ONE-LAYOUT SWITCH (server-side, no CSS/JS)
-#   - Default: Desktop layout
-#   - Force mobile by URL (?view=mobile), env FORCE_MOBILE=1, or secrets["FORCE_MOBILE"]="1"
+# ONE-LAYOUT SWITCH with AUTO-DETECT (custom component)
+#   Priority: query (?view=mobile/desktop) > env/secrets > auto width (component)
 # --------------------------------------------------------------------
+
+# Ask the invisible component for viewport width; returns int after first render
+vw = mobile_viewport_width(default=None)  # None until first value arrives
+
+# Read overrides
 try:
     qp = st.query_params  # Streamlit >= 1.31
     view_override = (qp.get("view") or "").lower()
@@ -267,11 +274,19 @@ except Exception:
 FORCE_MOBILE_ENV = os.environ.get("FORCE_MOBILE", "")
 FORCE_MOBILE_SECRET = (st.secrets.get("FORCE_MOBILE", "") if hasattr(st, "secrets") else "")
 
-IS_MOBILE_COMPACT = (
-    view_override == "mobile"
-    or FORCE_MOBILE_ENV == "1"
-    or FORCE_MOBILE_SECRET == "1"
-)
+if view_override == "mobile" or FORCE_MOBILE_ENV == "1" or FORCE_MOBILE_SECRET == "1":
+    IS_MOBILE_COMPACT = True
+elif view_override == "desktop":
+    IS_MOBILE_COMPACT = False
+else:
+    # AUTO: fall back to component-reported width (works in iOS Safari)
+    IS_MOBILE_COMPACT = is_mobile_width(vw, threshold=768)
+
+# Optional smoothing: remember last decision until component reports
+if vw is None and "last_layout_mobile" in st.session_state:
+    IS_MOBILE_COMPACT = st.session_state["last_layout_mobile"]
+else:
+    st.session_state["last_layout_mobile"] = IS_MOBILE_COMPACT
 
 # --------------------------------------------------------------------
 # Shared helpers
