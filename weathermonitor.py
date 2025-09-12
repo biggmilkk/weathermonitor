@@ -31,60 +31,69 @@ logging.basicConfig(level=logging.WARNING)
 
 st.markdown("""
 <style>
-/* Flush top – remove default padding/decoration for clean sticky bar */
-section.main > div.block-container { padding-top: 0.25rem !important; }
+/* Remove top padding/decoration and default margins to kill the white bar */
+section.main > div.block-container { padding-top: 0 !important; }
 div[data-testid="stDecoration"] { display: none !important; }
+.stMarkdown, [data-testid="stMarkdown"], [data-testid="stMarkdownContainer"] { margin: 0 !important; padding: 0 !important; }
 
 /* Mobile detail sticky top bar */
-.topbar { position: sticky; top: 0; z-index: 3;
-          background: var(--background-color, white);
-          padding: 6px 4px 6px 4px; border-bottom: none; }
+.topbar { position: sticky; top: 0; z-index: 3; background: var(--background-color, white);
+          padding: 6px 4px 6px 4px; margin: 0 !important; border-bottom: none; }
 
-/* Icon-only layout toggle (left) */
-.icon-toggle-wrap { display: flex; gap: 8px; align-items: center; }
-.icon-toggle-col { width: 40px; }  /* compact */
-.icon-toggle { }
-.icon-toggle button {
-  width: 40px; height: 36px; padding: 0; border-radius: 8px;
+/* Icon-only radio toggle (left) */
+.icon-radio-wrap { display:flex; gap:8px; align-items:center; }
+[data-testid="stRadio"] { margin-bottom: 0 !important; }
+[data-testid="stRadio"] > div { display:flex; align-items:center; }
+[data-testid="stRadio"] div[role="radiogroup"] { display:flex; gap:8px; }
+
+/* Style each radio label as a small rounded button with an icon */
+[data-testid="stRadio"] div[role="radiogroup"] label {
+  border: 1px solid #e0e0e0; background:#f4f4f4; color:#333;
+  padding: 6px 10px; border-radius: 8px; min-width: 40px; justify-content: center;
 }
-.icon-toggle button span { font-size: 0 !important; } /* hide text label */
+[data-testid="stRadio"] div[role="radiogroup"] label:hover { filter: brightness(0.98); }
 
-/* Base skin */
-.icon-toggle .active button { background: #0f62fe; color: #fff; border-color: #0f62fe; }
-.icon-toggle .inactive button { background: #f4f4f4; color: #333; border: 1px solid #e0e0e0; }
-
-/* Draw SVG icon inside the real Streamlit button using ::before */
-.icon-toggle button::before {
-  content: ""; width: 16px; height: 16px; display: inline-block;
-  background: currentColor;
-  -webkit-mask-size: cover; mask-size: cover;
-  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
-  vertical-align: -2px;
+/* Hide the text inside radio labels (we’ll show icons only) */
+[data-testid="stRadio"] div[role="radiogroup"] label p,
+[data-testid="stRadio"] div[role="radiogroup"] label span {
+  font-size: 0 !important; line-height: 0 !important; margin: 0 !important; padding: 0 !important;
 }
 
-/* Desktop icon */
-.icon-toggle.desktop button::before {
+/* Selected state tint */
+[data-testid="stRadio"] div[role="radiogroup"] input:checked + div {
+  background: #0f62fe !important; color: #fff !important; border-color: #0f62fe !important;
+}
+
+/* Inject icons via ::before on each label */
+[data-testid="stRadio"] div[role="radiogroup"] label::before {
+  content: ""; width: 16px; height:16px; display:inline-block; margin: 0;
+  background: currentColor; vertical-align: -2px;
+  -webkit-mask-size: cover; mask-size: cover; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+}
+
+/* First option = Desktop icon */
+[data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(1)::before {
   -webkit-mask-image: url('data:image/svg+xml;utf8,\
-<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
 <rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/>\
 <rect x="9" y="18" width="6" height="2" fill="black"/>\
 </svg>');
           mask-image: url('data:image/svg+xml;utf8,\
-<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
 <rect x="3" y="4" width="18" height="12" rx="2" ry="2" fill="black"/>\
 <rect x="9" y="18" width="6" height="2" fill="black"/>\
 </svg>');
 }
 
-/* Mobile icon */
-.icon-toggle.mobile button::before {
+/* Second option = Mobile icon */
+[data-testid="stRadio"] div[role="radiogroup"] label:nth-of-type(2)::before {
   -webkit-mask-image: url('data:image/svg+xml;utf8,\
-<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
 <rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/>\
 <circle cx="12" cy="18" r="1" fill="black"/>\
 </svg>');
           mask-image: url('data:image/svg+xml;utf8,\
-<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\
 <rect x="7" y="2" width="10" height="20" rx="2" ry="2" fill="black"/>\
 <circle cx="12" cy="18" r="1" fill="black"/>\
 </svg>');
@@ -128,8 +137,8 @@ for key, conf in FEED_CONFIG.items():
         st.session_state.setdefault(f"{key}_last_seen_alerts", tuple())
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
-st.session_state.setdefault("layout_mode", "Desktop")   # "Desktop" | "Mobile"
-st.session_state.setdefault("mobile_view", "list")      # "list" | "detail"
+st.session_state.setdefault("layout_mode", "Desktop")   # Desktop | Mobile
+st.session_state.setdefault("mobile_view", "list")      # list | detail
 
 # --------------------------------------------------------------------
 # Fetching
@@ -154,8 +163,8 @@ async def _fetch_all_feeds(configs: dict):
                     call_conf = {}
                     for k,v in conf.items():
                         if k in ("label","type"): continue
-                        if k=="conf" and isinstance(v,dict): call_conf.update(v)
-                        else: call_conf[k]=v
+                        if k == "conf" and isinstance(v, dict): call_conf.update(v)
+                        else: call_conf[k] = v
                     return await SCRAPER_REGISTRY[conf["type"]](call_conf, client)
                 try: data = await with_retries(call)
                 except Exception as ex:
@@ -163,7 +172,7 @@ async def _fetch_all_feeds(configs: dict):
                     logging.warning(traceback.format_exc())
                     data = {"entries": [], "error": str(ex), "source": conf}
                 return key, data
-        tasks = [bound_fetch(k, cfg) for k,cfg in FEED_CONFIG.items() if k in configs]
+        tasks = [bound_fetch(k,cfg) for k,cfg in FEED_CONFIG.items() if k in configs]
         return await asyncio.gather(*tasks)
 
 def run_async(coro):
@@ -221,32 +230,22 @@ if rss_after > MEMORY_HIGH_WATER: st.session_state["concurrency"] = max(MIN_CONC
 st.title("Global Weather Monitor")
 st.caption(f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
 
-# Icon-only toggle (left) – no reload, pure state change
-tgl_row, _ = st.columns([0.25, 0.75])
-with tgl_row:
-    c1, c2 = st.columns([1,1])
-
-    with c1:
-        st.markdown('<div class="icon-toggle-wrap"><div class="icon-toggle desktop {state}">'.format(
-            state=("active" if st.session_state["layout_mode"]=="Desktop" else "inactive")), unsafe_allow_html=True)
-        clicked = st.button(" ", key="toggle_desktop_btn", use_container_width=True,
-                            type=("primary" if st.session_state["layout_mode"]=="Desktop" else "secondary"))
-        st.markdown("</div></div>", unsafe_allow_html=True)
-        if clicked and st.session_state["layout_mode"]!="Desktop":
-            st.session_state["layout_mode"]="Desktop"
-            st.session_state["mobile_view"]="list"
-            _immediate_rerun()
-
-    with c2:
-        st.markdown('<div class="icon-toggle-wrap"><div class="icon-toggle mobile {state}">'.format(
-            state=("active" if st.session_state["layout_mode"]=="Mobile" else "inactive")), unsafe_allow_html=True)
-        clicked2 = st.button(" ", key="toggle_mobile_btn", use_container_width=True,
-                             type=("primary" if st.session_state["layout_mode"]=="Mobile" else "secondary"))
-        st.markdown("</div></div>", unsafe_allow_html=True)
-        if clicked2 and st.session_state["layout_mode"]!="Mobile":
-            st.session_state["layout_mode"]="Mobile"
-            st.session_state["mobile_view"]="list"
-            _immediate_rerun()
+left_tgl, _ = st.columns([0.25, 0.75])
+with left_tgl:
+    # Radio (icon-only via CSS; options order matters for icons)
+    prev = st.session_state["layout_mode"]
+    choice = st.radio(
+        label="",
+        options=["Desktop", "Mobile"],
+        index=(0 if prev == "Desktop" else 1),
+        horizontal=True,
+        label_visibility="collapsed",
+        key="layout_toggle_radio",
+    )
+    if choice != prev:
+        st.session_state["layout_mode"] = choice
+        st.session_state["mobile_view"] = "list"
+        _immediate_rerun()
 
 st.markdown("---")
 
@@ -260,12 +259,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
         RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
 
     elif conf["type"] == "ec_async":
-        _PROVINCE_NAMES = {
-            "AB":"Alberta","BC":"British Columbia","MB":"Manitoba","NB":"New Brunswick",
-            "NL":"Newfoundland and Labrador","NT":"Northwest Territories","NS":"Nova Scotia",
-            "NU":"Nunavut","ON":"Ontario","PE":"Prince Edward Island","QC":"Quebec",
-            "SK":"Saskatchewan","YT":"Yukon",
-        }
+        _PROVINCE_NAMES = {"AB":"Alberta","BC":"British Columbia","MB":"Manitoba","NB":"New Brunswick","NL":"Newfoundland and Labrador","NT":"Northwest Territories","NS":"Nova Scotia","NU":"Nunavut","ON":"Ontario","PE":"Prince Edward Island","QC":"Quebec","SK":"Saskatchewan","YT":"Yukon"}
         cols = st.columns([0.25, 0.75])
         with cols[0]:
             if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
@@ -393,22 +387,24 @@ if st.session_state["layout_mode"] == "Mobile":
         if not active:
             st.session_state["mobile_view"] = "list"; _immediate_rerun()
         conf = FEED_CONFIG[active]; entries = st.session_state[f"{active}_data"]
-        with st.container():
-            st.markdown('<div class="topbar">', unsafe_allow_html=True)
-            tb = st.columns([0.15, 0.70, 0.15])
-            with tb[0]:
-                if st.button("✕", key="m_detail_close", use_container_width=True):
-                    if conf["type"] == "rss_meteoalarm":
-                        st.session_state[f"{active}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                    elif conf["type"] not in ("ec_async","nws_grouped_compact"):
-                        st.session_state[f"{active}_last_seen_time"] = time.time()
-                    st.session_state["mobile_view"] = "list"
-                    st.session_state["active_feed"] = None
-                    _immediate_rerun()
-            with tb[1]:
-                st.markdown(f"#### {conf.get('label', active.upper())}")
-            with tb[2]: pass
-            st.markdown("</div>", unsafe_allow_html=True)
+
+        # Sticky topbar; ensure it's the very first element to avoid any preceding margins
+        st.markdown('<div class="topbar"></div>', unsafe_allow_html=True)
+        tb = st.columns([0.15, 0.70, 0.15])
+        with tb[0]:
+            if st.button("✕", key="m_detail_close", use_container_width=True):
+                if conf["type"] == "rss_meteoalarm":
+                    st.session_state[f"{active}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
+                elif conf["type"] not in ("ec_async","nws_grouped_compact"):
+                    st.session_state[f"{active}_last_seen_time"] = time.time()
+                st.session_state["mobile_view"] = "list"
+                st.session_state["active_feed"] = None
+                _immediate_rerun()
+        with tb[1]:
+            st.markdown(f"#### {conf.get('label', active.upper())}")
+        with tb[2]:
+            pass
+
         _render_feed_details(active, conf, entries, badge_placeholders=None)
 
 # --------------------------------------------------------------------
@@ -429,7 +425,7 @@ else:
             new_count = ec_total if isinstance(ec_total,int) else ec_remaining_new_total(key, entries)
             st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
         elif conf["type"] == "nws_grouped_compact":
-            nws_total = st.session_state.get(f"{key}_remaining_new_total")
+            nws_total = st.session_state.get(f"{key}_remaining_new_total"]
             new_count = nws_total if isinstance(nws_total,int) else nws_remaining_new_total(key, entries)
             st.session_state[f"{key}_remaining_new_total"] = int(new_count or 0)
         else:
