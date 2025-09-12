@@ -282,11 +282,6 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
 
         RENDERERS["uk_grouped_compact"](entries, {**conf, "key": active})
 
-        if badge_placeholders:
-            ph = badge_placeholders.get(active)
-            if ph:
-                draw_badge(ph, 0)
-
     elif conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{active}_last_seen_alerts"])
         countries = [c for c in data_list if meteoalarm_country_has_alerts(c)]
