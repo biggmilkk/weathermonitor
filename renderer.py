@@ -541,10 +541,10 @@ def render_nws_grouped_compact(entries, conf):
                         pending_seen[bkey] = time.time()
                         state_changed = True
 
-    if state_changed and not st.session_state.get(rerun_guard_key, False):
-        st.session_state[rerun_guard_key] = True
-        _safe_rerun()
-        return  # optional; ensures we don't render stale sections in this pass
+                    if state_changed and not st.session_state.get(rerun_guard_key, False):
+                        st.session_state[rerun_guard_key] = True
+                        _safe_rerun()
+                        return  # optional; ensures we don't render stale sections in this pass
 
             last_seen = float(bucket_lastseen.get(bkey, 0.0))
             new_count = sum(1 for x in items if x.get("timestamp",0.0) > last_seen)
