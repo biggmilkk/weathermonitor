@@ -5,17 +5,16 @@ from __future__ import annotations
 import asyncio
 import re
 from typing import List, Dict, Tuple
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 from xml.etree import ElementTree as ET
 from datetime import datetime
 import httpx
 
-# Namespaces / Filters
+# ----------------------- Namespaces / Filters -----------------------
+
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 CAP_NS  = {"cap": "urn:oasis:names:tc:emergency:cap:1.2"}
 ALLOWED_SEVERITIES = {"severe", "moderate"}
-REQUIRED_RESPONSETYPE = "prepare"
-REQUIRED_CERTAINTY = "likely"
 
 # ----------------------------- Helpers -----------------------------
 
@@ -37,16 +36,6 @@ def _unique(seq: List[str]) -> List[str]:
         if s not in seen:
             seen.add(s); out.append(s)
     return out
-
-def _cap_to_public_page(cap_url: str) -> str | None:
-    try:
-        path = urlparse(cap_url).path
-        m = re.search(r"/output/[^/]+/([0-9a-fA-F-]{36})\.cap$", path) or re.search(r"/([^/]+)\.cap$", path)
-        if m:
-            return f"https://www.panahon.gov.ph/public-alerts/{m.group(1)}"
-    except Exception:
-        pass
-    return None
 
 def _title_from_event_and_severity(event: str, severity: str, headline: str, identifier: str) -> str:
     def _has_level(s: str) -> bool:
@@ -91,7 +80,6 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
     msg_type   = cap_text("cap:msgType")
     references = cap_text("cap:references")
 
-    # extract referenced identifiers (UUIDs or tokens)
     ref_ids = re.findall(r"[0-9a-fA-F-]{8,}", references) if references else []
 
     infos = root.findall("cap:info", CAP_NS)
@@ -124,7 +112,7 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
                 vv = _t(p.findtext("cap:value", namespaces=CAP_NS))
                 if vv:
                     regions.append(vv)
-        for area in primary.findall("cap:area", CAP_NS):
+        for area in primary.findAll("cap:area", CAP_NS) if hasattr(primary, "findAll") else primary.findall("cap:area", CAP_NS):
             desc = _t(area.findtext("cap:areaDesc", namespaces=CAP_NS))
             if desc:
                 regions.append(desc)
@@ -149,7 +137,6 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
 # ---------------------------- Dedup logic --------------------------
 
 def _dedupe_updates(entries: List[Dict]) -> List[Dict]:
-    # pass 1: compute content_key for all, index by id
     id_to_ckey: Dict[str, Tuple] = {}
     ckeys: Dict[int, Tuple] = {}
     for i, e in enumerate(entries):
@@ -158,7 +145,6 @@ def _dedupe_updates(entries: List[Dict]) -> List[Dict]:
         if e.get("id"):
             id_to_ckey[e["id"]] = ck
 
-    # pass 2: choose chain key (prefer referenced-id's content_key; else own content_key)
     groups: Dict[Tuple, Dict] = {}
     for i, e in enumerate(entries):
         ck = ckeys[i]
@@ -220,15 +206,7 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
             if sev not in ALLOWED_SEVERITIES:
                 return None
 
-            rtypes = [(x or "").strip().lower() for x in e.get("response_types") or []]
-            if REQUIRED_RESPONSETYPE not in rtypes:
-                return None
-
-            cert = (e.get("certainty") or "").strip().lower()
-            if cert != REQUIRED_CERTAINTY:
-                return None
-
-            e["link"] = _cap_to_public_page(url) or url
+            e["link"] = url  # link to CAP XML (public page may not exist)
             return e
         except Exception:
             return None
@@ -236,8 +214,7 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
     entries_raw = await asyncio.gather(*[_fetch_one(u) for u in cap_urls])
     entries = [e for e in entries_raw if e]
 
-    # dedupe updates: keep latest per chain/content
     entries = _dedupe_updates(entries)
-
     entries.sort(key=lambda e: e.get("published") or "", reverse=True)
+
     return {"entries": entries, "source": {"url": index_url, "total_caps": len(entries)}}
