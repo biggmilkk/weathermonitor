@@ -81,7 +81,16 @@ def get_feed_definitions():
                 "473000","474000"
             ],
         },
-
+        
+        "pagasa": {
+            "label": "PAGASA (PH)",
+            "type": "rss_pagasa",
+            "url": "https://publicalert.pagasa.dost.gov.ph/feeds/",
+            # Optional tuning:
+            # "per_feed_limit": 200,
+            # "max_caps": 400,
+        },
+        
         "bom_multi": {
             "label": "BOM (Australia)",
             "type": "rss_bom_multi",
