@@ -116,5 +116,5 @@ async def scrape_metoffice_uk_async(conf: dict, client: httpx.AsyncClient) -> di
     for lst in results:
         entries.extend(lst)
 
-    logging.warning(f"[UK-MET DEBUG] Parsed {total}")
+    logging.warning(f"[UK-MET DEBUG] Parsed {len(entries)}")
     return {"entries": entries, "source": "Met Office UK"}
