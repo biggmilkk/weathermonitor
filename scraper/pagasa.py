@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from urllib.parse import urljoin
 from xml.etree import ElementTree as ET
 from datetime import datetime
@@ -37,6 +37,13 @@ def _unique(seq: List[str]) -> List[str]:
             seen.add(s); out.append(s)
     return out
 
+def _to_ts(iso_str: str | None) -> float:
+    if not iso_str: return 0.0
+    try:
+        return datetime.fromisoformat(iso_str.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
 def _title_from_event_and_severity(event: str, severity: str, headline: str, identifier: str) -> str:
     def _has_level(s: str) -> bool:
         return bool(re.search(r"\((?:Severe|Moderate|Minor|Extreme|Intermediate|Final)\)", s or "", re.I))
@@ -47,25 +54,16 @@ def _title_from_event_and_severity(event: str, severity: str, headline: str, ide
             title = f"{event} ({sev.title()})"
     return title
 
-def _to_ts(iso_str: str | None) -> float:
-    if not iso_str: return 0.0
-    try:
-        return datetime.fromisoformat(iso_str.replace("Z", "+00:00")).timestamp()
-    except Exception:
-        return 0.0
-
-def _norm_regions(region_str: str) -> Tuple[str, ...]:
-    parts = [p.strip().lower() for p in (region_str or "").split(",") if p.strip()]
-    return tuple(sorted(set(parts)))
-
-def _content_key(e: Dict) -> Tuple:
-    return (
-        (e.get("bucket") or "").strip().lower(),
-        (e.get("severity") or "").strip().lower(),
-        (e.get("certainty") or "").strip().lower(),
-        tuple(sorted((x or "").strip().lower() for x in e.get("response_types") or [])),
-        _norm_regions(e.get("region") or ""),
-    )
+def _parse_references_ids(refs: str | None) -> List[str]:
+    # refs contains space-separated "sender,identifier,sent" triplets
+    out: List[str] = []
+    for tok in (refs or "").split():
+        parts = tok.split(",")
+        if len(parts) >= 2:
+            ident = parts[1].strip()
+            if ident:
+                out.append(ident)
+    return out
 
 # --------------------------- CAP parsing ---------------------------
 
@@ -79,8 +77,7 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
     sent       = cap_text("cap:sent")
     msg_type   = cap_text("cap:msgType")
     references = cap_text("cap:references")
-
-    ref_ids = re.findall(r"[0-9a-fA-F-]{8,}", references) if references else []
+    ref_ids    = _parse_references_ids(references)
 
     infos = root.findall("cap:info", CAP_NS)
     primary = infos[0] if infos else None
@@ -90,20 +87,6 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
     description = _t(primary.findtext("cap:description", namespaces=CAP_NS)) if primary is not None else ""
     severity    = _t(primary.findtext("cap:severity", namespaces=CAP_NS)) if primary is not None else ""
 
-    response_types: List[str] = []
-    for inf in infos:
-        for rt in inf.findall("cap:responseType", CAP_NS):
-            v = _t(rt.text)
-            if v:
-                response_types.append(v)
-
-    certainty = ""
-    for inf in infos:
-        c = _t(inf.findtext("cap:certainty", namespaces=CAP_NS))
-        if c:
-            certainty = c
-            break
-
     regions: List[str] = []
     if primary is not None:
         for p in primary.findall("cap:parameter", CAP_NS):
@@ -112,7 +95,7 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
                 vv = _t(p.findtext("cap:value", namespaces=CAP_NS))
                 if vv:
                     regions.append(vv)
-        for area in primary.findAll("cap:area", CAP_NS) if hasattr(primary, "findAll") else primary.findall("cap:area", CAP_NS):
+        for area in primary.findall("cap:area", CAP_NS):
             desc = _t(area.findtext("cap:areaDesc", namespaces=CAP_NS))
             if desc:
                 regions.append(desc)
@@ -127,40 +110,31 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
         "region": region_str,
         "bucket": event,
         "severity": severity,
-        "response_types": response_types,
-        "certainty": certainty,
         "msg_type": msg_type,
         "published": sent,
         "references_ids": ref_ids,
+        # "link" filled later
     }
 
-# ---------------------------- Dedup logic --------------------------
+# ----------------------- Dedupe by references ----------------------
 
-def _dedupe_updates(entries: List[Dict]) -> List[Dict]:
-    id_to_ckey: Dict[str, Tuple] = {}
-    ckeys: Dict[int, Tuple] = {}
-    for i, e in enumerate(entries):
-        ck = _content_key(e)
-        ckeys[i] = ck
-        if e.get("id"):
-            id_to_ckey[e["id"]] = ck
-
-    groups: Dict[Tuple, Dict] = {}
-    for i, e in enumerate(entries):
-        ck = ckeys[i]
-        chain_ck = None
+def _dedupe_reference_chains(entries: List[Dict]) -> List[Dict]:
+    # 1) collect every referenced identifier (from ALL alerts, including Cancel)
+    referenced: set[str] = set()
+    for e in entries:
         for rid in e.get("references_ids") or []:
-            if rid in id_to_ckey:
-                chain_ck = id_to_ckey[rid]
-                break
-        if chain_ck is None:
-            chain_ck = ck
+            referenced.add(rid)
 
-        cur = groups.get(chain_ck)
-        if not cur or _to_ts(e.get("published")) > _to_ts(cur.get("published")):
-            groups[chain_ck] = e
+    # 2) remove any entry whose own identifier appears in any references
+    survivors = [e for e in entries if (e.get("id") or "") not in referenced]
 
-    return list(groups.values())
+    # 3) if any id duplicates remain (pathological), keep the newest <sent>
+    by_id: Dict[str, Dict] = {}
+    for e in survivors:
+        i = e.get("id") or ""
+        if i and ((i not in by_id) or (_to_ts(e.get("published")) > _to_ts(by_id[i].get("published")))):
+            by_id[i] = e
+    return list(by_id.values())
 
 # ------------------------------ Scraper ---------------------------
 
@@ -198,15 +172,7 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
             res = await _get(client, url)
             res.raise_for_status()
             e = _parse_cap_xml(res.content)
-
-            if (e.get("msg_type") or "").strip().lower() == "cancel":
-                return None
-
-            sev = (e.get("severity") or "").strip().lower()
-            if sev not in ALLOWED_SEVERITIES:
-                return None
-
-            e["link"] = url  # link to CAP XML (public page may not exist)
+            e["link"] = url
             return e
         except Exception:
             return None
@@ -214,7 +180,18 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
     entries_raw = await asyncio.gather(*[_fetch_one(u) for u in cap_urls])
     entries = [e for e in entries_raw if e]
 
-    entries = _dedupe_updates(entries)
-    entries.sort(key=lambda e: e.get("published") or "", reverse=True)
+    # dedupe strictly by references first (includes Cancel chains)
+    entries = _dedupe_reference_chains(entries)
 
-    return {"entries": entries, "source": {"url": index_url, "total_caps": len(entries)}}
+    # then apply display filters
+    filtered: List[Dict] = []
+    for e in entries:
+        if (e.get("msg_type") or "").strip().lower() == "cancel":
+            continue
+        sev = (e.get("severity") or "").strip().lower()
+        if sev not in ALLOWED_SEVERITIES:
+            continue
+        filtered.append(e)
+
+    filtered.sort(key=lambda e: e.get("published") or "", reverse=True)
+    return {"entries": filtered, "source": {"url": index_url, "total_caps": len(filtered)}}
