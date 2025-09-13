@@ -77,4 +77,7 @@ SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
 
     # --- Japan Meteorological Agency (warnings only) ---
     "rss_jma": ScraperEntry("jma", "scrape_jma_async"),
+
+    # --- PAGASA ---
+    "rss_pagasa": ScraperEntry("pagasa", "scrape_pagasa_async"),
 }
