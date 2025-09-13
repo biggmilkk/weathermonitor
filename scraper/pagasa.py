@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from typing import List, Dict
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree as ET
 from datetime import datetime
 import httpx
@@ -55,7 +55,6 @@ def _title_from_event_and_severity(event: str, severity: str, headline: str, ide
     return title
 
 def _parse_references_ids(refs: str | None) -> List[str]:
-    # refs contains space-separated "sender,identifier,sent" triplets
     out: List[str] = []
     for tok in (refs or "").split():
         parts = tok.split(",")
@@ -64,6 +63,16 @@ def _parse_references_ids(refs: str | None) -> List[str]:
             if ident:
                 out.append(ident)
     return out
+
+def _cap_to_public_page(cap_url: str) -> str | None:
+    try:
+        path = urlparse(cap_url).path
+        m = re.search(r"/output/[^/]+/([0-9a-fA-F-]{36})\.cap$", path) or re.search(r"/([^/]+)\.cap$", path)
+        if m:
+            return f"https://www.panahon.gov.ph/public-alerts/{m.group(1)}"
+    except Exception:
+        pass
+    return None
 
 # --------------------------- CAP parsing ---------------------------
 
@@ -113,22 +122,17 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
         "msg_type": msg_type,
         "published": sent,
         "references_ids": ref_ids,
-        # "link" filled later
     }
 
 # ----------------------- Dedupe by references ----------------------
 
 def _dedupe_reference_chains(entries: List[Dict]) -> List[Dict]:
-    # 1) collect every referenced identifier (from ALL alerts, including Cancel)
     referenced: set[str] = set()
     for e in entries:
         for rid in e.get("references_ids") or []:
             referenced.add(rid)
-
-    # 2) remove any entry whose own identifier appears in any references
     survivors = [e for e in entries if (e.get("id") or "") not in referenced]
-
-    # 3) if any id duplicates remain (pathological), keep the newest <sent>
+    # If duplicates by id remain, keep newest <sent>
     by_id: Dict[str, Dict] = {}
     for e in survivors:
         i = e.get("id") or ""
@@ -172,7 +176,8 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
             res = await _get(client, url)
             res.raise_for_status()
             e = _parse_cap_xml(res.content)
-            e["link"] = url
+            # link to public page if we can form it; else original CAP
+            e["link"] = _cap_to_public_page(url) or url
             return e
         except Exception:
             return None
@@ -180,10 +185,8 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
     entries_raw = await asyncio.gather(*[_fetch_one(u) for u in cap_urls])
     entries = [e for e in entries_raw if e]
 
-    # dedupe strictly by references first (includes Cancel chains)
     entries = _dedupe_reference_chains(entries)
 
-    # then apply display filters
     filtered: List[Dict] = []
     for e in entries:
         if (e.get("msg_type") or "").strip().lower() == "cancel":
