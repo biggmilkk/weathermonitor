@@ -198,5 +198,5 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
         filtered.append(e)
 
     filtered.sort(key=lambda e: e.get("published") or "", reverse=True)
-    logging.warning("[PAGASA DEBUG] Parsed %d alerts", len(filtered))
+    logging.warning("[PAGASA DEBUG] Parsed %d", len(filtered))
     return {"entries": filtered, "source": {"url": index_url, "total_caps": len(filtered)}}
