@@ -306,6 +306,6 @@ async def scrape_meteoalarm_async(conf: dict, client: httpx.AsyncClient):
     base_entries.sort(key=lambda x: (x.get("region") or x.get("title","")).lower())
 
     # Debug message
-    logging.warning(f"[METEOALARM DEBUG] Parsed {len(base_entries)} alerts")
+    logging.warning(f"[METEOALARM DEBUG] Parsed {len(base_entries)}")
 
     return {"entries": base_entries, "source": url}
