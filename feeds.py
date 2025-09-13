@@ -83,7 +83,7 @@ def get_feed_definitions():
         },
         
         "pagasa": {
-            "label": "PAGASA (PH)",
+            "label": "PAGASA (Philippines)",
             "type": "rss_pagasa",
             "url": "https://publicalert.pagasa.dost.gov.ph/feeds/",
             # Optional tuning:
