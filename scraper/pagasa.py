@@ -12,6 +12,8 @@ import httpx
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 CAP_NS  = {"cap": "urn:oasis:names:tc:emergency:cap:1.2"}
 
+ALLOWED_SEVERITIES = {"severe", "moderate"}  # lowercase
+
 
 # ----------------------------- Helpers ---------------------------------------
 
@@ -68,20 +70,18 @@ def _cap_to_public_page(cap_url: str) -> str | None:
 
 def _title_from_event_and_severity(event: str, severity: str, headline: str, identifier: str) -> str:
     """
-    Prefer <event> for the title because it contains the level (e.g., '(Severe)') in PAGASA feeds.
-    If <event> lacks a level, append CAP <severity> (Moderate/Severe/Minor/Extreme) when present.
+    Prefer <event> for the title because it often includes a level tag (e.g., '(Severe)').
+    If <event> lacks a level, append CAP <severity> when present.
     Fallbacks: headline → identifier → 'PAGASA Alert'
     """
     def _has_level_tag(s: str) -> bool:
-        # Common level tokens that appear in parentheses after the event
         return bool(re.search(r"\((?:Severe|Moderate|Minor|Extreme|Intermediate|Final)\)", s or "", flags=re.IGNORECASE))
 
     title = event or headline or identifier or "PAGASA Alert"
-    if event:
-        if not _has_level_tag(title):
-            sev = (severity or "").strip()
-            if sev and sev.lower() != "unknown":
-                title = f"{event} ({sev.title()})"
+    if event and not _has_level_tag(title):
+        sev = (severity or "").strip()
+        if sev and sev.lower() != "unknown":
+            title = f"{event} ({sev.title()})"
     return title
 
 def _parse_cap_xml(xml_bytes: bytes) -> Dict:
@@ -93,8 +93,10 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
       - title:     Prefer CAP <info><event>; append <severity> if event lacks a level
       - summary:   CAP <info><description>
       - region:    Join of Region parameter + all <areaDesc>
-      - bucket:    CAP <info><event>   (useful for grouping, like NWS 'event')
-      - published: CAP <sent>          (ISO8601; app will parse/format)
+      - bucket:    CAP <info><event>   (useful for grouping)
+      - severity:  CAP <info><severity> (returned so renderer can color bullets)
+      - msg_type:  CAP <msgType> (for filtering out 'Cancel')
+      - published: CAP <sent> (ISO8601)
       - link:      (assigned by caller)
     """
     root = ET.fromstring(xml_bytes)
@@ -104,6 +106,7 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
 
     identifier = cap_text("cap:identifier")
     sent       = cap_text("cap:sent")
+    msg_type   = cap_text("cap:msgType")  # Actual/Update/Cancel/etc.
 
     info = root.find("cap:info", CAP_NS)
     event       = _t(info.findtext("cap:event", namespaces=CAP_NS)) if info is not None else ""
@@ -139,8 +142,10 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
         "title": title,
         "summary": description,
         "region": region_str,
-        "bucket": event,     # keep event as bucket for future grouping if desired
-        "published": sent,   # your app already parses ISO8601
+        "bucket": event,
+        "severity": severity,   # keep raw value for renderer
+        "msg_type": msg_type,   # keep raw value for filtering
+        "published": sent,
         # "link" filled by caller
     }
 
@@ -204,6 +209,16 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
             res = await _get(client, url)
             res.raise_for_status()
             entry = _parse_cap_xml(res.content)
+
+            # Filter out msgType=Cancel
+            if (entry.get("msg_type") or "").strip().lower() == "cancel":
+                return None
+
+            # Filter to Moderate/Severe only
+            sev = (entry.get("severity") or "").strip().lower()
+            if sev not in ALLOWED_SEVERITIES:
+                return None
+
             # Prefer public alert page; fallback to raw CAP URL
             public_link = _cap_to_public_page(url)
             entry["link"] = public_link or url
