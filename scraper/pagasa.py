@@ -47,21 +47,17 @@ def _cap_to_public_page(cap_url: str) -> str | None:
     Example:
       input:  https://publicalert.pagasa.dost.gov.ph/output/gfa/<UUID>.cap
       output: https://www.panahon.gov.ph/public-alerts/<UUID>
-    Fallback to None if we can't confidently extract the UUID.
+    Fallback to None if we can't confidently extract the slug/UUID.
     """
     try:
         path = urlparse(cap_url).path
         # Canonical form: /output/<bucket>/<uuid>.cap
         m = re.search(r"/output/[^/]+/([0-9a-fA-F-]{36})\.cap$", path)
         if not m:
-            # Fallback: last path segment <slug>.cap (still try to use it as the slug)
+            # Fallback: last path segment <slug>.cap (some feeds may use non-UUID slugs)
             m = re.search(r"/([^/]+)\.cap$", path)
         if m:
             slug = m.group(1)
-            # Only accept well-formed UUID; otherwise still try (some feeds may use non-UUID slugs)
-            if re.fullmatch(r"[0-9a-fA-F-]{36}", slug):
-                return f"https://www.panahon.gov.ph/public-alerts/{slug}"
-            # If it's not a UUID but still a slug, you may choose to construct anyway:
             return f"https://www.panahon.gov.ph/public-alerts/{slug}"
     except Exception:
         pass
@@ -70,13 +66,31 @@ def _cap_to_public_page(cap_url: str) -> str | None:
 
 # --------------------------- CAP parsing -------------------------------------
 
+def _title_from_event_and_severity(event: str, severity: str, headline: str, identifier: str) -> str:
+    """
+    Prefer <event> for the title because it contains the level (e.g., '(Severe)') in PAGASA feeds.
+    If <event> lacks a level, append CAP <severity> (Moderate/Severe/Minor/Extreme) when present.
+    Fallbacks: headline → identifier → 'PAGASA Alert'
+    """
+    def _has_level_tag(s: str) -> bool:
+        # Common level tokens that appear in parentheses after the event
+        return bool(re.search(r"\((?:Severe|Moderate|Minor|Extreme|Intermediate|Final)\)", s or "", flags=re.IGNORECASE))
+
+    title = event or headline or identifier or "PAGASA Alert"
+    if event:
+        if not _has_level_tag(title):
+            sev = (severity or "").strip()
+            if sev and sev.lower() != "unknown":
+                title = f"{event} ({sev.title()})"
+    return title
+
 def _parse_cap_xml(xml_bytes: bytes) -> Dict:
     """
     Parse a CAP 1.2 <alert> into the app's schema.
 
     Fields mapped:
       - id:        CAP <identifier>
-      - title:     CAP <info><headline> or <event> or <identifier>
+      - title:     Prefer CAP <info><event>; append <severity> if event lacks a level
       - summary:   CAP <info><description>
       - region:    Join of Region parameter + all <areaDesc>
       - bucket:    CAP <info><event>   (useful for grouping, like NWS 'event')
@@ -95,6 +109,7 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
     event       = _t(info.findtext("cap:event", namespaces=CAP_NS)) if info is not None else ""
     headline    = _t(info.findtext("cap:headline", namespaces=CAP_NS)) if info is not None else ""
     description = _t(info.findtext("cap:description", namespaces=CAP_NS)) if info is not None else ""
+    severity    = _t(info.findtext("cap:severity", namespaces=CAP_NS)) if info is not None else ""
 
     # Build region from:
     #   - <parameter><valueName>...Region...</valueName><value>Region X (Name)</value>
@@ -116,15 +131,16 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
     # Deduplicate while preserving order
     region_str = ", ".join(dict.fromkeys(regions)) if regions else ""
 
-    title = headline or event or identifier or "PAGASA Alert"
+    # Title prioritizes <event>; append <severity> if missing in event text
+    title = _title_from_event_and_severity(event, severity, headline, identifier)
 
     return {
         "id": identifier or None,
         "title": title,
         "summary": description,
         "region": region_str,
-        "bucket": event,
-        "published": sent,
+        "bucket": event,     # keep event as bucket for future grouping if desired
+        "published": sent,   # your app already parses ISO8601
         # "link" filled by caller
     }
 
@@ -166,8 +182,7 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
                     cap_urls.append(_abs(index_url, href))
         parsed_as_atom = True
     except Exception:
-        # Will fallback to regex scrape from HTML below
-        parsed_as_atom = False
+        parsed_as_atom = False  # Will fallback to regex scrape from HTML below
 
     # If Atom parse worked, cap the number to per_feed_limit
     if parsed_as_atom:
