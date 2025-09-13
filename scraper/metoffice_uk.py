@@ -83,34 +83,6 @@ def _parse_feed(content: bytes, region_label: str) -> list[dict]:
         })
     return out
 
-@st.cache_data(ttl=60, show_spinner=False)
-def scrape_metoffice_uk(conf: dict) -> dict:
-    urls    = conf.get("urls", [])
-    regions = conf.get("regions", [])
-    entries = []
-    
-    # Add timestamp to help with debugging and "new" detection
-    scrape_time = time.time()
-    
-    for url, region in zip(urls, regions):
-        try:
-            resp = httpx.get(url, headers=HEADERS, timeout=15, follow_redirects=True)
-            resp.raise_for_status()
-            regional_entries = _parse_feed(resp.content, region)
-            
-            # Add scrape timestamp as backup for "new" detection
-            for entry in regional_entries:
-                if not entry.get("published"):
-                    entry["published"] = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(scrape_time))
-                entry["scrape_timestamp"] = scrape_time
-            
-            entries.extend(regional_entries)
-            
-        except Exception as e:
-            logging.warning(f"[UK-MET] {region} {url} failed: {e}")
-    
-    return {"entries": entries, "source": "Met Office UK"}
-
 async def scrape_metoffice_uk_async(conf: dict, client: httpx.AsyncClient) -> dict:
     urls    = conf.get("urls", [])
     regions = conf.get("regions", [])
@@ -143,5 +115,6 @@ async def scrape_metoffice_uk_async(conf: dict, client: httpx.AsyncClient) -> di
     entries = []
     for lst in results:
         entries.extend(lst)
-        
+
+    logging.warning(f"[UK-MET DEBUG] Parsed {total}")
     return {"entries": entries, "source": "Met Office UK"}
