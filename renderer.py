@@ -345,6 +345,11 @@ def render_ec_grouped_compact(entries, conf):
             with cols[0]:
                 if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
                     state_changed = False
+                    prev = active_bucket
+                    if prev and prev != bkey:
+                        ts_opened_prev = float(pending_seen.pop(prev, time.time()))
+                        bucket_lastseen[prev] = ts_opened_prev
+
                     if active_bucket == bkey:
                         ts_opened = float(pending_seen.pop(bkey, time.time()))
                         bucket_lastseen[bkey] = ts_opened
@@ -360,7 +365,7 @@ def render_ec_grouped_compact(entries, conf):
                     if state_changed and not st.session_state.get(rerun_guard_key, False):
                         st.session_state[rerun_guard_key] = True
                         _safe_rerun()
-                        return  # optional; ensures we don't render stale sections in this pass
+                        return
 
             # Compute NEW vs committed last_seen (unchanged while open)
             last_seen = float(bucket_lastseen.get(bkey, 0.0))
@@ -529,6 +534,11 @@ def render_nws_grouped_compact(entries, conf):
             with cols[0]:
                 if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
                     state_changed = False
+                    prev = active_bucket
+                    if prev and prev != bkey:
+                        ts_opened_prev = float(pending_seen.pop(prev, time.time()))
+                        bucket_lastseen[prev] = ts_opened_prev
+
                     if active_bucket == bkey:
                         ts_opened = float(pending_seen.pop(bkey, time.time()))
                         bucket_lastseen[bkey] = ts_opened
@@ -544,7 +554,7 @@ def render_nws_grouped_compact(entries, conf):
                     if state_changed and not st.session_state.get(rerun_guard_key, False):
                         st.session_state[rerun_guard_key] = True
                         _safe_rerun()
-                        return  # optional; ensures we don't render stale sections in this pass
+                        return
 
             last_seen = float(bucket_lastseen.get(bkey, 0.0))
             new_count = sum(1 for x in items if x.get("timestamp",0.0) > last_seen)
