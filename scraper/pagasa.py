@@ -1,41 +1,90 @@
-# scraper/pagasa.py
+from __future__ import annotations
+
 import asyncio
 import re
 from typing import List, Dict
-from urllib.parse import urljoin
-
-import httpx
+from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree as ET
 
+import httpx
+
+# Namespaces
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 CAP_NS  = {"cap": "urn:oasis:names:tc:emergency:cap:1.2"}
 
+
+# ----------------------------- Helpers ---------------------------------------
+
 def _t(x: str | None) -> str:
+    """Trim helper."""
     return (x or "").strip()
 
 def _is_cap_url(url: str) -> bool:
-    return bool(re.search(r"\.cap(?:$|\?)", url or "", flags=re.IGNORECASE))
+    """Heuristic: a CAP file URL ends with .cap (optionally with a query string)."""
+    return bool(re.search(r"\.cap(?:$|\?)", (url or ""), flags=re.IGNORECASE))
 
 def _abs(base: str, href: str) -> str:
+    """Resolve relative URLs."""
     return urljoin(base, href)
 
 async def _get(client: httpx.AsyncClient, url: str) -> httpx.Response:
+    """HTTP GET with the shared AsyncClient (timeouts set by caller)."""
     return await client.get(url, timeout=30)
+
+def _unique(seq: List[str]) -> List[str]:
+    """Stable de-duplication."""
+    seen = set()
+    out = []
+    for s in seq:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+def _cap_to_public_page(cap_url: str) -> str | None:
+    """
+    Convert a PAGASA CAP file URL to the public alert page on panahon.gov.ph.
+    Example:
+      input:  https://publicalert.pagasa.dost.gov.ph/output/gfa/<UUID>.cap
+      output: https://www.panahon.gov.ph/public-alerts/<UUID>
+    Fallback to None if we can't confidently extract the UUID.
+    """
+    try:
+        path = urlparse(cap_url).path
+        # Canonical form: /output/<bucket>/<uuid>.cap
+        m = re.search(r"/output/[^/]+/([0-9a-fA-F-]{36})\.cap$", path)
+        if not m:
+            # Fallback: last path segment <slug>.cap (still try to use it as the slug)
+            m = re.search(r"/([^/]+)\.cap$", path)
+        if m:
+            slug = m.group(1)
+            # Only accept well-formed UUID; otherwise still try (some feeds may use non-UUID slugs)
+            if re.fullmatch(r"[0-9a-fA-F-]{36}", slug):
+                return f"https://www.panahon.gov.ph/public-alerts/{slug}"
+            # If it's not a UUID but still a slug, you may choose to construct anyway:
+            return f"https://www.panahon.gov.ph/public-alerts/{slug}"
+    except Exception:
+        pass
+    return None
+
+
+# --------------------------- CAP parsing -------------------------------------
 
 def _parse_cap_xml(xml_bytes: bytes) -> Dict:
     """
     Parse a CAP 1.2 <alert> into the app's schema.
-    Required by your renderer:
-      - title (or headline)
-      - summary/description
-      - region
-      - bucket (event)
-      - published (ISO string)
-      - link (filled by caller with the CAP URL)
+
+    Fields mapped:
+      - id:        CAP <identifier>
+      - title:     CAP <info><headline> or <event> or <identifier>
+      - summary:   CAP <info><description>
+      - region:    Join of Region parameter + all <areaDesc>
+      - bucket:    CAP <info><event>   (useful for grouping, like NWS 'event')
+      - published: CAP <sent>          (ISO8601; app will parse/format)
+      - link:      (assigned by caller)
     """
     root = ET.fromstring(xml_bytes)
 
-    # simple helpers to find text with CAP namespace
     def cap_text(tag: str) -> str:
         return _t(root.findtext(tag, namespaces=CAP_NS))
 
@@ -47,13 +96,14 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
     headline    = _t(info.findtext("cap:headline", namespaces=CAP_NS)) if info is not None else ""
     description = _t(info.findtext("cap:description", namespaces=CAP_NS)) if info is not None else ""
 
-    # Collect all <areaDesc> and optionally CAP "Region" parameter if present
+    # Build region from:
+    #   - <parameter><valueName>...Region...</valueName><value>Region X (Name)</value>
+    #   - Each <area><areaDesc>
     regions: List[str] = []
     if info is not None:
-        # <parameter><valueName>layer:Google:Region:0.1</valueName><value>Region 11 (Davao Region)</value>
         for p in info.findall("cap:parameter", CAP_NS):
             vn = _t(p.findtext("cap:valueName", namespaces=CAP_NS))
-            if "Region" in vn:
+            if vn and "Region" in vn:
                 vv = _t(p.findtext("cap:value", namespaces=CAP_NS))
                 if vv:
                     regions.append(vv)
@@ -63,39 +113,48 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
             if desc:
                 regions.append(desc)
 
-    # Conservative, readable region label
-    region = ", ".join(dict.fromkeys([r for r in regions if r]))  # dedupe while preserving order
+    # Deduplicate while preserving order
+    region_str = ", ".join(dict.fromkeys(regions)) if regions else ""
 
     title = headline or event or identifier or "PAGASA Alert"
 
     return {
         "id": identifier or None,
         "title": title,
-        "summary": description,      # renderer will show summary/description if present
-        "region": region,
-        "bucket": event,             # like NWS event; useful if you later add grouping
-        "published": sent,           # your app parses ISO8601 already
-        # "link" is assigned by caller to the CAP URL we fetched
+        "summary": description,
+        "region": region_str,
+        "bucket": event,
+        "published": sent,
+        # "link" filled by caller
     }
+
+
+# ----------------------------- Scraper ---------------------------------------
 
 async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
     """
+    Scrape PAGASA CAP alerts.
+
     conf:
-      - url: index URL (default https://publicalert.pagasa.dost.gov.ph/feeds/)
-      - per_feed_limit: max entries taken from the Atom (default 200)
-      - max_caps: total cap files to fetch across discovered links (default 400)
-    returns: {"entries": [...], "source": {...}}
+      - url: base index URL (default: https://publicalert.pagasa.dost.gov.ph/feeds/)
+      - per_feed_limit: number of <entry> CAP links to take from Atom (default: 200)
+      - max_caps: hard cap on total CAP files fetched (default: 400)
+
+    Returns:
+      {"entries": [...], "source": {"url": index_url, "total_caps": len(entries)}}
     """
     index_url      = conf.get("url", "https://publicalert.pagasa.dost.gov.ph/feeds/")
     per_feed_limit = int(conf.get("per_feed_limit", 200))
     max_caps       = int(conf.get("max_caps", 400))
 
-    # 1) fetch the index (Atom per your sample)
+    # 1) Fetch the index (Atom per current site)
     r = await _get(client, index_url)
     r.raise_for_status()
+
     cap_urls: List[str] = []
 
-    # Try Atom parse first
+    # Try to parse as Atom first (preferred)
+    parsed_as_atom = False
     try:
         root = ET.fromstring(r.content)
         # Collect <entry><link type="application/cap+xml" href="..."/>
@@ -105,36 +164,42 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
                 href = link.attrib.get("href", "")
                 if "application/cap+xml" in typ or _is_cap_url(href):
                     cap_urls.append(_abs(index_url, href))
-        # Defensive: cap the number coming from feed
-        cap_urls = cap_urls[:per_feed_limit] or cap_urls
+        parsed_as_atom = True
     except Exception:
-        # If it wasn't Atom for some reason, regex .cap links from HTML
-        cap_urls = re.findall(r'href=["\']([^"\']+\.cap[^"\']*)', r.text, flags=re.IGNORECASE)
+        # Will fallback to regex scrape from HTML below
+        parsed_as_atom = False
 
-    # Safety: unique + global cap
-    seen = set()
-    unique_caps = []
-    for u in cap_urls:
-        if u not in seen:
-            seen.add(u)
-            unique_caps.append(u)
-    unique_caps = unique_caps[:max_caps]
+    # If Atom parse worked, cap the number to per_feed_limit
+    if parsed_as_atom:
+        cap_urls = cap_urls[:per_feed_limit]
+    else:
+        # Fallback: HTML index — discover .cap links via regex
+        cap_urls = re.findall(
+            r'href=["\']([^"\']+\.cap[^"\']*)',
+            r.text,
+            flags=re.IGNORECASE,
+        )
 
-    # 2) fetch each CAP concurrently and normalize
+    # Unique + global cap
+    cap_urls = _unique(cap_urls)[:max_caps]
+
+    # 2) Fetch each CAP concurrently and normalize
     async def _fetch_one(url: str):
         try:
             res = await _get(client, url)
             res.raise_for_status()
             entry = _parse_cap_xml(res.content)
-            entry["link"] = url  # link to the actual CAP you opened in your browser
+            # Prefer public alert page; fallback to raw CAP URL
+            public_link = _cap_to_public_page(url)
+            entry["link"] = public_link or url
             return entry
         except Exception:
             return None
 
-    entries_raw = await asyncio.gather(*[_fetch_one(u) for u in unique_caps])
+    entries_raw = await asyncio.gather(*[_fetch_one(u) for u in cap_urls])
     entries = [e for e in entries_raw if e]
 
-    # 3) sort newest→oldest by CAP <sent>
+    # 3) Sort newest → oldest by CAP <sent> (ISO8601)
     entries.sort(key=lambda e: e.get("published") or "", reverse=True)
 
     return {"entries": entries, "source": {"url": index_url, "total_caps": len(entries)}}
