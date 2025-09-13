@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree as ET
+from datetime import datetime
 import httpx
 
 # Namespaces / Filters
@@ -57,6 +58,26 @@ def _title_from_event_and_severity(event: str, severity: str, headline: str, ide
             title = f"{event} ({sev.title()})"
     return title
 
+def _to_ts(iso_str: str | None) -> float:
+    if not iso_str: return 0.0
+    try:
+        return datetime.fromisoformat(iso_str.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+def _norm_regions(region_str: str) -> Tuple[str, ...]:
+    parts = [p.strip().lower() for p in (region_str or "").split(",") if p.strip()]
+    return tuple(sorted(set(parts)))
+
+def _content_key(e: Dict) -> Tuple:
+    return (
+        (e.get("bucket") or "").strip().lower(),
+        (e.get("severity") or "").strip().lower(),
+        (e.get("certainty") or "").strip().lower(),
+        tuple(sorted((x or "").strip().lower() for x in e.get("response_types") or [])),
+        _norm_regions(e.get("region") or ""),
+    )
+
 # --------------------------- CAP parsing ---------------------------
 
 def _parse_cap_xml(xml_bytes: bytes) -> Dict:
@@ -68,6 +89,10 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
     identifier = cap_text("cap:identifier")
     sent       = cap_text("cap:sent")
     msg_type   = cap_text("cap:msgType")
+    references = cap_text("cap:references")
+
+    # extract referenced identifiers (UUIDs or tokens)
+    ref_ids = re.findall(r"[0-9a-fA-F-]{8,}", references) if references else []
 
     infos = root.findall("cap:info", CAP_NS)
     primary = infos[0] if infos else None
@@ -118,7 +143,38 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
         "certainty": certainty,
         "msg_type": msg_type,
         "published": sent,
+        "references_ids": ref_ids,
     }
+
+# ---------------------------- Dedup logic --------------------------
+
+def _dedupe_updates(entries: List[Dict]) -> List[Dict]:
+    # pass 1: compute content_key for all, index by id
+    id_to_ckey: Dict[str, Tuple] = {}
+    ckeys: Dict[int, Tuple] = {}
+    for i, e in enumerate(entries):
+        ck = _content_key(e)
+        ckeys[i] = ck
+        if e.get("id"):
+            id_to_ckey[e["id"]] = ck
+
+    # pass 2: choose chain key (prefer referenced-id's content_key; else own content_key)
+    groups: Dict[Tuple, Dict] = {}
+    for i, e in enumerate(entries):
+        ck = ckeys[i]
+        chain_ck = None
+        for rid in e.get("references_ids") or []:
+            if rid in id_to_ckey:
+                chain_ck = id_to_ckey[rid]
+                break
+        if chain_ck is None:
+            chain_ck = ck
+
+        cur = groups.get(chain_ck)
+        if not cur or _to_ts(e.get("published")) > _to_ts(cur.get("published")):
+            groups[chain_ck] = e
+
+    return list(groups.values())
 
 # ------------------------------ Scraper ---------------------------
 
@@ -155,30 +211,33 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
         try:
             res = await _get(client, url)
             res.raise_for_status()
-            entry = _parse_cap_xml(res.content)
+            e = _parse_cap_xml(res.content)
 
-            if (entry.get("msg_type") or "").strip().lower() == "cancel":
+            if (e.get("msg_type") or "").strip().lower() == "cancel":
                 return None
 
-            sev = (entry.get("severity") or "").strip().lower()
+            sev = (e.get("severity") or "").strip().lower()
             if sev not in ALLOWED_SEVERITIES:
                 return None
 
-            rtypes = [(x or "").strip().lower() for x in entry.get("response_types") or []]
+            rtypes = [(x or "").strip().lower() for x in e.get("response_types") or []]
             if REQUIRED_RESPONSETYPE not in rtypes:
                 return None
 
-            cert = (entry.get("certainty") or "").strip().lower()
+            cert = (e.get("certainty") or "").strip().lower()
             if cert != REQUIRED_CERTAINTY:
                 return None
 
-            entry["link"] = _cap_to_public_page(url) or url
-            return entry
+            e["link"] = _cap_to_public_page(url) or url
+            return e
         except Exception:
             return None
 
     entries_raw = await asyncio.gather(*[_fetch_one(u) for u in cap_urls])
     entries = [e for e in entries_raw if e]
-    entries.sort(key=lambda e: e.get("published") or "", reverse=True)
 
+    # dedupe updates: keep latest per chain/content
+    entries = _dedupe_updates(entries)
+
+    entries.sort(key=lambda e: e.get("published") or "", reverse=True)
     return {"entries": entries, "source": {"url": index_url, "total_caps": len(entries)}}
