@@ -1012,5 +1012,5 @@ RENDERERS = {
     'rss_bom_multi': render_bom_grouped,
     'rss_jma': render_jma_grouped,
     'uk_grouped_compact': render_uk_grouped,
-    'rss_pagasa': render_json,
+    'rss_pagasa': render_pagasa,
 }
