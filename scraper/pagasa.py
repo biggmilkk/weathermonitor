@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import logging
 from typing import List, Dict
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree as ET
@@ -197,4 +198,5 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
         filtered.append(e)
 
     filtered.sort(key=lambda e: e.get("published") or "", reverse=True)
+    logging.warning("[PAGASA DEBUG] Parsed %d alerts", len(filtered))
     return {"entries": filtered, "source": {"url": index_url, "total_caps": len(filtered)}}
