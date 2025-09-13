@@ -344,16 +344,23 @@ def render_ec_grouped_compact(entries, conf):
             # Toggle first
             with cols[0]:
                 if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
+                    state_changed = False
                     if active_bucket == bkey:
                         ts_opened = float(pending_seen.pop(bkey, time.time()))
                         bucket_lastseen[bkey] = ts_opened
                         st.session_state[open_key] = None
                         active_bucket = None
-                        did_close_toggle = True
+                        state_changed = True
                     else:
                         st.session_state[open_key] = bkey
                         active_bucket = bkey
                         pending_seen[bkey] = time.time()
+                        state_changed = True
+
+                    if state_changed and not st.session_state.get(rerun_guard_key, False):
+                        st.session_state[rerun_guard_key] = True
+                        _safe_rerun()
+                        return  # optional; ensures we don't render stale sections in this pass
 
             # Compute NEW vs committed last_seen (unchanged while open)
             last_seen = float(bucket_lastseen.get(bkey, 0.0))
@@ -521,16 +528,23 @@ def render_nws_grouped_compact(entries, conf):
 
             with cols[0]:
                 if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
+                    state_changed = False
                     if active_bucket == bkey:
                         ts_opened = float(pending_seen.pop(bkey, time.time()))
                         bucket_lastseen[bkey] = ts_opened
                         st.session_state[open_key] = None
                         active_bucket = None
-                        did_close_toggle = True
+                        state_changed = True
                     else:
                         st.session_state[open_key] = bkey
                         active_bucket = bkey
                         pending_seen[bkey] = time.time()
+                        state_changed = True
+
+    if state_changed and not st.session_state.get(rerun_guard_key, False):
+        st.session_state[rerun_guard_key] = True
+        _safe_rerun()
+        return  # optional; ensures we don't render stale sections in this pass
 
             last_seen = float(bucket_lastseen.get(bkey, 0.0))
             new_count = sum(1 for x in items if x.get("timestamp",0.0) > last_seen)
