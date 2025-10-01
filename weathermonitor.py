@@ -407,7 +407,8 @@ def _new_count_for_feed(key, conf, entries):
 
 for start in range(0, len(items), MAX_BTNS_PER_ROW):
     row_items = items[start : start + MAX_BTNS_PER_ROW]
-    cols = st.columns(len(row_items))
+    # FIX: keep a constant 8-column layout so the last item doesn't stretch full width
+    cols = st.columns(MAX_BTNS_PER_ROW)
     for ci, (key, conf) in enumerate(row_items):
         entries = st.session_state[f"{key}_data"]
         new_count = _new_count_for_feed(key, conf, entries)
