@@ -15,7 +15,7 @@ DEFAULT_ID_RANGE = [i for i in range(1, 35) if i not in EXCLUDED_IDS]
 # -------------------------------------------------------------------
 # Severity policy (per your instructions):
 # - Orange -> HEX #FFA500 only
-# - Red    -> HEX #FF0000 only (placeholder until you confirm)
+# - Red    -> HEX #FF0000 only
 # -------------------------------------------------------------------
 ORANGE_HEX = "#ffa500"
 RED_HEX    = "#ff0000"
@@ -24,7 +24,7 @@ RED_HEX    = "#ff0000"
 # Regex helpers
 # -------------------------------------------------------------------
 HEX_ANY_RE = re.compile(r"#([0-9A-Fa-f]{6})")
-DAY1_LABEL_RE = re.compile(r"^Day\s*1\s*:", re.I)
+DAY_LABEL_RE = re.compile(r"^Day\s*(\d+)\s*:\s*(.+)$", re.I)  # captures day number + date (e.g., "1" + "October 1, 2025")
 
 def _norm(s: Optional[str]) -> str:
     return (s or "").strip()
@@ -106,88 +106,91 @@ def _split_hazards(text: str) -> List[str]:
 # Parsing
 # -------------------------------------------------------------------
 
+def _emit_entry(entries: List[Dict[str, Any]], *, region: str, issue: Optional[str],
+                day_num: int, day_date: Optional[str], tr, source_id: int, source_url: str):
+    """Create an entry for a given day row if severity meets threshold."""
+    severity = _severity_from_row(tr)
+    if severity not in ("Orange", "Red"):
+        return
+    tds = tr.find_all("td")
+    if len(tds) < 2:
+        return
+    hazards_text = _clean_text(tds[1])
+    hazards_list = _split_hazards(hazards_text)
+
+    entries.append({
+        "title": f"IMD — {region}",
+        "region": region,
+        "severity": severity,
+        "hazards": hazards_list,
+        "day": ("today" if day_num == 1 else "tomorrow" if day_num == 2 else f"day{day_num}"),
+        "day_num": day_num,
+        "day_date": day_date,          # e.g., "October 1, 2025"
+        "description": None,           # avoid duplication
+        "published": issue,            # IMD "Date of Issue"
+        "source_url": source_url,
+        "source_id": source_id,        # keep the numeric id for tie-breaks
+        "is_new": False,
+    })
+
 def _parse_tbody(tb, source_id: int, source_url: str) -> List[Dict[str, Any]]:
     """
     Parse one <tbody> that may contain multiple 'Warnings for ...' sections:
       Warnings for <Region>
       Date of Issue: <...>
-      Day 1: <...>   (this row decides severity via hex color)
-      Day 2: ...
-    Emit exactly one entry per section if Day 1 is Orange/Red.
+      Day 1: <...>   (Orange/Red → emit Today)
+      Day 2: <...>   (Orange/Red → emit Tomorrow)
     """
-    entries: List[Dict[str, Any]] = []
+    out: List[Dict[str, Any]] = []
     rows = tb.find_all("tr", recursive=False) or tb.find_all("tr")  # be liberal
 
-    current_region: Optional[str] = None
-    current_issue: Optional[str] = None
     i = 0
     n = len(rows)
-
     while i < n:
         tr = rows[i]
         th = tr.find("th")
         if th:
             text = _clean_text(th)
-            # Start of a new section
             if text.startswith("Warnings for"):
-                current_region = text.replace("Warnings for", "", 1).strip()
-                current_issue = None
+                region = text.replace("Warnings for", "", 1).strip()
 
-                # Expect next row to be Date of Issue
-                if i + 1 < n:
-                    th2 = rows[i + 1].find("th")
-                    if th2:
-                        t2 = _clean_text(th2)
-                        if "Date of Issue" in t2:
-                            m = re.search(r"Date of Issue\s*:\s*(.+)$", t2, re.I)
-                            if m:
-                                current_issue = m.group(1).strip()
-                            i += 1  # consume DoI row
+                # Date of Issue (next row if th)
+                issue = None
+                if i + 1 < n and rows[i + 1].find("th"):
+                    t2 = _clean_text(rows[i + 1].find("th"))
+                    m_issue = re.search(r"Date of Issue\s*:\s*(.+)$", t2, re.I)
+                    if m_issue:
+                        issue = m_issue.group(1).strip()
+                    i += 1  # consume DoI row
 
-                # Expect next row to be Day 1; else fallback search
-                day1_row = None
-                if i + 1 < n:
-                    candidate = rows[i + 1]
-                    tds = candidate.find_all("td")
-                    if len(tds) >= 2 and DAY1_LABEL_RE.match(_clean_text(tds[0])):
-                        day1_row = candidate
-                        i += 1  # consume Day 1 row
-                if day1_row is None:
-                    j = i + 1
-                    scan_limit = min(n, i + 10)
-                    while j < scan_limit:
-                        tds = rows[j].find_all("td")
-                        if len(tds) >= 2 and DAY1_LABEL_RE.match(_clean_text(tds[0])):
-                            day1_row = rows[j]
-                            i = j
-                            break
-                        j += 1
+                # Walk forward through subsequent rows until next section/blank break
+                j = i + 1
+                while j < n:
+                    trj = rows[j]
+                    thj = trj.find("th")
+                    # stop when a new section starts or spacer rows (td colspan breaks) are encountered
+                    if thj and _clean_text(thj).startswith("Warnings for"):
+                        break
 
-                if current_region and day1_row:
-                    severity = _severity_from_row(day1_row)
-                    if severity in ("Orange", "Red"):
-                        tds = day1_row.find_all("td")
-                        day_label = _clean_text(tds[0])
-                        hazards_text = _clean_text(tds[1])
-                        hazards_list = _split_hazards(hazards_text)
-                        m_date = re.search(r"Day\s*1\s*:\s*(.+)$", day_label, re.I)
-                        day1_date = m_date.group(1).strip() if m_date else None
+                    tds = trj.find_all("td")
+                    if len(tds) >= 2:
+                        label = _clean_text(tds[0])
+                        m_day = DAY_LABEL_RE.match(label)
+                        if m_day:
+                            day_num = int(m_day.group(1))
+                            day_date = m_day.group(2).strip()
+                            if day_num in (1, 2):
+                                _emit_entry(
+                                    out, region=region, issue=issue,
+                                    day_num=day_num, day_date=day_date, tr=trj,
+                                    source_id=source_id, source_url=source_url
+                                )
+                    j += 1
 
-                        entries.append({
-                            "title": f"IMD — {current_region}",
-                            "region": current_region,
-                            "severity": severity,
-                            "hazards": hazards_list,
-                            "day1_date": day1_date,
-                            "description": None,          # avoid duplication
-                            "published": current_issue,   # IMD "Date of Issue"
-                            "source_url": source_url,
-                            "source_id": source_id,       # keep the numeric id for tie-breaks
-                            "is_new": False,
-                        })
+                i = j - 1  # jump to end of this section
         i += 1
 
-    return entries
+    return out
 
 def _parse_mc_html(html: str, source_id: int, source_url: str) -> List[Dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
@@ -241,37 +244,35 @@ async def _crawl_ids(client, ids: List[int]) -> List[Dict[str, Any]]:
 
 async def scrape_imd_current_orange_red_async(conf: dict, client) -> dict:
     """
-    Crawl sub-division pages (ids 1..34, but exclude 32 & 33).
+    Crawl sub-division pages (ids 1..34, exclude 32 & 33).
     For each region section:
       - read 'Date of Issue'
-      - read Day 1 row
+      - read Day 1 (→ item with day='today') and Day 2 (→ item with day='tomorrow')
       - severity from hex color:
           Orange -> #FFA500 only
           Red    -> #FF0000 only
       - keep only Orange/Red
-    Emit one entry per region that meets the threshold.
-    Also: de-duplicate by region name (keep the lowest source_id).
+    Emit one entry per (region, day) that meets the threshold.
+    De-duplicate by (region, day_num): keep the lowest source_id (e.g., 31 over 32/33).
     """
-    # 1) Resolve and hard-filter ids
     ids = conf.get("ids") or DEFAULT_ID_RANGE
     ids = [i for i in ids if i not in EXCLUDED_IDS]  # enforce exclusion even if conf passes them
 
-    # 2) Crawl
     entries = await _crawl_ids(client, ids)
 
-    # 3) De-duplicate by region name: keep the lowest source_id (so 31 wins vs 32/33)
-    dedup: Dict[str, Dict[str, Any]] = {}
+    # Deduplicate by region + day_num, preferring lowest source_id
+    dedup: Dict[tuple, Dict[str, Any]] = {}
     for e in entries:
         region = (e.get("region") or "").strip()
-        if not region:
+        day_num = int(e.get("day_num") or 0)
+        if not region or day_num not in (1, 2):
             continue
         sid = int(e.get("source_id") or 10**9)
-        if region not in dedup or sid < int(dedup[region].get("source_id") or 10**9):
-            dedup[region] = e
+        key = (region, day_num)
+        if key not in dedup or sid < int(dedup[key].get("source_id") or 10**9):
+            dedup[key] = e
 
     final_entries = list(dedup.values())
-
-    # 4) Sort by Date of Issue desc if present
-    final_entries.sort(key=lambda e: e.get("published") or "", reverse=True)
+    final_entries.sort(key=lambda e: (e.get("published") or "", e.get("region") or "", e.get("day_num") or 0), reverse=True)
 
     return {"entries": final_entries, "source": {"type": "imd_mc_pages", "excluded_ids": sorted(EXCLUDED_IDS)}}
