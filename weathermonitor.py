@@ -320,20 +320,19 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
 
 # --------------------------------------------------------------------
 # New count helper for the badge row
-
+# Count *instances* of unseen active Meteoalarm alerts (sums the "(N active)" numbers).
 def _meteoalarm_unseen_active_instances(entries, seen_ids):
-    # Sum ACTIVE instances for unseen Meteoalarm alerts across all countries and both days.
     total = 0
     entries = entries or []
     for country in entries:
-        alerts_dict = (country.get("alerts") or {})
+        alerts_by_day = (country.get("alerts") or {})
         counts = country.get("counts") or {}
         by_day = counts.get("by_day") or {}
         by_type = counts.get("by_type") or {}
         for day in ("today", "tomorrow"):
-            alerts = alerts_dict.get(day) or []
-            day_map = by_day.get(day) or {}
-            for e in alerts:
+            day_alerts = alerts_by_day.get(day) or []
+            day_counts = by_day.get(day) or {}
+            for e in day_alerts:
                 try:
                     aid = alert_id(e)
                 except Exception:
@@ -342,17 +341,17 @@ def _meteoalarm_unseen_active_instances(entries, seen_ids):
                     continue
                 level = (e.get("level") or "").strip()
                 typ   = (e.get("type") or "").strip()
-                # Prefer explicit per-day count
-                n = day_map.get(f"{level}|{typ}")
+                # Prefer specific per-day count for level|type
+                n = day_counts.get(f"{level}|{typ}")
                 if not isinstance(n, int) or n <= 0:
-                    # Fallback to per-type bucket totals (level or 'total')
+                    # Fallback to per-type totals
                     bucket = by_type.get(typ) or {}
                     n = bucket.get(level) or bucket.get("total") or 0
-                # Default to 1 if still unknown
                 if not isinstance(n, int) or n <= 0:
                     n = 1
                 total += int(n)
     return int(max(0, total))
+
 
 # --------------------------------------------------------------------
 def _new_count_for(key, conf, entries):
