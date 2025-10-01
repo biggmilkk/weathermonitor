@@ -1031,48 +1031,43 @@ def _bullet_line(sev: str, hazards: list[str], is_new: bool) -> str:
 
 def render_imd_compact(item: dict, conf: dict) -> None:
     """
-    Expect a merged item per region:
+    One card per region:
       - region (str)
-      - days: {"today": {"severity","hazards","date","is_new"?}, "tomorrow": {...}}
+      - days: {"today": {"severity","hazards","date","is_new"?}, "tomorrow": {...}}  # either/both present
       - published (str)
       - source_url (str)
       - is_new (bool)
-    Backward compatible if 'days' is missing.
     """
     region = (item.get("region") or "IMD Sub-division").strip()
     days   = item.get("days") or {}
     link   = item.get("source_url")
     pub    = _fmt_short_day(item.get("published"))
 
-    # NEW stripe if ANY of: item.is_new, days.today.is_new, days.tomorrow.is_new
     is_new_item     = bool(item.get("is_new"))
     is_new_today    = bool((days.get("today") or {}).get("is_new"))
     is_new_tomorrow = bool((days.get("tomorrow") or {}).get("is_new"))
     is_new_any      = is_new_item or is_new_today or is_new_tomorrow
 
-    # Stripe the region header when anything is NEW
-    header_html = _stripe_wrap(f"<strong>{html.escape(region)}</strong>", is_new_any)
+    header_html = _stripe_wrap(f"<h2>{html.escape(region)}</h2>", is_new_any)
     st.markdown(header_html, unsafe_allow_html=True)
 
-    # Today (if present)
-    if isinstance(days, dict) and "today" in days:
-        st.caption("Today")
-        d = days["today"] or {}
-        # Show [NEW] on the bullet if today is new; fallback to item-level is_new if not provided
-        st.markdown(_bullet_line(d.get("severity"), d.get("hazards") or [], d.get("is_new", is_new_item)), unsafe_allow_html=True)
+    # helper: render one day block
+    def _render_day(label: str, d: dict | None):
+        if not d:
+            return
+        st.markdown(f"<h4 style='margin-top:16px'>{label}</h4>", unsafe_allow_html=True)
+        sev = (d.get("severity") or "").title()
+        hazards = d.get("hazards") or []
+        st.markdown(_bullet_line(sev, hazards, d.get("is_new", is_new_item)), unsafe_allow_html=True)
 
-    # Tomorrow (if present)
-    if isinstance(days, dict) and "tomorrow" in days:
-        st.caption("Tomorrow")
-        d = days["tomorrow"] or {}
-        # Show [NEW] on the bullet if tomorrow is new; fallback to item-level is_new if not provided
-        st.markdown(_bullet_line(d.get("severity"), d.get("hazards") or [], d.get("is_new", is_new_item)), unsafe_allow_html=True)
+    # Today / Tomorrow
+    _render_day("Today",    days.get("today"))
+    _render_day("Tomorrow", days.get("tomorrow"))
 
-    # Back-compat: single-day items (older scraper)
     if not days:
+        st.markdown("<h4 style='margin-top:16px'>Today</h4>", unsafe_allow_html=True)
         sev = (item.get("severity") or "").title()
         haz = item.get("hazards") or []
-        st.caption("Today")
         st.markdown(_bullet_line(sev, haz if isinstance(haz, list) else [str(haz)], is_new_item), unsafe_allow_html=True)
 
     if link:
