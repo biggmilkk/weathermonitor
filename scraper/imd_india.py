@@ -7,11 +7,9 @@ from bs4 import BeautifulSoup
 IMD_MC = "https://mausam.imd.gov.in/imd_latest/contents/subdivisionwise-warning_mc.php?id={id}"
 
 # Valid sub-division IDs: 1..34
-DEFAULT_ID_RANGE = list(range(1, 35))
+DEFAULT_ID_RANGE = [i for i in range(1, 35) if i not in (32, 33)]
 
-# Severity policy (per your instructions):
-# - Orange -> HEX #FFA500 only
-# - Red    -> HEX #FF0000 (keep for now; you'll update if needed)
+# Severity policy:
 ORANGE_HEX = "#ffa500"
 RED_HEX    = "#ff0000"
 
