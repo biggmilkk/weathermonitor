@@ -1008,17 +1008,15 @@ import streamlit as st
 from dateutil import parser as dateparser
 
 _IMD_BULLETS = {
-    "Orange": "#FF9900",  # we render a dot only; scraper filters which ones to keep
+    "Orange": "#FF9900",  # dot color
     "Red":    "#FF0000",
 }
 
 def _fmt_short_day(pub: str | None) -> str | None:
-    """Return a short date like 'Tue, 1 Oct 25' from a date string; fall back to original."""
     if not pub:
         return None
     try:
         dt = dateparser.parse(pub)
-        # Linux/Mac: %-d removes leading zero; Windows may not support it -> fallback
         try:
             return dt.strftime("%a, %-d %b %y")
         except Exception:
@@ -1032,8 +1030,8 @@ def render_imd_compact(item: dict, conf: dict) -> None:
       - region (str)
       - severity ('Orange'|'Red')
       - hazards (list[str])
-      - day1_date (str, e.g. 'October 1, 2025')  # optional, used for 'Today' heading context
-      - published (str)  # IMD 'Date of Issue'
+      - day1_date (str, e.g. 'October 1, 2025')
+      - published (str)
       - source_url (str)
       - is_new (bool)
     """
@@ -1044,11 +1042,8 @@ def render_imd_compact(item: dict, conf: dict) -> None:
     pub_str  = _fmt_short_day(item.get("published"))
     link     = item.get("source_url")
 
-    # Active count: 1 per region section (since we only keep Day 1)
-    active_count = 1
-
-    # Header: Region (N active)
-    st.markdown(f"**{html.escape(region)} ({active_count} active)**")
+    # Header: Region name only
+    st.markdown(f"**{html.escape(region)}**")
 
     # Subheader: Today (we only present Day 1)
     st.caption("Today")
@@ -1060,9 +1055,7 @@ def render_imd_compact(item: dict, conf: dict) -> None:
     sev_tag = f"[{severity}]" if severity else ""
 
     hazards_txt = ", ".join(hazards) if isinstance(hazards, list) else (hazards or "")
-    bullet_html = (
-        f"{dot} {new_tag}{sev_tag} {html.escape(hazards_txt)}"
-    )
+    bullet_html = f"{dot} {new_tag}{sev_tag} {html.escape(hazards_txt)}"
     st.markdown(bullet_html, unsafe_allow_html=True)
 
     # Read more
