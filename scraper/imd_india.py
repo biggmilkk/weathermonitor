@@ -8,52 +8,33 @@ IMD_MC = "https://mausam.imd.gov.in/imd_latest/contents/subdivisionwise-warning_
 
 # -------------------------------------------------------------------
 # Severity mapping
-# NOTE:
-#  - You asked to explicitly support Orange as rgb(255, 165, 0).
-#  - We keep existing hex handling, including Red (#ff0000),
-#    but we DO NOT add rgb(...) detection for Red yet.
-#  - If IMD uses slightly different orange tints, we accept common hexes too.
+#  - Only trust Orange when it's given as rgb(255,165,0)
+#  - Keep Red support only for hex (#ff0000) for now
 # -------------------------------------------------------------------
 
 HEX_TO_SEVERITY = {
-    "#ff0000": "Red",      # keep hex red support (no rgb red yet)
-    "#ff9900": "Orange",
-    "#ffa500": "Orange",   # canonical orange
-    "#ff8c00": "Orange",   # sometimes used
-    "#f90":    "Orange",   # short hex (rare, but cheap to support)
-    # ignored:
-    "#ffff00": None,       # Yellow
-    "#7cfc00": None,       # Green
-    "#4dff4d": None,       # Green (alt)
+    "#ff0000": "Red",   # Red (hex only, no rgb red yet)
+    # all other hexes ignored
 }
 
-# rgb(...) recognition — ONLY Orange for now, per your request
 RGB_TO_SEVERITY = {
-    (255, 165, 0): "Orange",
-    # no red rgb here yet — you'll add when ready
+    (255, 165, 0): "Orange",  # official orange
 }
 
-# Nationwide coverage: confirmed IDs 1..34 (35+ are empty)
 DEFAULT_ID_RANGE = list(range(1, 35))
 
 # ----------------- helpers -----------------
 
 def _extract_bgcolor(style: Optional[str]) -> Optional[str]:
-    """
-    Extract background-color from an inline style.
-    Returns a normalized token:
-      - hex in lowercase (e.g., '#ffa500' or '#f90')
-      - or 'rgb(r,g,b)' with canonical spacing removed (lowercase)
-    """
     if not style:
         return None
 
-    # Try hex first (#RGB or #RRGGBB)
+    # Hex (#RGB or #RRGGBB)
     m_hex = re.search(r"background-color\s*:\s*([#A-Fa-f0-9]{3,7})\b", style)
     if m_hex:
         return m_hex.group(1).strip().lower()
 
-    # Try rgb() — allow arbitrary whitespace
+    # rgb(r, g, b)
     m_rgb = re.search(
         r"background-color\s*:\s*rgb\s*\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)",
         style,
@@ -61,31 +42,19 @@ def _extract_bgcolor(style: Optional[str]) -> Optional[str]:
     )
     if m_rgb:
         r, g, b = (int(m_rgb.group(1)), int(m_rgb.group(2)), int(m_rgb.group(3)))
-        # Constrain to valid byte range
-        r = max(0, min(255, r))
-        g = max(0, min(255, g))
-        b = max(0, min(255, b))
         return f"rgb({r},{g},{b})"
 
     return None
 
 def _severity_from_tr(tr) -> Optional[str]:
-    """
-    Map a <tr> style's background-color to severity.
-    Supports:
-      - hex colors via HEX_TO_SEVERITY
-      - rgb(...) for Orange only: rgb(255,165,0)
-    """
     token = _extract_bgcolor(tr.get("style"))
     if not token:
         return None
 
-    # Hex path
-    if token.startswith("#"):
+    if token.startswith("#"):  # hex
         return HEX_TO_SEVERITY.get(token)
 
-    # rgb(...) path — only Orange for now
-    if token.startswith("rgb(") and token.endswith(")"):
+    if token.startswith("rgb(") and token.endswith(")"):  # rgb
         try:
             parts = token[4:-1].split(",")
             rgb = (int(parts[0]), int(parts[1]), int(parts[2]))
@@ -96,79 +65,94 @@ def _severity_from_tr(tr) -> Optional[str]:
     return None
 
 def _clean_text(el) -> str:
-    """
-    Convert <br> to ", ", collapse whitespace, and remove duplicate commas.
-    """
     for br in el.find_all("br"):
         br.replace_with(", ")
     txt = el.get_text(" ", strip=True)
     txt = re.sub(r"\s+", " ", txt).strip(" ,")
-    # Collapse duplicate commas/spaces that sometimes appear after replacements
     txt = re.sub(r"(,\s*){2,}", ", ", txt)
     return txt
 
-def _parse_section(table) -> List[Dict[str, Any]]:
-    """
-    A section looks like:
-      <tr><th>Warnings for <Region></th></tr>
-      <tr><th>Date of Issue: ...</th></tr>
-      <tr style="background-color:..."><td>Day 1: ...</td><td>Hazards</td></tr>
-      ...
-    Return a single entry if Day 1 is Orange/Red (per current mapping), else [].
-    """
-    rows = table.find_all("tr")
-    region = None
-    published = None
+def _split_hazards(text: str) -> List[str]:
+    parts = [p.strip(" ,;") for p in re.split(r",", text) if p.strip(" ,;")]
+    seen, out = set(), []
+    for p in parts:
+        if p.lower() not in seen:
+            seen.add(p.lower())
+            out.append(p)
+    return out
 
-    # Find region and date header rows first
+# ----------------- parsing -----------------
+
+def _parse_sections_scoped(table) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    rows = table.find_all("tr")
+
+    current_region: Optional[str] = None
+    current_issue: Optional[str] = None
+    section_rows: List = []
+
+    def _flush_if_any(section_rows: List) -> None:
+        nonlocal entries, current_region, current_issue
+        for tr in section_rows:
+            tds = tr.find_all("td")
+            if len(tds) >= 2:
+                day_label = _clean_text(tds[0])
+                if re.match(r"^Day\s*1\s*:", day_label, re.I):
+                    sev = _severity_from_tr(tr)
+                    if sev not in ("Orange", "Red"):
+                        return
+                    hazards_text = _clean_text(tds[1])
+                    hazards_list = _split_hazards(hazards_text)
+                    m_date = re.search(r"Day\s*1\s*:\s*(.+)$", day_label, re.I)
+                    day1_date = m_date.group(1).strip() if m_date else None
+
+                    entries.append({
+                        "title": f"IMD — {current_region or 'Sub-division'}",
+                        "region": current_region,
+                        "severity": sev,
+                        "hazards": hazards_list,
+                        "day1_date": day1_date,
+                        "description": None,
+                        "published": current_issue,
+                        "source_url": None,
+                        "is_new": False,
+                    })
+                    return
+
     for tr in rows:
         th = tr.find("th")
         if th:
             text = _clean_text(th)
             if text.startswith("Warnings for"):
-                region = text.replace("Warnings for", "", 1).strip()
+                if current_region is not None:
+                    _flush_if_any(section_rows)
+                current_region = text.replace("Warnings for", "", 1).strip()
+                current_issue = None
+                section_rows = []
+                continue
             elif "Date of Issue" in text:
                 m = re.search(r"Date of Issue\s*:\s*(.+)$", text, re.I)
                 if m:
-                    published = m.group(1).strip()
+                    current_issue = m.group(1).strip()
+                continue
+        if current_region is not None:
+            section_rows.append(tr)
 
-    # Now find Day 1 row
-    for tr in rows:
-        tds = tr.find_all("td")
-        if len(tds) >= 2:
-            day_label = _clean_text(tds[0])
-            if re.match(r"^Day\s*1\s*:", day_label, re.I):
-                sev = _severity_from_tr(tr)
-                # Keep only Orange/Red per current requirement
-                if sev not in ("Orange", "Red"):
-                    return []
-                hazards = _clean_text(tds[1])
-                title = f"{sev} • {hazards or 'Weather'} — {region or 'IMD Sub-division'}"
-                return [{
-                    "title": title,
-                    "region": region,
-                    "severity": sev,
-                    "event": hazards or None,
-                    "description": f"{day_label} — {hazards}" if hazards else day_label,
-                    "published": published,   # IMD's Date of Issue
-                    "source_url": None,       # filled by caller
-                    "is_new": False,
-                }]
-    return []
+    if current_region is not None:
+        _flush_if_any(section_rows)
+
+    return entries
 
 def _parse_mc_html(html: str, source_url: str) -> List[Dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
-    entries: List[Dict[str, Any]] = []
-
-    # Find all tables that contain "Warnings for"
+    out: List[Dict[str, Any]] = []
     for tbl in soup.find_all("table"):
         if "Warnings for" in tbl.get_text(" ", strip=True):
-            items = _parse_section(tbl)
+            items = _parse_sections_scoped(tbl)
             for it in items:
                 it["source_url"] = source_url
-            entries.extend(items)
-
-    return entries
+            out.extend(items)
+    return out
 
 # ----------------- async fetch -----------------
 
@@ -184,14 +168,12 @@ async def _fetch_one(client, idx: int) -> List[Dict[str, Any]]:
 
 async def _crawl_ids(client, ids: List[int]) -> List[Dict[str, Any]]:
     sem = asyncio.Semaphore(12)
-
     async def one(i: int):
         async with sem:
             try:
                 return await _fetch_one(client, i)
             except Exception:
                 return []
-
     results: List[Dict[str, Any]] = []
     chunks = await asyncio.gather(*[one(i) for i in ids])
     for ch in chunks:
@@ -204,13 +186,21 @@ async def scrape_imd_current_orange_red_async(conf: dict, client) -> dict:
     """
     Scrape ids 1..34 for 'Sub-division-wise warnings'.
     Keep only Day 1 rows where background-color maps to Orange/Red.
-    - Orange supports: hex (#ff9900, #ffa500, #ff8c00, #f90) and rgb(255,165,0)
-    - Red supports: hex (#ff0000) only for now (no rgb red handling yet)
-    Output: { "entries": [...], "source": {...} }
+
+    - Orange supports only rgb(255,165,0)
+    - Red supports hex #ff0000 only (no rgb red yet)
+
+    Output entry fields:
+      - title: "IMD — <Region>"
+      - region: "<Region>"
+      - severity: "Orange" | "Red"
+      - hazards: [list of hazards]
+      - day1_date: "October 1, 2025"
+      - published: "<Date of Issue>"
+      - source_url: page URL
+      - is_new: bool
     """
     ids = conf.get("ids") or DEFAULT_ID_RANGE
     entries = await _crawl_ids(client, ids)
-
-    # Sort by Date of Issue if present (desc)
     entries.sort(key=lambda e: e.get("published") or "", reverse=True)
     return {"entries": entries, "source": {"type": "imd_mc_pages"}}
