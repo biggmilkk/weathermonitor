@@ -57,6 +57,12 @@ def get_feed_definitions():
             "type": "rss_meteoalarm",
             "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe",
         },
+        "imd_india_today": {
+            "label": "IMD (India) — Today (Orange/Red)",
+            "type": "imd_current_orange_red",
+            "conf": {
+                "ids": list(range(1, 35))  # 1–34 inclusive
+        },
         "cma_china": {
             "label": "CMA (China)",
             "type": "rss_cma",
