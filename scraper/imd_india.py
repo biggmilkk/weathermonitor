@@ -6,106 +6,126 @@ from bs4 import BeautifulSoup
 
 IMD_MC = "https://mausam.imd.gov.in/imd_latest/contents/subdivisionwise-warning_mc.php?id={id}"
 
-# IDs 1..34 are valid; 35+ are empty
+# Valid sub-division IDs: 1..34 (35+ are empty)
 DEFAULT_ID_RANGE = list(range(1, 35))
 
-# --- Severity policy (as requested) ---------------------------------
-# Orange must be exactly rgb(255,165,0). Red is hex-only (#ff0000).
+# Severity policy (as requested):
+# - Orange -> rgb(255,165,0) only
+# - Red    -> #ff0000 (hex) only
 ORANGE_RGB = (255, 165, 0)
-RED_HEX_LOWER = "#ff0000"
+RED_HEX = "#ff0000"
 
+# -------------------------------------------------------------------
+# Style parsing helpers (robust to extra CSS like darkreader vars)
+# -------------------------------------------------------------------
 
-# ----------------- style parsing helpers -----------------
-
-_RGB_RE = re.compile(
-    r"(?:background(?:-color)?|bgcolor)\s*:\s*rgb\s*\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)",
+# Capture rgb(...) anywhere in style/border/background, ignore spacing & case
+RGB_ANY_RE = re.compile(
+    r"rgb\s*\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)",
     re.IGNORECASE,
 )
-_HEX_RE = re.compile(
-    r"(?:background(?:-color)?|bgcolor)\s*:\s*([#A-Fa-f0-9]{3,7})\b",
-    re.IGNORECASE,
-)
 
-def _rgb_tuple_from_style(style: Optional[str]) -> Optional[tuple]:
+# Capture any hex like #RRGGBB or #RGB anywhere in style
+HEX_ANY_RE = re.compile(r"#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})")
+
+def _rgb_from_style(style: Optional[str]) -> Optional[tuple]:
     if not style:
         return None
-    m = _RGB_RE.search(style)
+    m = RGB_ANY_RE.search(style)
     if not m:
         return None
     r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
     return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
 
-def _hex_from_style(style: Optional[str]) -> Optional[str]:
+def _hex_candidates_from_style(style: Optional[str]) -> List[str]:
+    """Return ALL hex codes present (lowercased) — we will only accept #ff0000 for Red."""
     if not style:
-        return None
-    m = _HEX_RE.search(style)
-    if not m:
-        return None
-    return m.group(1).strip().lower()
+        return []
+    return [f"#{h.lower()}" for h in HEX_ANY_RE.findall(style)]
 
 def _bgcolor_attr(node) -> Optional[str]:
-    # Some pages may use a legacy bgcolor attribute
+    """
+    Normalize legacy 'bgcolor' attribute (could be hex or rgb()) to:
+      - 'rgb(r,g,b)' if rgb form
+      - lowercase hex '#rrggbb' or '#rgb' if hex form
+    """
     val = node.get("bgcolor")
     if not val:
         return None
     s = str(val).strip()
-    # Normalize hex-like values
-    if s.startswith("#") and (len(s) in (4, 7)):
-        return s.lower()
-    # Normalize rgb(...) values if present
-    m = re.match(r"rgb\s*\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)", s, re.I)
-    if m:
-        r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    m_rgb = RGB_ANY_RE.fullmatch(s) or RGB_ANY_RE.search(s)
+    if m_rgb:
+        r, g, b = int(m_rgb.group(1)), int(m_rgb.group(2)), int(m_rgb.group(3))
         return f"rgb({r},{g},{b})"
+    m_hex = HEX_ANY_RE.search(s)
+    if m_hex:
+        return f"#{m_hex.group(0).lower()}" if not s.startswith("#") else s.lower()
     return s.lower()
 
+def _is_orange_rgb_token(token: Optional[str]) -> bool:
+    """Accept only exact rgb(255,165,0), insensitive to spaces/case."""
+    if not token:
+        return False
+    m = RGB_ANY_RE.fullmatch(token) or RGB_ANY_RE.search(token)
+    if not m:
+        return False
+    r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    return (r, g, b) == ORANGE_RGB
+
+def _is_red_hex_token(token: Optional[str]) -> bool:
+    """Accept only #ff0000 (exact), case-insensitive input normalized to lower."""
+    if not token:
+        return False
+    return token.strip().lower() == RED_HEX
 
 def _severity_from_row_or_cells(tr) -> Optional[str]:
     """
-    Determine severity from the Day 1 row. We check, in order:
-      1) <tr style="..."> for rgb(...) or hex (#...).
-      2) Each <td> style (first 2 cells).
-      3) bgcolor attribute on tr/td.
+    Determine severity from the Day 1 row. We check, in priority:
+      1) <tr style="..."> rgb/hex
+      2) <td> style (first two cells)
+      3) bgcolor attribute on tr/td
     Accept only:
-      - Orange if rgb == (255,165,0)
-      - Red    if hex == #ff0000
+      - Orange if any style token resolves to rgb(255,165,0)
+      - Red    if any style/bgcolor token equals #ff0000
     """
     # 1) TR style
-    rgb = _rgb_tuple_from_style(tr.get("style"))
-    if rgb == ORANGE_RGB:
+    style_tr = tr.get("style") or ""
+    if _is_orange_rgb_token(style_tr):
         return "Orange"
-    hx = _hex_from_style(tr.get("style"))
-    if hx == RED_HEX_LOWER:
-        return "Red"
+    # Accept Red only if #ff0000 appears (ignore other hexes like #cc8400 from darkreader)
+    for hx in _hex_candidates_from_style(style_tr):
+        if _is_red_hex_token(hx):
+            return "Red"
 
     # 2) TD styles
     tds = tr.find_all("td")
     for td in tds[:2]:
-        rgb = _rgb_tuple_from_style(td.get("style"))
-        if rgb == ORANGE_RGB:
+        style_td = td.get("style") or ""
+        if _is_orange_rgb_token(style_td):
             return "Orange"
-        hx = _hex_from_style(td.get("style"))
-        if hx == RED_HEX_LOWER:
-            return "Red"
+        for hx in _hex_candidates_from_style(style_td):
+            if _is_red_hex_token(hx):
+                return "Red"
 
-    # 3) bgcolor attribute on tr / td
+    # 3) bgcolor attr
     bg_tr = _bgcolor_attr(tr)
-    if bg_tr == RED_HEX_LOWER:
-        return "Red"
-    if bg_tr == f"rgb({ORANGE_RGB[0]},{ORANGE_RGB[1]},{ORANGE_RGB[2]})":
+    if _is_orange_rgb_token(bg_tr):
         return "Orange"
+    if _is_red_hex_token(bg_tr):
+        return "Red"
 
     for td in tds[:2]:
         bg_td = _bgcolor_attr(td)
-        if bg_td == RED_HEX_LOWER:
-            return "Red"
-        if bg_td == f"rgb({ORANGE_RGB[0]},{ORANGE_RGB[1]},{ORANGE_RGB[2]})":
+        if _is_orange_rgb_token(bg_td):
             return "Orange"
+        if _is_red_hex_token(bg_td):
+            return "Red"
 
     return None
 
-
-# ----------------- text cleaning -----------------
+# -------------------------------------------------------------------
+# Text cleaning
+# -------------------------------------------------------------------
 
 def _clean_text(el) -> str:
     # Convert <br> to ", " and normalize whitespace/commas
@@ -126,8 +146,9 @@ def _split_hazards(text: str) -> List[str]:
             out.append(p)
     return out
 
-
-# ----------------- section-scoped parsing -----------------
+# -------------------------------------------------------------------
+# Section-scoped parsing
+# -------------------------------------------------------------------
 
 def _parse_sections_scoped(table) -> List[Dict[str, Any]]:
     """
@@ -135,7 +156,7 @@ def _parse_sections_scoped(table) -> List[Dict[str, Any]]:
     Within a section:
       - capture 'Date of Issue'
       - find the Day 1 row; read severity from row/cell colors
-      - if Orange/Red, emit a single entry for that region
+      - if Orange/Red, emit one entry for that region
     """
     entries: List[Dict[str, Any]] = []
     rows = table.find_all("tr")
@@ -149,7 +170,7 @@ def _parse_sections_scoped(table) -> List[Dict[str, Any]]:
         if current_region is None:
             section_rows = []
             return
-        # look for Day 1 inside the accumulated rows
+        # Search the collected rows for Day 1
         for tr in section_rows:
             tds = tr.find_all("td")
             if len(tds) >= 2:
@@ -157,7 +178,7 @@ def _parse_sections_scoped(table) -> List[Dict[str, Any]]:
                 if re.match(r"^Day\s*1\s*:", day_label, re.I):
                     severity = _severity_from_row_or_cells(tr)
                     if severity not in ("Orange", "Red"):
-                        break  # not high enough level; skip section
+                        break  # below threshold → skip this section
                     hazards_text = _clean_text(tds[1])
                     hazards_list = _split_hazards(hazards_text)
                     m_date = re.search(r"Day\s*1\s*:\s*(.+)$", day_label, re.I)
@@ -182,10 +203,9 @@ def _parse_sections_scoped(table) -> List[Dict[str, Any]]:
         if th:
             text = _clean_text(th)
             if text.startswith("Warnings for"):
-                # close previous section
+                # close previous section and start a new one
                 if current_region is not None:
                     _flush_section()
-                # start new section
                 current_region = text.replace("Warnings for", "", 1).strip()
                 current_issue = None
                 section_rows = []
@@ -196,16 +216,13 @@ def _parse_sections_scoped(table) -> List[Dict[str, Any]]:
                     current_issue = m.group(1).strip()
                 continue
 
-        # Collect potential day rows for current section
         if current_region is not None:
             section_rows.append(tr)
 
-    # flush last open section
     if current_region is not None:
         _flush_section()
 
     return entries
-
 
 def _parse_mc_html(html: str, source_url: str) -> List[Dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
@@ -218,8 +235,9 @@ def _parse_mc_html(html: str, source_url: str) -> List[Dict[str, Any]]:
             out.extend(items)
     return out
 
-
-# ----------------- async fetch -----------------
+# -------------------------------------------------------------------
+# Async fetch
+# -------------------------------------------------------------------
 
 async def _fetch_one(client, idx: int) -> List[Dict[str, Any]]:
     url = IMD_MC.format(id=idx)
@@ -247,16 +265,16 @@ async def _crawl_ids(client, ids: List[int]) -> List[Dict[str, Any]]:
         results.extend(ch)
     return results
 
-
-# ----------------- public entry -----------------
+# -------------------------------------------------------------------
+# Public entry
+# -------------------------------------------------------------------
 
 async def scrape_imd_current_orange_red_async(conf: dict, client) -> dict:
     """
-    Crawl sub-division pages (ids 1..34).
-    For each region section on a page:
+    Crawl sub-division pages (ids 1..34). For each region section:
       - read 'Date of Issue'
       - read Day 1 row
-      - determine severity from the row/cell color:
+      - severity from row/cell color:
           Orange -> rgb(255,165,0) only
           Red    -> #ff0000 (hex) only
       - keep only Orange/Red
@@ -264,5 +282,6 @@ async def scrape_imd_current_orange_red_async(conf: dict, client) -> dict:
     """
     ids = conf.get("ids") or DEFAULT_ID_RANGE
     entries = await _crawl_ids(client, ids)
+    # Sort by Date of Issue (desc) if present
     entries.sort(key=lambda e: e.get("published") or "", reverse=True)
     return {"entries": entries, "source": {"type": "imd_mc_pages"}}
