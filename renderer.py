@@ -1000,17 +1000,14 @@ def render_pagasa(item, conf):
     st.markdown('---')
 
 # ============================================================
-# IMD (India) compact renderer (Meteoalarm-like; Today/Tomorrow)
+# IMD (India) grouped renderer: Today + Tomorrow in one card
 # ============================================================
 
 import html
 import streamlit as st
 from dateutil import parser as dateparser
 
-_IMD_BULLETS = {
-    "Orange": "#FF9900",
-    "Red":    "#FF0000",
-}
+_IMD_DOT = {"Orange": "#FF9900", "Red": "#FF0000"}
 
 def _fmt_short_day(pub: str | None) -> str | None:
     if not pub:
@@ -1024,50 +1021,55 @@ def _fmt_short_day(pub: str | None) -> str | None:
     except Exception:
         return pub
 
-def render_imd_compact(item: dict, conf: dict) -> None:
-    """
-    Expected fields:
-      - region (str)
-      - severity ('Orange'|'Red')
-      - hazards (list[str])
-      - day ('today'|'tomorrow'|...)
-      - day_num (int)
-      - day_date (str)  # optional context
-      - published (str) # Date of Issue
-      - source_url (str)
-      - is_new (bool)
-    """
-    region   = (item.get("region") or "IMD Sub-division").strip()
-    severity = (item.get("severity") or "").title()
-    hazards  = item.get("hazards") or []
-    is_new   = bool(item.get("is_new"))
-    pub_str  = _fmt_short_day(item.get("published"))
-    link     = item.get("source_url")
-    day_lbl  = item.get("day") or "today"  # 'today' or 'tomorrow'
-
-    # Header: Region
-    st.markdown(f"**{html.escape(region)}**")
-
-    # Subheader: Today / Tomorrow
-    st.caption("Today" if day_lbl == "today" else "Tomorrow" if day_lbl == "tomorrow" else day_lbl.title())
-
-    # Bullet line
-    color = _IMD_BULLETS.get(severity, "#888")
+def _bullet_line(sev: str, hazards: list[str], is_new: bool) -> str:
+    color = _IMD_DOT.get((sev or "").title(), "#888")
     dot   = f"<span style='color:{color};font-size:16px;'>&#9679;</span>"
     new_tag = "[NEW] " if is_new else ""
-    sev_tag = f"[{severity}]" if severity else ""
+    sev_tag = f"[{sev.title()}]" if sev else ""
+    hz_txt = ", ".join(hazards or [])
+    return f"{dot} {new_tag}{sev_tag} {html.escape(hz_txt)}"
 
-    hazards_txt = ", ".join(hazards) if isinstance(hazards, list) else (hazards or "")
-    bullet_html = f"{dot} {new_tag}{sev_tag} {html.escape(hazards_txt)}"
-    st.markdown(bullet_html, unsafe_allow_html=True)
+def render_imd_compact(item: dict, conf: dict) -> None:
+    """
+    Expect a merged item per region:
+      - region (str)
+      - days: {"today": {"severity","hazards","date"}, "tomorrow": {...}}  # either/both present
+      - published (str)
+      - source_url (str)
+      - is_new (bool)
+    Backward compatible: if 'days' is missing but single-day fields exist, we still render one bullet.
+    """
+    region = (item.get("region") or "IMD Sub-division").strip()
+    days   = item.get("days") or {}
+    link   = item.get("source_url")
+    pub    = _fmt_short_day(item.get("published"))
+    is_new = bool(item.get("is_new"))
 
-    # Read more
+    st.markdown(f"**{html.escape(region)}**")
+
+    # Today (if present)
+    if isinstance(days, dict) and "today" in days:
+        st.caption("Today")
+        d = days["today"] or {}
+        st.markdown(_bullet_line(d.get("severity"), d.get("hazards") or [], is_new), unsafe_allow_html=True)
+
+    # Tomorrow (if present)
+    if isinstance(days, dict) and "tomorrow" in days:
+        st.caption("Tomorrow")
+        d = days["tomorrow"] or {}
+        st.markdown(_bullet_line(d.get("severity"), d.get("hazards") or [], is_new), unsafe_allow_html=True)
+
+    # Back-compat: single-day items (older scraper)
+    if not days:
+        sev = (item.get("severity") or "").title()
+        haz = item.get("hazards") or []
+        st.caption("Today")
+        st.markdown(_bullet_line(sev, haz if isinstance(haz, list) else [str(haz)], is_new), unsafe_allow_html=True)
+
     if link:
         st.markdown(f"[Read more]({link})")
-
-    # Published (short)
-    if pub_str:
-        st.caption(f"Published: {pub_str}")
+    if pub:
+        st.caption(f"Published: {pub}")
 
     st.markdown("---")
 
