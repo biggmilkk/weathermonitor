@@ -61,7 +61,8 @@ def get_feed_definitions():
             "label": "IMD (India) — Today (Orange/Red)",
             "type": "imd_current_orange_red",
             "conf": {
-                "ids": list(range(1, 35))  # 1–34 inclusive
+                "ids": list(range(1, 35))
+            },
         },
         "cma_china": {
             "label": "CMA (China)",
