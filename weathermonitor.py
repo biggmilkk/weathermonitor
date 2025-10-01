@@ -145,7 +145,7 @@ if to_fetch:
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-                _, new_count = compute_counts(entries, conf, last_seen_ids, alert_id_fn=alert_id)
+                new_count = _meteoalarm_unseen_active_instances(entries, last_seen_ids)
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
             elif conf["type"] in ("ec_async", "nws_grouped_compact"):
@@ -320,12 +320,45 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
 
 # --------------------------------------------------------------------
 # New count helper for the badge row
+
+def _meteoalarm_unseen_active_instances(entries, seen_ids):
+    # Sum ACTIVE instances for unseen Meteoalarm alerts across all countries and both days.
+    total = 0
+    entries = entries or []
+    for country in entries:
+        alerts_dict = (country.get("alerts") or {})
+        counts = country.get("counts") or {}
+        by_day = counts.get("by_day") or {}
+        by_type = counts.get("by_type") or {}
+        for day in ("today", "tomorrow"):
+            alerts = alerts_dict.get(day) or []
+            day_map = by_day.get(day) or {}
+            for e in alerts:
+                try:
+                    aid = alert_id(e)
+                except Exception:
+                    aid = None
+                if not aid or aid in seen_ids:
+                    continue
+                level = (e.get("level") or "").strip()
+                typ   = (e.get("type") or "").strip()
+                # Prefer explicit per-day count
+                n = day_map.get(f"{level}|{typ}")
+                if not isinstance(n, int) or n <= 0:
+                    # Fallback to per-type bucket totals (level or 'total')
+                    bucket = by_type.get(typ) or {}
+                    n = bucket.get(level) or bucket.get("total") or 0
+                # Default to 1 if still unknown
+                if not isinstance(n, int) or n <= 0:
+                    n = 1
+                total += int(n)
+    return int(max(0, total))
+
 # --------------------------------------------------------------------
 def _new_count_for(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-        _, new_count = compute_counts(entries, conf, seen_ids, alert_id_fn=alert_id)
-        return new_count
+        return _meteoalarm_unseen_active_instances(entries, seen_ids)
     if conf["type"] == "ec_async":
         val = st.session_state.get(f"{key}_remaining_new_total")
         return int(val) if isinstance(val, int) else int(ec_remaining_new_total(key, entries) or 0)
@@ -358,8 +391,7 @@ global_idx = 0  # ensure unique button keys across all rows
 def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-        _, new_count = compute_counts(entries, conf, seen_ids, alert_id_fn=alert_id)
-        return new_count
+        return _meteoalarm_unseen_active_instances(entries, seen_ids)
     if conf["type"] == "ec_async":
         val = st.session_state.get(f"{key}_remaining_new_total")
         return int(val) if isinstance(val, int) else int(ec_remaining_new_total(key, entries) or 0)
