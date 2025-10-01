@@ -2,16 +2,12 @@
 
 def get_feed_definitions():
     return {
-        "nws": {
-            "label": "NWS (US)",
-            "type": "nws_grouped_compact",
-            "url": "https://api.weather.gov/alerts/active",
-        },
         "ec": {
             "label": "EC (Canada)",
             "type": "ec_async",
             "source_file": "environment_canada_sources.json",
         },
+        
         "metoffice_uk": {
             "label": "Met Office (UK)",
             "type": "uk_grouped_compact",
@@ -52,11 +48,13 @@ def get_feed_definitions():
                 "London & South East England",
             ],
         },
+        
         "meteoalarm": {
             "label": "Meteoalarm (Europe)",
             "type": "rss_meteoalarm",
             "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe",
         },
+        
         "imd_india_today": {
             "label": "IMD (India)",
             "type": "imd_current_orange_red",
@@ -64,6 +62,7 @@ def get_feed_definitions():
                 "ids": list(range(1, 35))
             },
         },
+        
         "cma_china": {
             "label": "CMA (China)",
             "type": "rss_cma",
@@ -119,5 +118,11 @@ def get_feed_definitions():
                 "Tasmania",
                 "Northern Territory",
             ],
+        },
+
+        "nws": {
+            "label": "NWS (US)",
+            "type": "nws_grouped_compact",
+            "url": "https://api.weather.gov/alerts/active",
         },
     }
