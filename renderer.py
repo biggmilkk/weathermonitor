@@ -69,3 +69,20 @@ def render_imd_compact(item: dict, conf: dict) -> None:
         st.caption(f"Published: {pub_str}")
 
     st.markdown("---")
+
+# ============================================================
+# Renderer Registry
+# ============================================================
+
+RENDERERS = {
+    'json': render_json,
+    'ec_grouped_compact': render_ec_grouped_compact,
+    'nws_grouped_compact': render_nws_grouped_compact,
+    'rss_cma': render_cma,
+    'rss_meteoalarm': render_meteoalarm,
+    'rss_bom_multi': render_bom_grouped,
+    'rss_jma': render_jma_grouped,
+    'uk_grouped_compact': render_uk_grouped,
+    'rss_pagasa': render_pagasa,
+    'imd_current_orange_red': render_imd_compact,
+}
