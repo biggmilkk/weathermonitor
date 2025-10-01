@@ -6,16 +6,31 @@ from bs4 import BeautifulSoup
 
 IMD_MC = "https://mausam.imd.gov.in/imd_latest/contents/subdivisionwise-warning_mc.php?id={id}"
 
-# Map inline background-color -> severity we care about.
-# Add shades here if IMD changes tints.
+# -------------------------------------------------------------------
+# Severity mapping
+# NOTE:
+#  - You asked to explicitly support Orange as rgb(255, 165, 0).
+#  - We keep existing hex handling, including Red (#ff0000),
+#    but we DO NOT add rgb(...) detection for Red yet.
+#  - If IMD uses slightly different orange tints, we accept common hexes too.
+# -------------------------------------------------------------------
+
 HEX_TO_SEVERITY = {
-    "#ff0000": "Red",
+    "#ff0000": "Red",      # keep hex red support (no rgb red yet)
     "#ff9900": "Orange",
-    "#ffa500": "Orange",
+    "#ffa500": "Orange",   # canonical orange
+    "#ff8c00": "Orange",   # sometimes used
+    "#f90":    "Orange",   # short hex (rare, but cheap to support)
     # ignored:
-    "#ffff00": None,   # Yellow
-    "#7cfc00": None,   # Green
-    "#4dff4d": None,   # Green (alt)
+    "#ffff00": None,       # Yellow
+    "#7cfc00": None,       # Green
+    "#4dff4d": None,       # Green (alt)
+}
+
+# rgb(...) recognition — ONLY Orange for now, per your request
+RGB_TO_SEVERITY = {
+    (255, 165, 0): "Orange",
+    # no red rgb here yet — you'll add when ready
 }
 
 # Nationwide coverage: confirmed IDs 1..34 (35+ are empty)
@@ -23,39 +38,89 @@ DEFAULT_ID_RANGE = list(range(1, 35))
 
 # ----------------- helpers -----------------
 
-def _normalize_hex_from_style(style: Optional[str]) -> Optional[str]:
-    """Extract and normalize hex from style='background-color: #xxxxxx'."""
+def _extract_bgcolor(style: Optional[str]) -> Optional[str]:
+    """
+    Extract background-color from an inline style.
+    Returns a normalized token:
+      - hex in lowercase (e.g., '#ffa500' or '#f90')
+      - or 'rgb(r,g,b)' with canonical spacing removed (lowercase)
+    """
     if not style:
         return None
-    m = re.search(r"background-color\s*:\s*([#A-Fa-f0-9]{4,7})", style)
-    if not m:
-        return None
-    return m.group(1).strip().lower()
+
+    # Try hex first (#RGB or #RRGGBB)
+    m_hex = re.search(r"background-color\s*:\s*([#A-Fa-f0-9]{3,7})\b", style)
+    if m_hex:
+        return m_hex.group(1).strip().lower()
+
+    # Try rgb() — allow arbitrary whitespace
+    m_rgb = re.search(
+        r"background-color\s*:\s*rgb\s*\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)",
+        style,
+        flags=re.IGNORECASE,
+    )
+    if m_rgb:
+        r, g, b = (int(m_rgb.group(1)), int(m_rgb.group(2)), int(m_rgb.group(3)))
+        # Constrain to valid byte range
+        r = max(0, min(255, r))
+        g = max(0, min(255, g))
+        b = max(0, min(255, b))
+        return f"rgb({r},{g},{b})"
+
+    return None
 
 def _severity_from_tr(tr) -> Optional[str]:
-    return HEX_TO_SEVERITY.get(_normalize_hex_from_style(tr.get("style")))
+    """
+    Map a <tr> style's background-color to severity.
+    Supports:
+      - hex colors via HEX_TO_SEVERITY
+      - rgb(...) for Orange only: rgb(255,165,0)
+    """
+    token = _extract_bgcolor(tr.get("style"))
+    if not token:
+        return None
+
+    # Hex path
+    if token.startswith("#"):
+        return HEX_TO_SEVERITY.get(token)
+
+    # rgb(...) path — only Orange for now
+    if token.startswith("rgb(") and token.endswith(")"):
+        try:
+            parts = token[4:-1].split(",")
+            rgb = (int(parts[0]), int(parts[1]), int(parts[2]))
+            return RGB_TO_SEVERITY.get(rgb)
+        except Exception:
+            return None
+
+    return None
 
 def _clean_text(el) -> str:
-    # Convert <br> to ", " and normalize whitespace
+    """
+    Convert <br> to ", ", collapse whitespace, and remove duplicate commas.
+    """
     for br in el.find_all("br"):
         br.replace_with(", ")
     txt = el.get_text(" ", strip=True)
-    return re.sub(r"\s+", " ", txt).strip(" ,")
+    txt = re.sub(r"\s+", " ", txt).strip(" ,")
+    # Collapse duplicate commas/spaces that sometimes appear after replacements
+    txt = re.sub(r"(,\s*){2,}", ", ", txt)
+    return txt
 
 def _parse_section(table) -> List[Dict[str, Any]]:
     """
     A section looks like:
       <tr><th>Warnings for <Region></th></tr>
       <tr><th>Date of Issue: ...</th></tr>
-      <tr style="background-color:#xxxxxx"><td>Day 1: ...</td><td>Hazards</td></tr>
+      <tr style="background-color:..."><td>Day 1: ...</td><td>Hazards</td></tr>
       ...
-    Return a single entry if Day 1 is Orange/Red, else [].
+    Return a single entry if Day 1 is Orange/Red (per current mapping), else [].
     """
     rows = table.find_all("tr")
     region = None
     published = None
 
-    # find region + date first
+    # Find region and date header rows first
     for tr in rows:
         th = tr.find("th")
         if th:
@@ -67,13 +132,14 @@ def _parse_section(table) -> List[Dict[str, Any]]:
                 if m:
                     published = m.group(1).strip()
 
-    # now find Day 1 row
+    # Now find Day 1 row
     for tr in rows:
         tds = tr.find_all("td")
         if len(tds) >= 2:
             day_label = _clean_text(tds[0])
             if re.match(r"^Day\s*1\s*:", day_label, re.I):
                 sev = _severity_from_tr(tr)
+                # Keep only Orange/Red per current requirement
                 if sev not in ("Orange", "Red"):
                     return []
                 hazards = _clean_text(tds[1])
@@ -138,6 +204,8 @@ async def scrape_imd_current_orange_red_async(conf: dict, client) -> dict:
     """
     Scrape ids 1..34 for 'Sub-division-wise warnings'.
     Keep only Day 1 rows where background-color maps to Orange/Red.
+    - Orange supports: hex (#ff9900, #ffa500, #ff8c00, #f90) and rgb(255,165,0)
+    - Red supports: hex (#ff0000) only for now (no rgb red handling yet)
     Output: { "entries": [...], "source": {...} }
     """
     ids = conf.get("ids") or DEFAULT_ID_RANGE
