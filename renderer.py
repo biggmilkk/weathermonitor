@@ -384,12 +384,12 @@ def render_ec_grouped_compact(entries, conf):
                 )
                 if new_count > 0:
                     st.markdown(
-                        "<span style='margin-left:6px;padding:2px 6px;"""
-                    "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
-                    "font-weight:bold;display:inline-block;'>"
-                    f"❗ {new_count} New</span>",
-                    unsafe_allow_html=True,
-                )
+                        "<span style='margin-left:6px;padding:2px 6px;"
+                        "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
+                        "font-weight:bold;display:inline-block;'>"
+                        f"❗ {new_count} New</span>",
+                        unsafe_allow_html=True,
+                    )
                 else:
                     st.write("")
 
@@ -572,10 +572,10 @@ def render_nws_grouped_compact(entries, conf):
                 if new_count > 0:
                     st.markdown(
                         "<span style='margin-left:6px;padding:2px 6px;"
-                    "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
-                    "font-weight:bold;display:inline-block;'>"
-                    f"❗ {new_count} New</span>",
-                    unsafe_allow_html=True,
+                        "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
+                        "font-weight:bold;display:inline-block;'>"
+                        f"❗ {new_count} New</span>",
+                        unsafe_allow_html=True,
                     )
                 else:
                     st.write("")
@@ -648,7 +648,7 @@ def render_uk_grouped(entries, conf):
         # Stripe region if any alert is NEW
         region_header = _stripe_wrap(
             f"<h2>{html.escape(region)}</h2>",
-            any(a.get("timestamp",0.0) > last_seen for a in alerts)
+            any(a.get("is_new") for a in alerts)
         )
         st.markdown(region_header, unsafe_allow_html=True)
 
@@ -1000,6 +1000,61 @@ def render_pagasa(item, conf):
     st.markdown('---')
 
 # ============================================================
+# IMD (India) compact renderer
+# ============================================================
+
+# Only Orange/Red are expected from the scraper for Day 1.
+_IMD_BULLETS = {
+    "Orange": "#FF9900",  # tolerate #FFA500 in scraper mapping
+    "Red":    "#FF0000",
+}
+
+def render_imd_compact(item: dict, conf: dict) -> None:
+    """
+    Expect keys from scraper:
+      - severity: 'Orange' | 'Red'
+      - title: e.g., "Red • Heavy Rain — North Interior Karnataka"
+      - region: "North Interior Karnataka"
+      - description: "Day 1: ... — Heavy Rain, Thunderstorm..."
+      - published: "September 22, 2025" (optional)
+      - source_url: the id= page
+      - is_new: bool (optional; set by app)
+    """
+    sev   = (_norm(item.get("severity")) or "").title()
+    color = _IMD_BULLETS.get(sev, "#888")
+    title = _norm(item.get("title")) or f"{sev or 'Alert'} — {_norm(item.get('region')) or 'IMD Sub-division'}"
+    desc  = _norm(item.get("description"))
+    pub   = _to_utc_label(item.get("published"))
+    link  = _norm(item.get("source_url"))
+    is_new = bool(item.get("is_new"))
+
+    # Title line with colored dot + bolded text
+    title_html = (
+        f"<div>"
+        f"<span style='color:{color};font-size:16px;'>&#9679;</span> "
+        f"<strong>{html.escape(title)}</strong>"
+        f"</div>"
+    )
+    st.markdown(_stripe_wrap(title_html, is_new), unsafe_allow_html=True)
+
+    # Optional body
+    if desc:
+        st.markdown(desc)
+
+    # Meta row
+    meta_bits = []
+    if sev:
+        meta_bits.append(f"Severity: {sev}")
+    if pub:
+        meta_bits.append(f"Issued: {pub}")
+    if link:
+        meta_bits.append(f"[Source]({link})")
+    if meta_bits:
+        st.caption(" • ".join(meta_bits))
+
+    st.markdown('---')
+
+# ============================================================
 # Renderer Registry
 # ============================================================
 
@@ -1013,4 +1068,5 @@ RENDERERS = {
     'rss_jma': render_jma_grouped,
     'uk_grouped_compact': render_uk_grouped,
     'rss_pagasa': render_pagasa,
+    'imd_current_orange_red': render_imd_compact,
 }
