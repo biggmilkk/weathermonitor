@@ -21,6 +21,54 @@ from renderer import (
     render_empty_state,
 )
 
+# --- Meteoalarm per-instance counter helper (moved here so it's defined before use) ---
+def _meteoalarm_unseen_active_instances(entries, seen_ids):
+    """
+    Sum ACTIVE *instances* (the “(N active)” numbers) for unseen Meteoalarm alerts
+    across all countries for both days. Prefer per-day level|type, then per-type totals,
+    otherwise default to 1 per alert row.
+    """
+    total = 0
+    entries = entries or []
+    for country in entries:
+        alerts_by_day = (country.get("alerts") or {})
+        counts = country.get("counts") or {}
+        by_day = counts.get("by_day") or {}
+        by_type = counts.get("by_type") or {}
+
+        for day in ("today", "tomorrow"):
+            day_alerts = alerts_by_day.get(day) or []
+            day_counts = by_day.get(day) or {}
+
+            for e in day_alerts:
+                # only count *unseen* alerts
+                try:
+                    aid = alert_id(e)
+                except Exception:
+                    aid = None
+                if not aid or aid in seen_ids:
+                    continue
+
+                level = (e.get("level") or "").strip()
+                typ   = (e.get("type") or "").strip()
+
+                # 1) Prefer explicit per-day count for "level|type"
+                n = day_counts.get(f"{level}|{typ}")
+
+                # 2) Fallback: per-type totals (by level, or 'total')
+                if not isinstance(n, int) or n <= 0:
+                    bucket = by_type.get(typ) or {}
+                    n = bucket.get(level) or bucket.get("total") or 0
+
+                # 3) Last resort: treat the row as 1 instance
+                if not isinstance(n, int) or n <= 0:
+                    n = 1
+
+                total += int(n)
+
+    return int(max(0, total))
+# -------------------------------------------------------------------------------
+
 # --------------------------------------------------------------------
 # Setup
 # --------------------------------------------------------------------
@@ -320,38 +368,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
 
 # --------------------------------------------------------------------
 # New count helper for the badge row
-# Count *instances* of unseen active Meteoalarm alerts (sums the "(N active)" numbers).
-def _meteoalarm_unseen_active_instances(entries, seen_ids):
-    total = 0
-    entries = entries or []
-    for country in entries:
-        alerts_by_day = (country.get("alerts") or {})
-        counts = country.get("counts") or {}
-        by_day = counts.get("by_day") or {}
-        by_type = counts.get("by_type") or {}
-        for day in ("today", "tomorrow"):
-            day_alerts = alerts_by_day.get(day) or []
-            day_counts = by_day.get(day) or {}
-            for e in day_alerts:
-                try:
-                    aid = alert_id(e)
-                except Exception:
-                    aid = None
-                if not aid or aid in seen_ids:
-                    continue
-                level = (e.get("level") or "").strip()
-                typ   = (e.get("type") or "").strip()
-                # Prefer specific per-day count for level|type
-                n = day_counts.get(f"{level}|{typ}")
-                if not isinstance(n, int) or n <= 0:
-                    # Fallback to per-type totals
-                    bucket = by_type.get(typ) or {}
-                    n = bucket.get(level) or bucket.get("total") or 0
-                if not isinstance(n, int) or n <= 0:
-                    n = 1
-                total += int(n)
-    return int(max(0, total))
-
+# (no function here now — the helper is defined near the imports to avoid NameError)
 
 # --------------------------------------------------------------------
 def _new_count_for(key, conf, entries):
