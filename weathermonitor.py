@@ -145,7 +145,7 @@ if to_fetch:
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-                _, new_count = compute_counts(entries, conf, last_seen_ids, alert_id_fn=alert_id)
+                new_count = _meteoalarm_new_active_alerts(entries, last_seen_ids)
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
             elif conf["type"] in ("ec_async", "nws_grouped_compact"):
@@ -321,11 +321,30 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
 # --------------------------------------------------------------------
 # New count helper for the badge row
 # --------------------------------------------------------------------
+# Count new active Meteoalarm alerts (per-alert basis, not per-type)
+def _meteoalarm_new_active_alerts(entries, seen_ids):
+    """Count alerts (today+tomorrow) that are active and not yet seen.
+    Relies on renderer.alert_id(e) which keys by level|type|from|until.
+    """
+    total = 0
+    for country in entries or []:
+        alerts = (country.get("alerts") or {})
+        for day in ("today", "tomorrow"):
+            for e in alerts.get(day, []) or []:
+                try:
+                    aid = alert_id(e)
+                except Exception:
+                    aid = None
+                if aid and aid not in seen_ids:
+                    total += 1
+    return int(max(0, total))
+
+
+# --------------------------------------------------------------------
 def _new_count_for(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-        _, new_count = compute_counts(entries, conf, seen_ids, alert_id_fn=alert_id)
-        return new_count
+        return _meteoalarm_new_active_alerts(entries, seen_ids)
     if conf["type"] == "ec_async":
         val = st.session_state.get(f"{key}_remaining_new_total")
         return int(val) if isinstance(val, int) else int(ec_remaining_new_total(key, entries) or 0)
@@ -358,8 +377,7 @@ global_idx = 0  # ensure unique button keys across all rows
 def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-        _, new_count = compute_counts(entries, conf, seen_ids, alert_id_fn=alert_id)
-        return new_count
+        return _meteoalarm_new_active_alerts(entries, seen_ids)
     if conf["type"] == "ec_async":
         val = st.session_state.get(f"{key}_remaining_new_total")
         return int(val) if isinstance(val, int) else int(ec_remaining_new_total(key, entries) or 0)
