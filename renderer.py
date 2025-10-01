@@ -1000,59 +1000,80 @@ def render_pagasa(item, conf):
     st.markdown('---')
 
 # ============================================================
-# IMD (India) compact renderer
+# IMD (India) compact renderer (Meteoalarm-like)
 # ============================================================
 
-# Only Orange/Red are expected from the scraper for Day 1.
+import html
+import streamlit as st
+from dateutil import parser as dateparser
+
 _IMD_BULLETS = {
-    "Orange": "#FF9900",  # tolerate #FFA500 in scraper mapping
+    "Orange": "#FF9900",  # we render a dot only; scraper filters which ones to keep
     "Red":    "#FF0000",
 }
 
+def _fmt_short_day(pub: str | None) -> str | None:
+    """Return a short date like 'Tue, 1 Oct 25' from a date string; fall back to original."""
+    if not pub:
+        return None
+    try:
+        dt = dateparser.parse(pub)
+        # Linux/Mac: %-d removes leading zero; Windows may not support it -> fallback
+        try:
+            return dt.strftime("%a, %-d %b %y")
+        except Exception:
+            return dt.strftime("%a, %d %b %y").replace(" 0", " ")
+    except Exception:
+        return pub
+
 def render_imd_compact(item: dict, conf: dict) -> None:
     """
-    Expect keys from scraper:
-      - severity: 'Orange' | 'Red'
-      - title: e.g., "Red • Heavy Rain — North Interior Karnataka"
-      - region: "North Interior Karnataka"
-      - description: "Day 1: ... — Heavy Rain, Thunderstorm..."
-      - published: "September 22, 2025" (optional)
-      - source_url: the id= page
-      - is_new: bool (optional; set by app)
+    Item fields expected:
+      - region (str)
+      - severity ('Orange'|'Red')
+      - hazards (list[str])
+      - day1_date (str, e.g. 'October 1, 2025')  # optional, used for 'Today' heading context
+      - published (str)  # IMD 'Date of Issue'
+      - source_url (str)
+      - is_new (bool)
     """
-    sev   = (_norm(item.get("severity")) or "").title()
-    color = _IMD_BULLETS.get(sev, "#888")
-    title = _norm(item.get("title")) or f"{sev or 'Alert'} — {_norm(item.get('region')) or 'IMD Sub-division'}"
-    desc  = _norm(item.get("description"))
-    pub   = _to_utc_label(item.get("published"))
-    link  = _norm(item.get("source_url"))
-    is_new = bool(item.get("is_new"))
+    region   = (item.get("region") or "IMD Sub-division").strip()
+    severity = (item.get("severity") or "").title()
+    hazards  = item.get("hazards") or []
+    is_new   = bool(item.get("is_new"))
+    pub_str  = _fmt_short_day(item.get("published"))
+    link     = item.get("source_url")
 
-    # Title line with colored dot + bolded text
-    title_html = (
-        f"<div>"
-        f"<span style='color:{color};font-size:16px;'>&#9679;</span> "
-        f"<strong>{html.escape(title)}</strong>"
-        f"</div>"
+    # Active count: 1 per region section (since we only keep Day 1)
+    active_count = 1
+
+    # Header: Region (N active)
+    st.markdown(f"**{html.escape(region)} ({active_count} active)**")
+
+    # Subheader: Today (we only present Day 1)
+    st.caption("Today")
+
+    # Bullet line
+    color = _IMD_BULLETS.get(severity, "#888")
+    dot   = f"<span style='color:{color};font-size:16px;'>&#9679;</span>"
+    new_tag = "[NEW] " if is_new else ""
+    sev_tag = f"[{severity}]" if severity else ""
+
+    hazards_txt = ", ".join(hazards) if isinstance(hazards, list) else (hazards or "")
+    bullet_html = (
+        f"{dot} {new_tag}{sev_tag} {html.escape(hazards_txt)}"
     )
-    st.markdown(_stripe_wrap(title_html, is_new), unsafe_allow_html=True)
+    st.markdown(bullet_html, unsafe_allow_html=True)
 
-    # Optional body
-    if desc:
-        st.markdown(desc)
-
-    # Meta row
-    meta_bits = []
-    if sev:
-        meta_bits.append(f"Severity: {sev}")
-    if pub:
-        meta_bits.append(f"Issued: {pub}")
+    # Read more
     if link:
-        meta_bits.append(f"[Source]({link})")
-    if meta_bits:
-        st.caption(" • ".join(meta_bits))
+        st.markdown(f"[Read more]({link})")
 
-    st.markdown('---')
+    # Published (short)
+    if pub_str:
+        st.caption(f"Published: {pub_str}")
+
+    st.markdown("---")
 
 # ============================================================
 # Renderer Registry
