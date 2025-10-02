@@ -71,3 +71,39 @@ def advance_seen(conf, entries, last_seen, now, alert_id_fn=None):
         if not any(parse_timestamp(e.get('published', '')) > safe_last for e in entries):
             return now
     return None
+
+
+# --------------------------------------------------------------------
+# Meteoalarm-specific helpers (moved from weathermonitor/renderer)
+# --------------------------------------------------------------------
+
+def alert_id(entry):
+    """
+    Build a unique ID string for a Meteoalarm alert entry.
+    """
+    return "|".join([
+        str(entry.get("id") or ""),
+        str(entry.get("type") or ""),
+        str(entry.get("level") or ""),
+        str(entry.get("onset") or ""),
+        str(entry.get("expires") or ""),
+    ])
+
+
+def meteoalarm_unseen_active_instances(entries, last_seen_ids):
+    """
+    Count unseen active Meteoalarm instances among Orange/Red alerts.
+
+    entries: list of country dicts with 'alerts' mapping.
+    last_seen_ids: set of previously seen alert IDs.
+    """
+    unseen = 0
+    for country in entries:
+        for alerts in country.get("alerts", {}).values():
+            for a in alerts:
+                if a.get("level") not in ["Orange", "Red"]:
+                    continue
+                aid = alert_id(a)
+                if aid not in last_seen_ids:
+                    unseen += 1
+    return unseen
