@@ -8,7 +8,7 @@ from computation import (
     compute_counts,
     meteoalarm_unseen_active_instances,  # moved from local helper to computation.py
 )
-from services.fetcher import run_fetch_round  # new: centralized async fetching
+from utils.fetcher import run_fetch_round  # new: centralized async fetching
 
 from renderer import (
     RENDERERS,
