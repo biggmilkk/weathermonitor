@@ -30,6 +30,19 @@ AWARENESS_TYPES = {
 
 DEFAULT_URL = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"
 
+# ------------ Name normalization & URL overrides ------------
+# Normalize odd/legacy names from the EU master feed to preferred display names
+NORMALIZE_COUNTRY_NAMES = {
+    "Macedonia (the former Yugoslav Republic of)": "North Macedonia",
+    "MeteoAlarm Macedonia (the former Yugoslav Republic of)": "North Macedonia",
+    # add more edge-cases here if encountered
+}
+
+# When a country needs a special per-country RSS URL, put it here
+FEED_URL_OVERRIDES = {
+    "North Macedonia": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-republic-of-north-macedonia",
+}
+
 # ------------ Country code for front-end "Read more" ------------
 COUNTRY_TO_CODE = {
     "Austria": "AT","Belgium": "BE","Bosnia and Herzegovina": "BA","Bulgaria": "BG",
@@ -93,6 +106,9 @@ def _front_end_url(country_name: str) -> str | None:
     return f"https://meteoalarm.org/en/live/region/{code}" if code else None 
 
 def _country_rss_url(country_name: str) -> str | None:
+    # Prefer explicit overrides when present
+    if country_name in FEED_URL_OVERRIDES:
+        return FEED_URL_OVERRIDES[country_name]
     slug = COUNTRY_TO_RSS_SLUG.get(country_name)
     return f"https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-{slug}" if slug else None
 
@@ -189,11 +205,18 @@ def _parse_table_rows(description_html: str):
         })
     return items
 
-# ------------ Europe aggregate parser (your existing behavior) ------------
+# ------------ Europe aggregate parser (with normalization) ------------
 def _parse_europe(feed):
     entries = []
     for entry in feed.entries:
-        country = entry.get("title", "").replace("MeteoAlarm", "").strip()
+        raw_title = entry.get("title", "") or ""
+        # Strip leading "MeteoAlarm " if present
+        t = raw_title.strip()
+        if t.lower().startswith("meteoalarm "):
+            t = t[len("MeteoAlarm "):].strip()
+        # Normalize legacy names to preferred display names (e.g., North Macedonia)
+        country = NORMALIZE_COUNTRY_NAMES.get(t, t)
+
         pub_date = entry.get("published", "")
         description_html = entry.get("description", "")
         alerts_by_day = _parse_table_rows(description_html)
@@ -208,7 +231,7 @@ def _parse_europe(feed):
             "alerts": alerts_by_day,
             "link": _front_end_url(country) or entry.get("link", ""),
             "published": pub_date,
-            "region": country,
+            "region": country,        # normalized name used downstream
             "province": "Europe",
         })
     return entries
