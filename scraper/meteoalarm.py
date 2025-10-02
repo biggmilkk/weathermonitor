@@ -292,20 +292,26 @@ async def scrape_meteoalarm_async(conf: dict, client: httpx.AsyncClient):
             logging.warning(f"[METEOALARM WARN] Count fetch failed for {country}: {e}")
             return None
 
-    tasks = [fetch_counts(item.get("region","")) for item in base_entries]
+    tasks = [fetch_counts(item.get("region", "")) for item in base_entries]
     results = await asyncio.gather(*tasks, return_exceptions=False)
 
-    counts_by_country = {c: cnt for c, cnt in results if c and cnt}
+    # ✅ Robustly filter out None and malformed items BEFORE unpacking
+    valid_pairs: list[tuple[str, dict]] = []
+    for x in results:
+        if isinstance(x, tuple) and len(x) == 2 and x[0] and isinstance(x[1], dict):
+            valid_pairs.append(x)
+
+    counts_by_country = {c: cnt for (c, cnt) in valid_pairs}
+
+    # Attach counts to each country block (and compute totals)
     for item in base_entries:
-        ctry = item.get("region","")
-        cnts = counts_by_country.get(ctry)
-        if cnts:
-            item["counts"] = cnts
-            item["total_alerts"] = cnts.get("total", 0)
+        country = item.get("region", "")
+        cnt = counts_by_country.get(country)
+        if isinstance(cnt, dict):
+            item["counts"] = cnt
+            item["total_alerts"] = int(cnt.get("total", 0))
 
     base_entries.sort(key=lambda x: (x.get("region") or x.get("title","")).lower())
 
-    # Debug message
-    logging.warning(f"[METEOALARM DEBUG] Parsed {len(base_entries)}")
-
+    logging.warning(f"[METEOALARM DEBUG] Parsed {len(base_entries)} alerts")
     return {"entries": base_entries, "source": url}
