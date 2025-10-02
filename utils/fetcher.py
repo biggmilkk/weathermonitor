@@ -3,9 +3,9 @@
 Centralized fetching for WeatherMonitor.
 
 - Reuses the shared httpx.AsyncClient from utils.clients.get_async_client()
-- Supports per-feed overrides for timeout and headers in FEED_CONFIG
+- Looks up scrapers by FEED 'type' (primary) then by feed key (fallback)
 - Concurrency-limited fan-out with retries and error isolation
-- Accepts both async and sync scraper callables from SCRAPER_REGISTRY
+- Accepts both async and sync scrapers (including callable objects with async __call__)
 - Public entrypoint: run_fetch_round(to_fetch: dict, max_concurrency: int | None) -> list[(key, data)]
 """
 
@@ -18,14 +18,11 @@ from typing import Any, Awaitable, Callable, Dict, List, Tuple
 
 import httpx
 
-# Relative imports (since this file lives in utils/)
-from .clients import get_async_client  # singleton AsyncClient
+from .clients import get_async_client
 from .scraper_registry import SCRAPER_REGISTRY
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
-
-# -------- Defaults (can be overridden per-feed via FEED_CONFIG) --------
 
 DEFAULT_HEADERS: Dict[str, str] = {
     "User-Agent": "WeatherMonitor/1.0 (httpx)",
@@ -59,44 +56,32 @@ async def _with_retries(
 # ----------------------- Scraper invocation shim -----------------------
 
 async def _invoke_scraper(
-    scraper,  # Callable[..., Any]
+    scraper: Any,  # function or object with __call__
     client: httpx.AsyncClient,
     conf: Dict[str, Any],
 ) -> Any:
     """
-    Call a scraper that may be async or sync, with flexible signatures.
+    Call a scraper that may be async or sync, function or callable object.
 
-    Supported call forms (auto-detected in this order):
-      - async scraper(client, conf)
-      - async scraper(conf, client)
-      - async scraper(conf)
-      - sync  scraper(client, conf)
-      - sync  scraper(conf, client)
-      - sync  scraper(conf)
-
-    Returns whatever the scraper returns (usually a dict with 'entries').
+    We try the common signatures in order and await if the result is awaitable:
+      (client, conf) -> ...
+      (conf, client) -> ...
+      (conf)         -> ...
     """
-    if inspect.iscoroutinefunction(scraper):
+
+    async def _maybe_await(res: Any) -> Any:
+        if inspect.isawaitable(res):
+            return await res
+        return res
+
+    # Try async/sync callable in a single path; if signature doesn't match, try next
+    try:
+        return await _maybe_await(scraper(client, conf))
+    except TypeError:
         try:
-            return await scraper(client, conf)
+            return await _maybe_await(scraper(conf, client))
         except TypeError:
-            try:
-                return await scraper(conf, client)
-            except TypeError:
-                return await scraper(conf)
-    else:
-        loop = asyncio.get_running_loop()
-
-        def _call_sync() -> Any:
-            try:
-                return scraper(client, conf)
-            except TypeError:
-                try:
-                    return scraper(conf, client)
-                except TypeError:
-                    return scraper(conf)
-
-        return await loop.run_in_executor(None, _call_sync)
+            return await _maybe_await(scraper(conf))
 
 
 # -------------------------- One-feed wrapper ---------------------------
@@ -111,9 +96,11 @@ async def _fetch_one(
     Fetch one feed safely with per-feed options, retries, and error isolation.
     Always returns (key, data_dict). On error, data_dict contains {'entries': []}.
     """
-    scraper = SCRAPER_REGISTRY.get(key)
+    # Use feed TYPE to find the scraper (primary), fall back to feed KEY
+    scraper_key = (feed_conf.get("type") or "").strip() or key
+    scraper = SCRAPER_REGISTRY.get(scraper_key) or SCRAPER_REGISTRY.get(key)
     if not scraper:
-        logger.warning("No scraper registered for key=%s", key)
+        logger.warning("No scraper registered for key=%s (type=%s)", key, feed_conf.get("type"))
         return key, {"entries": []}
 
     # Per-feed headers & timeout
@@ -129,25 +116,27 @@ async def _fetch_one(
     async with semaphore:
         async def _do() -> Dict[str, Any]:
             try:
-                # Pass merged headers/timeout to scraper via conf; most scrapers already read these.
+                # Pass merged headers/timeout via conf; scrapers already read these.
                 result = await _invoke_scraper(
                     scraper,
                     client,
                     {**feed_conf, "headers": headers, "timeout": timeout_seconds, "httpx_timeout": timeout},
                 )
+                # Normalize to {'entries': ...}
                 if isinstance(result, dict) and "entries" in result:
                     return result
                 if isinstance(result, list):
                     return {"entries": result}
+                # Wrap arbitrary payload
                 return {"entries": result if isinstance(result, list) else (result or [])}
             except Exception as e:  # noqa: BLE001
-                logger.warning("Error fetching %s: %s", key, e)
+                logger.warning("Error fetching %s (type=%s): %s", key, feed_conf.get("type"), e)
                 return {"entries": []}
 
         try:
             return key, await _with_retries(_do)
         except Exception as e:  # noqa: BLE001
-            logger.error("Final failure for %s: %s", key, e)
+            logger.error("Final failure for %s (type=%s): %s", key, feed_conf.get("type"), e)
             return key, {"entries": []}
 
 
@@ -191,10 +180,10 @@ def run_fetch_round(
                 logger.error("Task failure in fetch round: %s", e)
         return results
 
+    # Normal Streamlit path: no running loop
     try:
-        # Normal Streamlit path: no running loop
         return asyncio.run(_runner())
     except RuntimeError:
-        # If already inside an event loop, create a task group and block until done
+        # If already inside a running loop (rare), reuse it
         loop = asyncio.get_running_loop()
         return loop.run_until_complete(_runner())  # type: ignore[misc]
