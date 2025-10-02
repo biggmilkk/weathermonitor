@@ -1,12 +1,15 @@
-import os, sys, time, gc, logging, asyncio, httpx, psutil, traceback
+import os, sys, time, gc, logging, psutil
 import streamlit as st
 from dateutil import parser as dateparser
 from streamlit_autorefresh import st_autorefresh
-import nest_asyncio
 
 from feeds import get_feed_definitions
-from utils.scraper_registry import SCRAPER_REGISTRY
-from computation import compute_counts
+from computation import (
+    compute_counts,
+    meteoalarm_unseen_active_instances,  # moved from local helper to computation.py
+)
+from services.fetcher import run_fetch_round  # new: centralized async fetching
+
 from renderer import (
     RENDERERS,
     ec_remaining_new_total,
@@ -14,66 +17,16 @@ from renderer import (
     ec_bucket_from_title,
     draw_badge,
     safe_int,
-    alert_id,
     meteoalarm_country_has_alerts,
     meteoalarm_mark_and_sort,
     meteoalarm_snapshot_ids,
     render_empty_state,
 )
 
-# --- Meteoalarm per-instance counter helper (moved here so it's defined before use) ---
-def _meteoalarm_unseen_active_instances(entries, seen_ids):
-    """
-    Sum ACTIVE *instances* (the “(N active)” numbers) for unseen Meteoalarm alerts
-    across all countries for both days. Prefer per-day level|type, then per-type totals,
-    otherwise default to 1 per alert row.
-    """
-    total = 0
-    entries = entries or []
-    for country in entries:
-        alerts_by_day = (country.get("alerts") or {})
-        counts = country.get("counts") or {}
-        by_day = counts.get("by_day") or {}
-        by_type = counts.get("by_type") or {}
-
-        for day in ("today", "tomorrow"):
-            day_alerts = alerts_by_day.get(day) or []
-            day_counts = by_day.get(day) or {}
-
-            for e in day_alerts:
-                # only count *unseen* alerts
-                try:
-                    aid = alert_id(e)
-                except Exception:
-                    aid = None
-                if not aid or aid in seen_ids:
-                    continue
-
-                level = (e.get("level") or "").strip()
-                typ   = (e.get("type") or "").strip()
-
-                # 1) Prefer explicit per-day count for "level|type"
-                n = day_counts.get(f"{level}|{typ}")
-
-                # 2) Fallback: per-type totals (by level, or 'total')
-                if not isinstance(n, int) or n <= 0:
-                    bucket = by_type.get(typ) or {}
-                    n = bucket.get(level) or bucket.get("total") or 0
-
-                # 3) Last resort: treat the row as 1 instance
-                if not isinstance(n, int) or n <= 0:
-                    n = 1
-
-                total += int(n)
-
-    return int(max(0, total))
-# -------------------------------------------------------------------------------
-
 # --------------------------------------------------------------------
 # Setup
 # --------------------------------------------------------------------
 os.environ.setdefault("STREAMLIT_WATCHER_TYPE", "poll")
-nest_asyncio.apply()
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
 logging.basicConfig(level=logging.WARNING)
 
@@ -99,7 +52,6 @@ st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss_before // (1024*1024)} MB
 # State & Config
 # --------------------------------------------------------------------
 FETCH_TTL = 60
-HTTP2_ENABLED = False
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 
@@ -112,7 +64,7 @@ now = time.time()
 for key, conf in FEED_CONFIG.items():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
-    st.session_state.setdefault(f"{key}_last_seen_time", 0.0) 
+    st.session_state.setdefault(f"{key}_last_seen_time", 0.0)
     st.session_state.setdefault(f"{key}_pending_seen_time", None)
     if conf["type"] == "rss_meteoalarm":
         st.session_state.setdefault(f"{key}_last_seen_alerts", tuple())
@@ -120,68 +72,19 @@ st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
 
 # --------------------------------------------------------------------
-# Fetching
-# --------------------------------------------------------------------
-async def with_retries(fn, *, attempts=3, base_delay=0.5):
-    for i in range(attempts):
-        try:
-            return await fn()
-        except Exception:
-            if i == attempts - 1:
-                raise
-            await asyncio.sleep(base_delay * (2 ** i))
-
-async def _fetch_all_feeds(configs: dict):
-    sem = asyncio.Semaphore(MAX_CONCURRENCY)
-    limits = httpx.Limits(max_connections=MAX_CONCURRENCY, max_keepalive_connections=MAX_CONCURRENCY)
-    transport = httpx.AsyncHTTPTransport(retries=3)
-    timeout = httpx.Timeout(30.0)
-    headers = {"User-Agent": "weathermonitor.app/1.0 (+support@weathermonitor.app)"}
-    async with httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport, http2=HTTP2_ENABLED, headers=headers) as client:
-        async def bound_fetch(key, conf):
-            async with sem:
-                async def call():
-                    call_conf = {}
-                    for k, v in conf.items():
-                        if k in ("label", "type"):
-                            continue
-                        if k == "conf" and isinstance(v, dict):
-                            call_conf.update(v)
-                        else:
-                            call_conf[k] = v
-                    return await SCRAPER_REGISTRY[conf["type"]](call_conf, client)
-                try:
-                    data = await with_retries(call)
-                except Exception as ex:
-                    logging.warning(f"[{key.upper()} FETCH ERROR] {ex}")
-                    logging.warning(traceback.format_exc())
-                    data = {"entries": [], "error": str(ex), "source": conf}
-                return key, data
-        tasks = [bound_fetch(k, cfg) for k, cfg in FEED_CONFIG.items() if k in configs]
-        return await asyncio.gather(*tasks)
-
-def run_async(coro):
-    loop = asyncio.new_event_loop()
-    try:
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-        asyncio.set_event_loop(None)
-
-def _immediate_rerun():
-    if hasattr(st, "rerun"):
-        st.rerun()
-    elif hasattr(st, "experimental_rerun"):
-        st.experimental_rerun()
-
-# --------------------------------------------------------------------
-# Refresh
+# Refresh (uses centralized fetcher)
 # --------------------------------------------------------------------
 now = time.time()
-to_fetch = {k: v for k, v in FEED_CONFIG.items() if now - st.session_state[f"{k}_last_fetch"] > FETCH_TTL}
+to_fetch = {
+    k: v for k, v in FEED_CONFIG.items()
+    if now - st.session_state[f"{k}_last_fetch"] > FETCH_TTL
+}
+
 if to_fetch:
-    results = run_async(_fetch_all_feeds(to_fetch))
+    # `run_fetch_round` should accept a dict of feed configs to fetch
+    # and return an iterable of (key, data) like the old _fetch_all_feeds().
+    results = run_fetch_round(to_fetch)
+
     for key, raw in results:
         entries = raw.get("entries", [])
         st.session_state[f"{key}_data"] = entries
@@ -193,14 +96,14 @@ if to_fetch:
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-                new_count = _meteoalarm_unseen_active_instances(entries, last_seen_ids)
+                new_count = meteoalarm_unseen_active_instances(entries, last_seen_ids)
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
             elif conf["type"] in ("ec_async", "nws_grouped_compact"):
                 # grouped feeds use per-bucket last-seen inside renderer
                 pass
             elif conf["type"] == "uk_grouped_compact":
-                # UK now uses a single feed-level last_seen_time (like BOM/JMA)
+                # UK uses a single feed-level last_seen_time (like BOM/JMA)
                 last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
                 _, new_count = compute_counts(entries, conf, last_seen_ts)
                 if new_count == 0:
@@ -216,7 +119,6 @@ if to_fetch:
             st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
         elif conf["type"] == "nws_grouped_compact":
             st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
-        # UK: no precompute via uk_remaining_new_total anymore — handled like generic feeds
 
         gc.collect()
 
@@ -236,6 +138,12 @@ st.markdown("---")
 # --------------------------------------------------------------------
 # Details renderer (per feed panel)
 # --------------------------------------------------------------------
+def _immediate_rerun():
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+
 def _render_feed_details(active, conf, entries, badge_placeholders=None):
     data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
 
@@ -368,13 +276,11 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
 
 # --------------------------------------------------------------------
 # New count helper for the badge row
-# (no function here now — the helper is defined near the imports to avoid NameError)
-
 # --------------------------------------------------------------------
 def _new_count_for(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-        return _meteoalarm_unseen_active_instances(entries, seen_ids)
+        return meteoalarm_unseen_active_instances(entries, seen_ids)
     if conf["type"] == "ec_async":
         val = st.session_state.get(f"{key}_remaining_new_total")
         return int(val) if isinstance(val, int) else int(ec_remaining_new_total(key, entries) or 0)
@@ -382,7 +288,7 @@ def _new_count_for(key, conf, entries):
         val = st.session_state.get(f"{key}_remaining_new_total")
         return int(val) if isinstance(val, int) else int(nws_remaining_new_total(key, entries) or 0)
     if conf["type"] == "uk_grouped_compact":
-        # UK now uses feed-level last_seen_time like BOM/JMA
+        # UK uses feed-level last_seen_time like BOM/JMA
         seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
         _, new_count = compute_counts(entries, conf, seen_ts)
         return new_count
@@ -407,7 +313,7 @@ global_idx = 0  # ensure unique button keys across all rows
 def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-        return _meteoalarm_unseen_active_instances(entries, seen_ids)
+        return meteoalarm_unseen_active_instances(entries, seen_ids)
     if conf["type"] == "ec_async":
         val = st.session_state.get(f"{key}_remaining_new_total")
         return int(val) if isinstance(val, int) else int(ec_remaining_new_total(key, entries) or 0)
@@ -424,7 +330,7 @@ def _new_count_for_feed(key, conf, entries):
 
 for start in range(0, len(items), MAX_BTNS_PER_ROW):
     row_items = items[start : start + MAX_BTNS_PER_ROW]
-    # FIX: keep a constant 8-column layout so the last item doesn't stretch full width
+    # keep a constant 8-column layout so the last item doesn't stretch full width
     cols = st.columns(MAX_BTNS_PER_ROW)
     for ci, (key, conf) in enumerate(row_items):
         entries = st.session_state[f"{key}_data"]
