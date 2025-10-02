@@ -1,6 +1,6 @@
-# scraper/imd_india.py
 import asyncio
 import re
+import logging
 from typing import Any, Dict, List, Optional
 from bs4 import BeautifulSoup
 
@@ -115,13 +115,19 @@ def _parse_region_block(rows: List, start_idx: int, source_id: int, source_url: 
                         }
         i += 1
 
-    # Emit a single entry only if we have at least one day to keep
     if days:
+        # Choose a better 'published' for downstream: newest of today/tomorrow dates, else Date of Issue
+        day_dates: List[str] = []
+        for k in ("today", "tomorrow"):
+            if k in days and days[k].get("date"):
+                day_dates.append(days[k]["date"])
+        published_out = max(day_dates) if day_dates else issue
+
         return ({
             "title": f"IMD — {region}",
             "region": region,
-            "days": days,                 # {"today": {...}, "tomorrow": {...}} subset
-            "published": issue,           # Date of Issue
+            "days": days,
+            "published": published_out,
             "source_url": source_url,
             "source_id": source_id,
             "is_new": False,
@@ -207,4 +213,8 @@ async def scrape_imd_current_orange_red_async(conf: dict, client) -> dict:
 
     final_entries = list(dedup.values())
     final_entries.sort(key=lambda e: (e.get("published") or "", e.get("region") or ""), reverse=True)
+
+    # DEBUG log
+    logging.warning(f"[IMD DEBUG] Parsed {len(final_entries)}")
+
     return {"entries": final_entries, "source": {"type": "imd_mc_pages", "excluded_ids": sorted(EXCLUDED_IDS)}}
