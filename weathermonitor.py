@@ -6,9 +6,9 @@ from streamlit_autorefresh import st_autorefresh
 from feeds import get_feed_definitions
 from computation import (
     compute_counts,
-    meteoalarm_unseen_active_instances,  # moved from local helper to computation.py
+    meteoalarm_unseen_active_instances,
 )
-from utils.fetcher import run_fetch_round  # new: centralized async fetching
+from utils.fetcher import run_fetch_round
 
 from renderer import (
     RENDERERS,
@@ -81,16 +81,70 @@ to_fetch = {
 }
 
 if to_fetch:
-    # `run_fetch_round` should accept a dict of feed configs to fetch
-    # and return an iterable of (key, data) like the old _fetch_all_feeds().
     results = run_fetch_round(to_fetch)
 
     for key, raw in results:
         entries = raw.get("entries", [])
+        conf = FEED_CONFIG[key]
+
+        # --- IMD-specific: fingerprint & timestamping -----------------
+        if conf["type"] == "imd_current_orange_red":
+            fp_key = f"{key}_fp_by_region"
+            ts_key = f"{key}_ts_by_region"
+            prev_fp = dict(st.session_state.get(fp_key, {}) or {})
+            prev_ts = dict(st.session_state.get(ts_key, {}) or {})
+            now_ts = time.time()
+
+            def _fingerprint(e: dict) -> str:
+                region = (e.get("region") or "").strip()
+                days = e.get("days") or {}
+                norm = {
+                    "region": region,
+                    "today": {
+                        "severity": (days.get("today") or {}).get("severity"),
+                        "hazards": (days.get("today") or {}).get("hazards") or [],
+                        "date":    (days.get("today") or {}).get("date"),
+                    },
+                    "tomorrow": {
+                        "severity": (days.get("tomorrow") or {}).get("severity"),
+                        "hazards": (days.get("tomorrow") or {}).get("hazards") or [],
+                        "date":    (days.get("tomorrow") or {}).get("date"),
+                    },
+                }
+                import json
+                return json.dumps(norm, sort_keys=True, separators=(",", ":"))
+
+            fp_by_region, ts_by_region = {}, {}
+            for e in entries:
+                region = (e.get("region") or "").strip()
+                fp = _fingerprint(e)
+                changed = (prev_fp.get(region) != fp)
+
+                if changed:
+                    ts = now_ts
+                else:
+                    ts = float(prev_ts.get(region) or 0.0)
+                    if ts <= 0:
+                        ts = now_ts
+
+                e["timestamp"] = ts
+                e["is_new"] = changed
+                days = e.get("days") or {}
+                for dkey in ("today", "tomorrow"):
+                    if dkey in days:
+                        days[dkey]["is_new"] = changed
+
+                fp_by_region[region] = fp
+                ts_by_region[region] = ts
+
+            st.session_state[fp_key] = fp_by_region
+            st.session_state[ts_key] = ts_by_region
+
+        # --------------------------------------------------------------
+
         st.session_state[f"{key}_data"] = entries
         st.session_state[f"{key}_last_fetch"] = now
         st.session_state["last_refreshed"] = now
-        conf = FEED_CONFIG[key]
 
         # When the details pane is open, snapshot seen (feed-dependent)
         if st.session_state.get("active_feed") == key:
@@ -100,10 +154,8 @@ if to_fetch:
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
             elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                # grouped feeds use per-bucket last-seen inside renderer
                 pass
             elif conf["type"] == "uk_grouped_compact":
-                # UK uses a single feed-level last_seen_time (like BOM/JMA)
                 last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
                 _, new_count = compute_counts(entries, conf, last_seen_ts)
                 if new_count == 0:
@@ -114,7 +166,6 @@ if to_fetch:
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_time"] = now
 
-        # Precompute remaining NEW totals for badge row (where applicable)
         if conf["type"] == "ec_async":
             st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
         elif conf["type"] == "nws_grouped_compact":
@@ -169,10 +220,8 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                 lastseen_key = f"{active}_bucket_last_seen"
                 bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
                 now_ts = time.time()
-                # Mark every existing bucket as seen now
                 for k in list(bucket_lastseen.keys()):
                     bucket_lastseen[k] = now_ts
-                # Snapshot current EC entries
                 for e in entries:
                     bucket = ec_bucket_from_title(e.get("title", "") or "")
                     if not bucket:
@@ -235,7 +284,6 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
         if not entries:
             st.info("No active warnings that meet thresholds at the moment.")
             return
-
         RENDERERS["uk_grouped_compact"](entries, {**conf, "key": active})
 
     elif conf["type"] == "rss_meteoalarm":
@@ -250,7 +298,6 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
         RENDERERS["rss_jma"](entries, {**conf, "key": active})
 
     else:
-        # Generic feeds: per-entry "is_new" vs a single last_seen_ts
         seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
         if not data_list:
             render_empty_state()
@@ -261,11 +308,13 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
             st.session_state.pop(pkey, None)
         else:
             for item in data_list:
-                pub = item.get("published")
-                try:
-                    ts = dateparser.parse(pub).timestamp() if pub else 0.0
-                except Exception:
-                    ts = 0.0
+                ts = item.get("timestamp")
+                if not isinstance(ts, (int, float)):
+                    pub = item.get("published")
+                    try:
+                        ts = dateparser.parse(pub).timestamp() if pub else 0.0
+                    except Exception:
+                        ts = 0.0
                 item["is_new"] = bool(ts > seen_ts)
                 RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
             pkey = f"{active}_pending_seen_time"
@@ -288,7 +337,6 @@ def _new_count_for(key, conf, entries):
         val = st.session_state.get(f"{key}_remaining_new_total")
         return int(val) if isinstance(val, int) else int(nws_remaining_new_total(key, entries) or 0)
     if conf["type"] == "uk_grouped_compact":
-        # UK uses feed-level last_seen_time like BOM/JMA
         seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
         _, new_count = compute_counts(entries, conf, seen_ts)
         return new_count
@@ -297,7 +345,7 @@ def _new_count_for(key, conf, entries):
     return new_count
 
 # --------------------------------------------------------------------
-# Desktop (buttons row + details)  —  8 buttons per row
+# Desktop (buttons row + details) — 8 buttons per row
 # --------------------------------------------------------------------
 if not FEED_CONFIG:
     st.info("No feeds configured.")
@@ -308,7 +356,7 @@ items = list(FEED_CONFIG.items())
 
 badge_placeholders = {}
 _toggled = False
-global_idx = 0  # ensure unique button keys across all rows
+global_idx = 0
 
 def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
@@ -330,7 +378,6 @@ def _new_count_for_feed(key, conf, entries):
 
 for start in range(0, len(items), MAX_BTNS_PER_ROW):
     row_items = items[start : start + MAX_BTNS_PER_ROW]
-    # keep a constant 8-column layout so the last item doesn't stretch full width
     cols = st.columns(MAX_BTNS_PER_ROW)
     for ci, (key, conf) in enumerate(row_items):
         entries = st.session_state[f"{key}_data"]
@@ -349,7 +396,6 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
             draw_badge(badge_ph, safe_int(new_count))
 
             if clicked:
-                # toggle behavior unchanged
                 if st.session_state.get("active_feed") == key:
                     if conf["type"] == "rss_meteoalarm":
                         st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
