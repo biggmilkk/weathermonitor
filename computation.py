@@ -17,7 +17,7 @@ def compute_counts(entries, conf, last_seen, alert_id_fn=None):
     Compute total and new alert counts for a feed.
 
     - For 'rss_meteoalarm', flatten all Orange/Red alerts and count via `alert_id_fn` against `last_seen` set.
-    - For other feeds, count entries and those with published > last_seen timestamp.
+    - For other feeds, count entries and those with timestamp/published > last_seen timestamp.
 
     Returns: (total, new_count)
     """
@@ -37,12 +37,15 @@ def compute_counts(entries, conf, last_seen, alert_id_fn=None):
         total = len(entries)
         # Ensure last_seen is numeric
         safe_last = last_seen if isinstance(last_seen, (int, float)) else 0.0
-        # Count those published after last_seen timestamp
-        new_count = sum(
-            1
-            for e in entries
-            if e.get('published') and parse_timestamp(e['published']) > safe_last
-        )
+
+        def _ts(e):
+            t = e.get("timestamp")
+            if isinstance(t, (int, float)) and t > 0:
+                return float(t)
+            return parse_timestamp(e.get("published", ""))
+
+        # Count those newer than last_seen timestamp
+        new_count = sum(1 for e in entries if _ts(e) > safe_last)
     return total, new_count
 
 
@@ -51,7 +54,7 @@ def advance_seen(conf, entries, last_seen, now, alert_id_fn=None):
     Determine a new 'seen' marker for an open feed when no new alerts arrive.
 
     - For 'rss_meteoalarm': if no alert IDs outside `last_seen`, return a new set of all IDs.
-    - For other feeds: if no entries published after last_seen, return `now` timestamp.
+    - For other feeds: if no entries timestamp/published after last_seen, return `now` timestamp.
 
     If new marker should not advance, returns None.
     """
@@ -66,15 +69,23 @@ def advance_seen(conf, entries, last_seen, now, alert_id_fn=None):
         if alert_id_fn and not any(alert_id_fn(e) not in last_seen for e in flat):
             return set(alert_id_fn(e) for e in flat)
     else:
-        # If no entries are newer than last_seen, advance timestamp
+        # Ensure last_seen is numeric
         safe_last = last_seen if isinstance(last_seen, (int, float)) else 0.0
-        if not any(parse_timestamp(e.get('published', '')) > safe_last for e in entries):
+
+        def _ts(e):
+            t = e.get("timestamp")
+            if isinstance(t, (int, float)) and t > 0:
+                return float(t)
+            return parse_timestamp(e.get("published", ""))
+
+        # If no entries are newer than last_seen, advance timestamp
+        if not any(_ts(e) > safe_last for e in entries):
             return now
     return None
 
 
 # --------------------------------------------------------------------
-# Meteoalarm-specific helpers (moved from weathermonitor/renderer)
+# Meteoalarm-specific helpers
 # --------------------------------------------------------------------
 
 def alert_id(entry):
