@@ -73,7 +73,6 @@ COUNTRY_TO_RSS_SLUG = {
     "Montenegro": "montenegro",
     "Netherlands": "netherlands",
     "North Macedonia": "republic-of-north-macedonia",
-    "Republic of North Macedonia": "republic-of-north-macedonia",
     "Norway": "norway",
     "Poland": "poland",
     "Portugal": "portugal",
@@ -91,7 +90,7 @@ COUNTRY_TO_RSS_SLUG = {
 
 def _front_end_url(country_name: str) -> str | None:
     code = COUNTRY_TO_CODE.get(country_name)
-    return f"https://meteoalarm.org/en/live/region/{code}" if code else None
+    return f"https://meteoalarm.org/en/live/region/{code}" if code else None 
 
 def _country_rss_url(country_name: str) -> str | None:
     slug = COUNTRY_TO_RSS_SLUG.get(country_name)
