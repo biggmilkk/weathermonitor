@@ -38,7 +38,7 @@ COUNTRY_TO_CODE = {
     "Hungary": "HU","Iceland": "IS","Ireland": "IE","Israel": "IL","Italy": "IT",
     "Latvia": "LV","Lithuania": "LT","Luxembourg": "LU","Malta": "MT","Moldova": "MD",
     "Montenegro": "ME","Netherlands": "NL","North Macedonia": "MK",
-    "Republic of North Macedonia": "MK","Norway": "NO","Poland": "PL","Portugal": "PT",
+    "Norway": "NO","Poland": "PL","Portugal": "PT",
     "Romania": "RO","Serbia": "RS","Slovakia": "SK","Slovenia": "SI","Spain": "ES",
     "Sweden": "SE","Switzerland": "CH","Ukraine": "UA",
     "United Kingdom": "GB","United Kingdom of Great Britain and Northern Ireland": "GB",
