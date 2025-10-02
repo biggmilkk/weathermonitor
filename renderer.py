@@ -8,6 +8,9 @@ from datetime import timezone as _tz
 import streamlit as st
 from dateutil import parser as dateparser
 
+# Centralized alert ID (for Meteoalarm) now lives in computation.py
+from computation import alert_id
+
 # ============================================================
 # Shared utilities
 # ============================================================
@@ -78,11 +81,7 @@ def draw_badge(placeholder, count: int):
     else:
         placeholder.empty()
 
-# --------- Meteoalarm helpers ---------
-
-def alert_id(e: dict) -> str:
-    """Canonical Meteoalarm alert ID (used for NEW marking and snapshots)."""
-    return f"{e.get('level','')}|{e.get('type','')}|{e.get('from','')}|{e.get('until','')}"
+# --------- Meteoalarm helpers (presentation-side) ---------
 
 def meteoalarm_country_has_alerts(country: dict) -> bool:
     a = (country.get("alerts") or {})
@@ -229,7 +228,7 @@ def _ec_bucket_from_title(title: str) -> str | None:
 def _ec_entry_ts(e) -> float:
     return _to_ts(e.get("published"))
 
-# Public helpers
+# Public helpers (used by main app)
 
 def ec_bucket_from_title(title: str) -> str | None:
     return _ec_bucket_from_title(title)
@@ -245,7 +244,7 @@ def ec_remaining_new_total(feed_key: str, entries: list) -> int:
     for e in _as_list(entries):
         bucket = _ec_bucket_from_title(e.get("title", ""))
         if not bucket:
-            continue 
+            continue
         code = e.get("province", "")
         prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
         bkey = f"{prov_name}|{bucket}"
@@ -384,12 +383,12 @@ def render_ec_grouped_compact(entries, conf):
                 )
                 if new_count > 0:
                     st.markdown(
-                        "<span style='margin-left:6px;padding:2px 6px;"""
-                    "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
-                    "font-weight:bold;display:inline-block;'>"
-                    f"❗ {new_count} New</span>",
-                    unsafe_allow_html=True,
-                )
+                        "<span style='margin-left:6px;padding:2px 6px;"
+                        "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
+                        "font-weight:bold;display:inline-block;'>"
+                        f"❗ {new_count} New</span>",
+                        unsafe_allow_html=True,
+                    )
                 else:
                     st.write("")
 
@@ -572,10 +571,10 @@ def render_nws_grouped_compact(entries, conf):
                 if new_count > 0:
                     st.markdown(
                         "<span style='margin-left:6px;padding:2px 6px;"
-                    "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
-                    "font-weight:bold;display:inline-block;'>"
-                    f"❗ {new_count} New</span>",
-                    unsafe_allow_html=True,
+                        "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
+                        "font-weight:bold;display:inline-block;'>"
+                        f"❗ {new_count} New</span>",
+                        unsafe_allow_html=True,
                     )
                 else:
                     st.write("")
@@ -792,8 +791,7 @@ def render_meteoalarm(item, conf):
                 text = f"{prefix}[{level}] {typ}{count_str} – {dt1} to {dt2}"
                 st.markdown(
                     f"<div style='margin-bottom:6px;'>"
-                    f"<span style='color:{color};font-size:16px;'>&#9679;</span> {text}</div>"
-                    ,
+                    f"<span style='color:{color};font-size:16px;'>&#9679;</span> {text}</div>",
                     unsafe_allow_html=True,
                 )
 
@@ -1002,10 +1000,6 @@ def render_pagasa(item, conf):
 # ============================================================
 # IMD (India) grouped renderer: Today + Tomorrow in one card
 # ============================================================
-
-import html
-import streamlit as st
-from dateutil import parser as dateparser
 
 _IMD_DOT = {"Orange": "#FF9900", "Red": "#FF0000"}
 
