@@ -32,30 +32,6 @@ def _load_ec_conf(conf: dict) -> dict:
         return json.load(f)
 
 
-def _load_jma_conf(conf: dict) -> dict:
-    """
-    Loads JMA warning feed definition, merging area codes and weather mapping.
-    """
-    area_file = conf.get("area_code_file")
-    weather_file = conf.get("weather_file")
-    if not area_file or not weather_file:
-        raise ValueError("Missing 'area_code_file' or 'weather_file' in JMA config")
-
-    # Load area codes mapping (JSON)
-    with open(area_file, "r", encoding="utf-8") as f:
-        area_codes = json.load(f)
-
-    # Load weather phenomena mapping (JSON)
-    with open(weather_file, "r", encoding="utf-8") as f:
-        weather_map = json.load(f)
-
-    # Merge original config with loaded data
-    merged_conf = dict(conf)
-    merged_conf["area_codes"] = area_codes
-    merged_conf["weather"] = weather_map
-    return merged_conf
-
-
 SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
     # --- NWS ---
     "nws_grouped_compact": ScraperEntry("nws_active_alerts", "scrape_nws_async"),
@@ -63,7 +39,7 @@ SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
     # --- Environment Canada ---
     "ec_async": ScraperEntry("environment_canada", "scrape_ec_async", loader=_load_ec_conf),
     
-    # --- Met OFfice UK ---
+    # --- Met Office UK ---
     "uk_grouped_compact": ScraperEntry("metoffice_uk", "scrape_metoffice_uk_async"),
 
     # --- MeteoAlarm countries ---
