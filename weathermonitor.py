@@ -341,13 +341,13 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
             st.session_state.pop(pkey, None)
 
 # --------------------------------------------------------------------
-# Desktop (buttons row + details) — button + badge layout
+# Desktop (buttons row + details) — 8 feeds per row, button + badge layout
 # --------------------------------------------------------------------
 if not FEED_CONFIG:
     st.info("No feeds configured.")
     st.stop()
 
-MAX_BTNS_PER_ROW = 4  # feeds per row (each gets 2 cols: button+badge)
+MAX_BTNS_PER_ROW = 8  # feeds per row (each feed = button + badge)
 
 items = list(FEED_CONFIG.items())
 badge_placeholders = {}
@@ -377,7 +377,7 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
     # Build column layout: 2 columns per feed (button + badge)
     col_widths = []
     for _ in row_items:
-        col_widths.extend([0.9, 0.1])
+        col_widths.extend([0.85, 0.15])  # adjust ratio as needed
     row_cols = st.columns(col_widths)
 
     for i, (key, conf) in enumerate(row_items):
