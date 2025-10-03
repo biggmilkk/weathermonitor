@@ -1,4 +1,4 @@
-import os, sys, time, gc, logging, psutil
+import os, sys, time, gc, logging, psutil, hashlib
 import streamlit as st
 from dateutil import parser as dateparser
 from streamlit_autorefresh import st_autorefresh
@@ -77,7 +77,7 @@ st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss_before // (1024*1024)} MB
 # --------------------------------------------------------------------
 # State & Config
 # --------------------------------------------------------------------
-FETCH_TTL = 60
+FETCH_TTL = 60  # global UI heartbeat (autorefresh); real fetch cadence is per-feed ttl
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 
@@ -100,6 +100,7 @@ for key, conf in FEED_CONFIG.items():
         st.session_state.setdefault(f"{key}_last_seen_alerts", tuple())
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
+st.session_state.setdefault("_force_refresh_nonce", {})
 
 
 # --------------------------------------------------------------------
@@ -148,17 +149,40 @@ def nws_remaining_new_total(feed_key: str, entries: list) -> int:
         if _entry_ts(e) > last_seen:
             total += 1
     return total
-    
+
+# Per-feed TTL + jitter helpers
+def _stable_jitter_seconds(feed_key: str, max_jitter: int = 10) -> int:
+    h = hashlib.sha1(feed_key.encode()).hexdigest()
+    return int(h[:2], 16) % (max_jitter + 1)  # 0..max_jitter seconds
+
+def _is_due(feed_key: str, conf: dict, now_ts: float) -> bool:
+    ttl = int(conf.get("ttl", FETCH_TTL))
+    last = float(st.session_state.get(f"{feed_key}_last_fetch") or 0.0)
+    jitter = _stable_jitter_seconds(feed_key, 10)
+    return (now_ts - last) >= max(1, ttl - jitter)
 
 
 # --------------------------------------------------------------------
 # Refresh (uses centralized fetcher)
 # --------------------------------------------------------------------
 now = time.time()
-to_fetch = {
-    k: v for k, v in FEED_CONFIG.items()
-    if now - st.session_state[f"{k}_last_fetch"] > FETCH_TTL
-}
+
+# Build per-feed due set (ttl + jitter)
+to_fetch = {k: v for k, v in FEED_CONFIG.items() if _is_due(k, v, now)}
+
+# Inject per-feed nonces to bypass cache for feeds we want to force-refresh
+force = st.session_state.get("_force_refresh_nonce", {}) or {}
+if force:
+    tf2 = {}
+    for fk, conf in to_fetch.items():
+        if fk in force:
+            c = dict(conf)
+            c["_nonce"] = force[fk]
+            tf2[fk] = c
+        else:
+            tf2[fk] = conf
+    to_fetch = tf2
+    st.session_state["_force_refresh_nonce"] = {}  # clear after one round
 
 if to_fetch:
     results = cached_fetch_round(to_fetch)
@@ -483,6 +507,9 @@ for row in range(num_rows):
                     st.session_state["active_feed"] = None
                 else:
                     st.session_state["active_feed"] = feed_key
+                    # mark as due and force-bust cache for this feed in the next round
+                    st.session_state[f"{feed_key}_last_fetch"] = 0
+                    st.session_state["_force_refresh_nonce"][feed_key] = time.time()
                     if conf["type"] == "rss_meteoalarm":
                         st.session_state[f"{feed_key}_pending_seen_time"] = time.time()
                     elif conf["type"] in ("ec_async", "nws_grouped_compact"):
