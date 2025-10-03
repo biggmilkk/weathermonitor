@@ -341,13 +341,13 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
             st.session_state.pop(pkey, None)
 
 # --------------------------------------------------------------------
-# Desktop (buttons row + details) — 8 feeds per row, button + badge layout
+# Desktop (buttons row + details) — 7 feeds/row, wide badge slot
 # --------------------------------------------------------------------
 if not FEED_CONFIG:
     st.info("No feeds configured.")
     st.stop()
 
-MAX_BTNS_PER_ROW = 8  # feeds per row (each feed = button + badge)
+MAX_BTNS_PER_ROW = 7  # feeds per row (each feed = button + badge)
 
 items = list(FEED_CONFIG.items())
 badge_placeholders = {}
@@ -374,18 +374,19 @@ def _new_count_for_feed(key, conf, entries):
 
 for start in range(0, len(items), MAX_BTNS_PER_ROW):
     row_items = items[start : start + MAX_BTNS_PER_ROW]
-    # Build column layout: 2 columns per feed (button + badge)
+
+    # Per-feed: [button_width, badge_width]; badge widened 5× from the prior 0.15 -> 0.75
     col_widths = []
     for _ in row_items:
-        col_widths.extend([0.85, 0.15])  # adjust ratio as needed
+        col_widths.extend([0.85, 0.75])
     row_cols = st.columns(col_widths)
 
     for i, (key, conf) in enumerate(row_items):
         entries = st.session_state[f"{key}_data"]
         new_count = _new_count_for_feed(key, conf, entries)
 
-        btn_col = row_cols[i*2]
-        badge_col = row_cols[i*2 + 1]
+        btn_col = row_cols[i * 2]
+        badge_col = row_cols[i * 2 + 1]
 
         with btn_col:
             is_active = (st.session_state.get("active_feed") == key)
@@ -434,3 +435,4 @@ if active:
     conf = FEED_CONFIG[active]
     entries = st.session_state[f"{active}_data"]
     _render_feed_details(active, conf, entries, badge_placeholders)
+
