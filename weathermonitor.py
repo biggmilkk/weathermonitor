@@ -1,4 +1,3 @@
-# weathermonitor.py
 import os, sys, time, gc, logging, psutil
 import streamlit as st
 from dateutil import parser as dateparser
@@ -18,15 +17,40 @@ from computation import (
     compute_imd_timestamps,
 )
 
-# UI-only imports
-from renderer import (
-    RENDERERS,
-    draw_badge,
-    render_empty_state,
-)
+# Renderers (per-feed render functions live in renderers/)
+from renderers import RENDERERS
 
 # Shared constants
 from constants import PROVINCE_NAMES
+
+
+# --------------------------------------------------------------------
+# Helpers moved here (draw_badge + empty state)
+# --------------------------------------------------------------------
+def draw_badge(placeholder, count: int):
+    """Draw or clear a numeric badge."""
+    if not placeholder:
+        return
+    if count > 0:
+        placeholder.markdown(
+            f"<span style='display:inline-block;"
+            f"background:#FFEB99;"
+            f"color:#000;"
+            f"padding:2px 8px;"
+            f"border-radius:6px;"
+            f"font-weight:700;"
+            f"font-size:0.90em;"
+            f"white-space:nowrap;'>"
+            f"❗ {count} New</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        placeholder.markdown("&nbsp;", unsafe_allow_html=True)
+
+
+def render_empty_state():
+    """Generic empty-state renderer for feeds with no entries."""
+    st.info("No active warnings at this time.")
 
 
 # --------------------------------------------------------------------
@@ -84,7 +108,7 @@ st.session_state.setdefault("active_feed", None)
 
 
 # --------------------------------------------------------------------
-# Small controller-local helpers (keep UI/controller thin)
+# Small controller-local helpers
 # --------------------------------------------------------------------
 def safe_int(x) -> int:
     try:
@@ -130,8 +154,7 @@ def nws_remaining_new_total(feed_key: str, entries: list) -> int:
         if _entry_ts(e) > last_seen:
             total += 1
     return total
-
-
+    
 # --------------------------------------------------------------------
 # Refresh (uses centralized fetcher)
 # --------------------------------------------------------------------
