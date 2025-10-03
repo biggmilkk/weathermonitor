@@ -269,7 +269,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
             st.session_state[f"{active}_remaining_new_total"] = 0
             return
 
-        lastseen_key    = f"{active}_bucket_last_seen}"
+        lastseen_key    = f"{active}_bucket_last_seen"
         bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
 
         cols = st.columns([0.25, 0.75])
