@@ -121,68 +121,6 @@ def render_json(item, conf):
     st.markdown("---")
 
 # ============================================================
-# UK (Met Office) – grouped
-# ============================================================
-
-def render_uk_grouped(entries, conf):
-    """
-    Render UK like BOM:
-      Region header
-        → flat list of items
-    Uses a single feed-level last_seen_time.
-    """
-    feed_key = conf.get("key", "uk")
-    items = _as_list(entries)
-    if not items:
-        render_empty_state()
-        return
-
-    items = sort_newest(attach_timestamp(items))
-    last_seen = float(st.session_state.get(f"{feed_key}_last_seen_time") or 0.0)
-
-    # Group by region
-    groups = OrderedDict()
-    for e in items:
-        groups.setdefault(_norm(e.get("region") or "Unknown"), []).append(e)
-
-    any_rendered = False
-    for region, alerts in groups.items():
-        if not alerts:
-            continue
-        any_rendered = True
-
-        region_header = _stripe_wrap(
-            f"<h2>{html.escape(region)}</h2>",
-            any(float(a.get("timestamp") or 0.0) > last_seen for a in alerts),
-        )
-        st.markdown(region_header, unsafe_allow_html=True)
-
-        for a in alerts:
-            is_new = float(a.get("timestamp") or 0.0) > last_seen
-            prefix = "[NEW] " if is_new else ""
-            title  = a.get("bucket") or _norm(a.get("title", ""))
-            link   = _norm(a.get("link"))
-
-            if title and link:
-                st.markdown(f"{prefix}**[{title}]({link})**")
-            else:
-                st.markdown(f"{prefix}**{title}**")
-
-            if a.get("summary"):
-                st.write(a["summary"])
-
-            pub_label = _to_utc_label(a.get("published"))
-            if pub_label:
-                st.caption(f"Published: {pub_label}")
-
-        st.markdown("---")
-
-    if not any_rendered:
-        render_empty_state()
-
-    st.session_state[f"{feed_key}_last_seen_time"] = time.time()
-
-# ============================================================
 # CMA renderer (simple colored bullet)
 # ============================================================
 
