@@ -1,4 +1,4 @@
-import streamlit as st
+# scraper/meteoalarm.py
 import feedparser
 import logging
 import re
@@ -262,7 +262,6 @@ def _parse_europe(feed):
     return entries
 
 # -------------------- Public API (sync) --------------------
-@st.cache_data(ttl=60, show_spinner=False)
 def scrape_meteoalarm(conf: dict):
     url = conf.get("url", DEFAULT_URL)
     try:
