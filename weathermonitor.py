@@ -22,7 +22,7 @@ from renderers import RENDERERS
 
 
 # --------------------------------------------------------------------
-# Helpers moved here (draw_badge + empty state)
+# Helpers (local UI helpers)
 # --------------------------------------------------------------------
 def draw_badge(placeholder, count: int):
     if not placeholder:
@@ -42,7 +42,6 @@ def draw_badge(placeholder, count: int):
         )
     else:
         placeholder.markdown("&nbsp;", unsafe_allow_html=True)
-
 
 def render_empty_state():
     st.info("No active warnings at this time.")
@@ -77,7 +76,8 @@ st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss_before // (1024*1024)} MB
 # --------------------------------------------------------------------
 # State & Config
 # --------------------------------------------------------------------
-FETCH_TTL = 60  # global UI heartbeat (autorefresh); real fetch cadence is per-feed ttl
+# Global UI heartbeat; per-feed fetch cadence is governed by each feed's "ttl"
+FETCH_TTL = 10
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 
@@ -156,7 +156,7 @@ def _stable_jitter_seconds(feed_key: str, max_jitter: int = 10) -> int:
     return int(h[:2], 16) % (max_jitter + 1)  # 0..max_jitter seconds
 
 def _is_due(feed_key: str, conf: dict, now_ts: float) -> bool:
-    ttl = int(conf.get("ttl", FETCH_TTL))
+    ttl = int(conf.get("ttl", 60))
     last = float(st.session_state.get(f"{feed_key}_last_fetch") or 0.0)
     jitter = _stable_jitter_seconds(feed_key, 10)
     return (now_ts - last) >= max(1, ttl - jitter)
@@ -177,12 +177,13 @@ if force:
     for fk, conf in to_fetch.items():
         if fk in force:
             c = dict(conf)
-            c["_nonce"] = force[fk]
+            c["_nonce"] = force[fk]  # only affects the cache key for cached_fetch_round
             tf2[fk] = c
         else:
             tf2[fk] = conf
     to_fetch = tf2
-    st.session_state["_force_refresh_nonce"] = {}  # clear after one round
+    # Clear after one round; if user clicks again, a new nonce is set on click
+    st.session_state["_force_refresh_nonce"] = {}
 
 if to_fetch:
     results = cached_fetch_round(to_fetch)
@@ -204,7 +205,6 @@ if to_fetch:
                 prev_ts=prev_ts,
                 now_ts=now_ts,
             )
-
             st.session_state[fp_key] = fp_by_region
             st.session_state[ts_key] = ts_by_region
 
@@ -256,12 +256,6 @@ st.markdown("---")
 # --------------------------------------------------------------------
 # Details renderer (per feed panel)
 # --------------------------------------------------------------------
-def _immediate_rerun():
-    if hasattr(st, "rerun"):
-        st.rerun()
-    elif hasattr(st, "experimental_rerun"):
-        st.experimental_rerun()
-
 def _render_feed_details(active, conf, entries, badge_placeholders=None):
     data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
 
@@ -277,7 +271,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
         cols = st.columns([0.25, 0.75])
         with cols[0]:
             if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
-                lastseen_key   = f"{active}_bucket_last_seen"
+                lastseen_key    = f"{active}_bucket_last_seen"
                 bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
                 now_ts = time.time()
                 for k in list(bucket_lastseen.keys()):
@@ -295,7 +289,6 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                     ph = badge_placeholders.get(active)
                     if ph:
                         draw_badge(ph, 0)
-                _immediate_rerun()
 
         RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
         ec_total_now = ec_remaining_new_total(active, entries)
@@ -329,7 +322,6 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                     ph = badge_placeholders.get(active)
                     if ph:
                         draw_badge(ph, 0)
-                _immediate_rerun()
 
         RENDERERS["nws_grouped_compact"](entries, {**conf, "key": active})
         nws_total_now = nws_remaining_new_total(active, entries)
@@ -498,6 +490,7 @@ for row in range(num_rows):
 
             if clicked:
                 if st.session_state.get("active_feed") == feed_key:
+                    # closing the panel
                     if conf["type"] == "rss_meteoalarm":
                         st.session_state[f"{feed_key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
                     elif conf["type"] == "uk_grouped_compact":
@@ -506,8 +499,9 @@ for row in range(num_rows):
                         st.session_state[f"{feed_key}_last_seen_time"] = time.time()
                     st.session_state["active_feed"] = None
                 else:
+                    # opening the panel
                     st.session_state["active_feed"] = feed_key
-                    # mark as due and force-bust cache for this feed in the next round
+                    # mark as due and force-bust cache for this feed in the next round (no extra rerun)
                     st.session_state[f"{feed_key}_last_fetch"] = 0
                     st.session_state["_force_refresh_nonce"][feed_key] = time.time()
                     if conf["type"] == "rss_meteoalarm":
@@ -527,8 +521,7 @@ for row in range(num_rows):
             with badge_col:
                 st.markdown("&nbsp;", unsafe_allow_html=True)
 
-if _toggled:
-    _immediate_rerun()
+# No manual rerun; button clicks already cause one rerun
 
 active = st.session_state["active_feed"]
 if active:
