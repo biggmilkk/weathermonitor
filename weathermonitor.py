@@ -352,8 +352,22 @@ MAX_BTNS_PER_ROW = 6  # feeds per row (button + badge each)
 # Optional fixed feed positions: row, col (zero-based)
 # Example: nws at row 0 col 0, bom_australia at row 1 col 5
 FEED_POSITIONS = {
-    "bom_multi": (1, 5),
-    # add more if needed
+    # Row 0 (north)
+    "ec":               (0, 0),  # Canada
+    "metoffice_uk":     (0, 1),  # UK
+    "meteoalarm":       (0, 2),  # Europe
+
+    # Row 1 (mid-latitudes)
+    "nws":              (1, 0),  # US
+    "imd_india_today":  (1, 3),  # India
+    "cma_china":        (1, 4),  # China
+    "jma":              (1, 5),  # Japan
+
+    # Row 2 (tropics / SE Asia)
+    "pagasa":           (2, 4),  # Philippines
+
+    # Row 3 (southern)
+    "bom_multi":        (3, 5),  # Australia
 }
 
 # Remove pinned feeds from sequential flow
