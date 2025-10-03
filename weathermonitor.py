@@ -341,13 +341,13 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
             st.session_state.pop(pkey, None)
 
 # --------------------------------------------------------------------
-# Desktop (buttons row + details) — 7 feeds/row, compact spacing
+# Desktop (buttons row + details) — 6 feeds/row, wider badge, no-wrap
 # --------------------------------------------------------------------
 if not FEED_CONFIG:
     st.info("No feeds configured.")
     st.stop()
 
-MAX_BTNS_PER_ROW = 7  # feeds per row (button + badge each)
+MAX_BTNS_PER_ROW = 6  # feeds per row (button + badge each)
 
 items = list(FEED_CONFIG.items())
 badge_placeholders = {}
@@ -375,10 +375,10 @@ def _new_count_for_feed(key, conf, entries):
 for start in range(0, len(items), MAX_BTNS_PER_ROW):
     row_items = items[start : start + MAX_BTNS_PER_ROW]
 
-    # Compact layout: 0.9 button + 0.3 badge per feed
+    # Wider badge column; compact gaps
     col_widths = []
     for _ in row_items:
-        col_widths.extend([0.9, 0.3])
+        col_widths.extend([1.0, 0.7])  # button, badge
     row_cols = st.columns(col_widths, gap="small")
 
     for i, (key, conf) in enumerate(row_items):
@@ -398,15 +398,20 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
             )
 
         with badge_col:
-            badge_placeholders[key] = st.empty()
-            draw_badge(badge_placeholders[key], safe_int(new_count))
+            # No-wrap badge using &nbsp;; keep slot even when 0
+            try:
+                cnt = int(new_count)
+            except Exception:
+                cnt = 0
+            if cnt > 0:
+                badge_col.markdown(f"❗&nbsp;{cnt}&nbsp;New", unsafe_allow_html=True)
+            else:
+                badge_col.markdown("&nbsp;", unsafe_allow_html=True)
 
         if clicked:
             if st.session_state.get("active_feed") == key:
                 if conf["type"] == "rss_meteoalarm":
                     st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                    pass
                 elif conf["type"] == "uk_grouped_compact":
                     st.session_state[f"{key}_last_seen_time"] = time.time()
                 else:
