@@ -11,11 +11,11 @@ from utils.fetcher import run_fetch_round
 from computation import (
     compute_counts,
     meteoalarm_unseen_active_instances,
-    meteoalarm_mark_and_sort,      # expects to live in computation.py
-    meteoalarm_snapshot_ids,       # expects to live in computation.py
-    ec_bucket_from_title,          # expects to live in computation.py
+    meteoalarm_mark_and_sort,
+    meteoalarm_snapshot_ids,
+    ec_bucket_from_title,
     parse_timestamp,
-    compute_imd_timestamps,        # moved IMD logic into computation.py (fix #3)
+    compute_imd_timestamps,
 )
 
 # UI-only imports
@@ -25,7 +25,7 @@ from renderer import (
     render_empty_state,
 )
 
-# Shared constants (fix #2: deduped)
+# Shared constants
 from constants import PROVINCE_NAMES
 
 
@@ -66,6 +66,10 @@ st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 def load_feeds():
     return get_feed_definitions()
 
+@st.cache_data(ttl=FETCH_TTL, show_spinner=False)
+def cached_fetch_round(to_fetch: dict):
+    return run_fetch_round(to_fetch)
+
 FEED_CONFIG = load_feeds()
 now = time.time()
 for key, conf in FEED_CONFIG.items():
@@ -99,10 +103,6 @@ def _entry_ts(e: dict) -> float:
     return parse_timestamp(e.get("published"))
 
 def ec_remaining_new_total(feed_key: str, entries: list) -> int:
-    """
-    Remaining NEW across all EC 'Province|Warning' buckets using committed last_seen map:
-      st.session_state[f"{feed_key}_bucket_last_seen"]
-    """
     lastseen_map = st.session_state.get(f"{feed_key}_bucket_last_seen", {}) or {}
     total = 0
     for e in entries or []:
@@ -118,10 +118,6 @@ def ec_remaining_new_total(feed_key: str, entries: list) -> int:
     return total
 
 def nws_remaining_new_total(feed_key: str, entries: list) -> int:
-    """
-    Remaining NEW across all NWS 'State|Bucket' buckets using committed last_seen map:
-      st.session_state[f"{feed_key}_bucket_last_seen"]
-    """
     lastseen_map = st.session_state.get(f"{feed_key}_bucket_last_seen", {}) or {}
     total = 0
     for e in entries or []:
@@ -146,13 +142,12 @@ to_fetch = {
 }
 
 if to_fetch:
-    results = run_fetch_round(to_fetch)
+    results = cached_fetch_round(to_fetch)
 
     for key, raw in results:
         entries = raw.get("entries", [])
         conf = FEED_CONFIG[key]
 
-        # --- IMD-specific: timestamps & "new" flags (fix #3: now computed in computation.py) ---
         if conf["type"] == "imd_current_orange_red":
             fp_key = f"{key}_fp_by_region"
             ts_key = f"{key}_ts_by_region"
@@ -170,13 +165,10 @@ if to_fetch:
             st.session_state[fp_key] = fp_by_region
             st.session_state[ts_key] = ts_by_region
 
-        # ------------------------------------------------------------------
-        # Persist
         st.session_state[f"{key}_data"] = entries
         st.session_state[f"{key}_last_fetch"] = now
         st.session_state["last_refreshed"] = now
 
-        # When the details pane is open, snapshot seen (feed-dependent)
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
@@ -184,7 +176,7 @@ if to_fetch:
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
             elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                pass  # handled by per-bucket logic in renderer + our totals below
+                pass
             elif conf["type"] == "uk_grouped_compact":
                 last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
                 _, new_count = compute_counts(entries, conf, last_seen_ts)
@@ -196,7 +188,6 @@ if to_fetch:
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_time"] = now
 
-        # Keep EC/NWS "remaining new total" in sync for badges
         if conf["type"] == "ec_async":
             st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
         elif conf["type"] == "nws_grouped_compact":
@@ -246,10 +237,8 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                 lastseen_key   = f"{active}_bucket_last_seen"
                 bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
                 now_ts = time.time()
-                # Commit now for all known buckets
                 for k in list(bucket_lastseen.keys()):
                     bucket_lastseen[k] = now_ts
-                # And for all present entries (derive bkeys)
                 for e in entries:
                     bucket = ec_bucket_from_title(e.get("title", "") or "")
                     if not bucket:
@@ -280,7 +269,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
             st.session_state[f"{active}_remaining_new_total"] = 0
             return
 
-        lastseen_key    = f"{active}_bucket_last_seen"
+        lastseen_key    = f"{active}_bucket_last_seen}"
         bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
 
         cols = st.columns([0.25, 0.75])
@@ -405,11 +394,9 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
 
             if clicked:
                 if st.session_state.get("active_feed") == key:
-                    # Closing: apply 'mark-as-seen' policy per feed
                     if conf["type"] == "rss_meteoalarm":
                         st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
                     elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                        # Per-bucket logic is committed within the renderer’s toggles or via "Mark all as seen"
                         pass
                     elif conf["type"] == "uk_grouped_compact":
                         st.session_state[f"{key}_last_seen_time"] = time.time()
@@ -417,7 +404,6 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
                         st.session_state[f"{key}_last_seen_time"] = time.time()
                     st.session_state["active_feed"] = None
                 else:
-                    # Opening: set pending seen time for timestamped feeds
                     st.session_state["active_feed"] = key
                     if conf["type"] == "rss_meteoalarm":
                         st.session_state[f"{key}_pending_seen_time"] = time.time()
