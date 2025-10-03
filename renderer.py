@@ -14,6 +14,7 @@ from renderers.cma import render as render_cma
 from renderers.meteoalarm import render as render_meteoalarm
 from renderers.bom import render as render_bom_grouped
 from renderers.jma import render as render_jma_grouped
+from renderers.pagasa import render as render_pagasa
 
 # Pure helpers from computation.py (logic lives there)
 from computation import (
