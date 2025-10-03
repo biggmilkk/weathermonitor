@@ -8,15 +8,17 @@ What this module provides:
 - Generic grouping utilities.
 - Feed-specific calculators for "remaining new" counts (EC/NWS-style).
 - Meteoalarm utilities (ID building, mark/sort, snapshot, unseen counters).
-- Backwards-compatible compute_counts/advance_seen used by top-level UI.
+- IMD (India) utility to compute per-region timestamps/new flags.
+- Backwards-compatible compute_counts/advance_seen used by the controller/UI.
 
 All functions are pure (no side effects) and easy to unit-test.
 """
 
 from __future__ import annotations
 
+import json
+import re
 from collections import OrderedDict, defaultdict
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
@@ -47,7 +49,6 @@ def parse_timestamp(ts: Any) -> float:
         except Exception:
             return 0.0
     if isinstance(ts, datetime):
-        # If tz-aware: timestamp() is UTC-based; naive assumed local—still okay for monotonic "newer than".
         try:
             return ts.timestamp()
         except Exception:
@@ -156,21 +157,47 @@ def compute_remaining_new_by_region(
 # Environment Canada (EC) helpers
 # --------------------------------------------------------------------
 
-# You can extend this with additional known warning types if you wish to bucket by title.
+# Canonical EC warning buckets (strict, word-boundary matching)
 EC_WARNING_TYPES: tuple[str, ...] = (
-    "Warning", "Advisory", "Watch", "Statement", "Special Weather Statement",
-    "Rainfall", "Snowfall", "Wind", "Thunderstorm", "Heat", "Cold"
+    "Arctic Outflow Warning",
+    "Blizzard Warning",
+    "Blowing Snow Warning",
+    "Coastal Flooding Warning",
+    "Dust Storm Warning",
+    "Extreme Cold Warning",
+    "Flash Freeze Warning",
+    "Fog Warning",
+    "Freezing Drizzle Warning",
+    "Freezing Rain Warning",
+    "Frost Warning",
+    "Heat Warning",
+    "Hurricane Warning",
+    "Rainfall Warning",
+    "Severe Thunderstorm Warning",
+    "Severe Thunderstorm Watch",
+    "Snowfall Warning",
+    "Snow Squall Warning",
+    "Tornado Warning",
+    "Tropical Storm Warning",
+    "Tsunami Warning",
+    "Weather Warning",
+    "Wind Warning",
+    "Winter Storm Warning",
 )
+_EC_BUCKET_PATTERNS = {
+    w: re.compile(rf"\b{re.escape(w)}\b", flags=re.IGNORECASE) for w in EC_WARNING_TYPES
+}
 
-def ec_bucket_from_title(title: str, *, patterns: Sequence[str] = EC_WARNING_TYPES) -> str | None:
+def ec_bucket_from_title(title: str, *, patterns: Mapping[str, re.Pattern] = _EC_BUCKET_PATTERNS) -> str | None:
     """
-    Very lightweight bucketer: returns the first matching pattern contained in the title.
-    If nothing matches, returns None.
+    Return the canonical EC bucket by matching known warning names as whole words in the title.
+    If nothing matches, return None.
     """
-    t = (title or "").lower()
-    for p in patterns:
-        if p.lower() in t:
-            return p
+    if not title:
+        return None
+    for canon, pat in patterns.items():
+        if pat.search(title):
+            return canon
     return None
 
 
@@ -185,7 +212,9 @@ def ec_compute_new_total(
     EC-style 'remaining new' counter by province (or any provided region_field).
     This is a thin wrapper over the generic region calculator.
     """
-    return compute_remaining_new_by_region(entries, region_field=region_field, last_seen_map=last_seen_map, ts_key=ts_key)
+    return compute_remaining_new_by_region(
+        entries, region_field=region_field, last_seen_map=last_seen_map, ts_key=ts_key
+    )
 
 
 # --------------------------------------------------------------------
@@ -202,7 +231,9 @@ def nws_compute_new_total(
     """
     NWS-style 'remaining new' counter by state (or any provided region_field).
     """
-    return compute_remaining_new_by_region(entries, region_field=region_field, last_seen_map=last_seen_map, ts_key=ts_key)
+    return compute_remaining_new_by_region(
+        entries, region_field=region_field, last_seen_map=last_seen_map, ts_key=ts_key
+    )
 
 
 # --------------------------------------------------------------------
@@ -218,8 +249,8 @@ def alert_id(entry: Mapping[str, Any]) -> str:
         str(entry.get("id") or ""),
         str(entry.get("type") or ""),
         str(entry.get("level") or ""),
-        str(entry.get("onset") or ""),
-        str(entry.get("expires") or ""),
+        str(entry.get("onset") or entry.get("from") or ""),
+        str(entry.get("expires") or entry.get("until") or ""),
     ])
 
 
@@ -262,7 +293,7 @@ def meteoalarm_mark_and_sort(
 
     out: list[dict] = []
     for country in countries:
-        name = country.get("name") or country.get("country") or ""
+        name = country.get("name") or country.get("country") or country.get("title") or ""
         alerts_map = country.get("alerts", {}) or {}
 
         new_map: dict[str, list[dict]] = {}
@@ -274,8 +305,8 @@ def meteoalarm_mark_and_sort(
                     continue
                 d = dict(a)
                 d["_is_new"] = alert_id(a) not in seen_ids
-                # Attach timestamps for sorting if not present
-                d["timestamp"] = parse_timestamp(d.get("onset") or d.get("published"))
+                # Attach timestamps for sorting if not present; tolerate either onset/from
+                d["timestamp"] = parse_timestamp(d.get("onset") or d.get("from") or d.get("published"))
                 filtered.append(d)
 
             filtered.sort(
@@ -286,6 +317,7 @@ def meteoalarm_mark_and_sort(
 
         c = dict(country)
         c["name"] = name
+        c["title"] = c.get("title") or name  # ensure renderer can show a heading
         c["alerts"] = new_map
         out.append(c)
 
@@ -322,6 +354,79 @@ def meteoalarm_snapshot_ids(
             ids.append(alert_id(a))
 
     return tuple(ids)
+
+
+# --------------------------------------------------------------------
+# IMD (India) helpers
+# --------------------------------------------------------------------
+
+def compute_imd_timestamps(
+    *,
+    entries: Sequence[Mapping[str, Any]],
+    prev_fp: Mapping[str, str] | None,
+    prev_ts: Mapping[str, float] | None,
+    now_ts: float,
+) -> tuple[list[dict], dict[str, str], dict[str, float]]:
+    """
+    Given IMD entries (each with `region` and an optional `days` mapping containing `today`/`tomorrow`),
+    compute per-region fingerprints to detect changes, assign `timestamp` and `is_new` at the item level,
+    and propagate `is_new` to the day dicts.
+
+    Returns:
+        (updated_entries, fp_by_region, ts_by_region)
+    """
+    prev_fp = dict(prev_fp or {})
+    prev_ts = dict(prev_ts or {})
+
+    updated: list[dict] = []
+    fp_by_region: dict[str, str] = {}
+    ts_by_region: dict[str, float] = {}
+
+    for e in entries:
+        region = (e.get("region") or "").strip()
+        days = e.get("days") or {}
+
+        norm = {
+            "region": region,
+            "today": {
+                "severity": (days.get("today") or {}).get("severity"),
+                "hazards":  (days.get("today") or {}).get("hazards") or [],
+                "date":     (days.get("today") or {}).get("date"),
+            },
+            "tomorrow": {
+                "severity": (days.get("tomorrow") or {}).get("severity"),
+                "hazards":  (days.get("tomorrow") or {}).get("hazards") or [],
+                "date":     (days.get("tomorrow") or {}).get("date"),
+            },
+        }
+        fp = json.dumps(norm, sort_keys=True, separators=(",", ":"))
+        changed = (prev_fp.get(region) != fp)
+
+        ts = now_ts if changed else float(prev_ts.get(region) or 0.0)
+        if ts <= 0:
+            ts = now_ts
+
+        d = dict(e)
+        d["timestamp"] = float(ts)
+        d["is_new"] = bool(changed)
+
+        # propagate to day dicts if present
+        dd = dict(days)
+        if "today" in dd and isinstance(dd["today"], dict):
+            dd_today = dict(dd["today"])
+            dd_today["is_new"] = bool(changed)
+            dd["today"] = dd_today
+        if "tomorrow" in dd and isinstance(dd["tomorrow"], dict):
+            dd_tom = dict(dd["tomorrow"])
+            dd_tom["is_new"] = bool(changed)
+            dd["tomorrow"] = dd_tom
+        d["days"] = dd
+
+        updated.append(d)
+        fp_by_region[region] = fp
+        ts_by_region[region] = float(ts)
+
+    return updated, fp_by_region, ts_by_region
 
 
 # --------------------------------------------------------------------
