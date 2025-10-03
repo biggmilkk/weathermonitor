@@ -13,6 +13,7 @@ from renderers.uk import render as render_uk_grouped
 from renderers.cma import render as render_cma
 from renderers.meteoalarm import render as render_meteoalarm
 from renderers.bom import render as render_bom_grouped
+from renderers.jma import render as render_jma_grouped
 
 # Pure helpers from computation.py (logic lives there)
 from computation import (
@@ -121,79 +122,6 @@ def render_json(item, conf):
         st.caption(f"Published: {published}")
 
     st.markdown("---")
-
-# ============================================================
-# JMA (Japan) – grouped by region, dedup titles, colored bullets
-# ============================================================
-
-JMA_COLORS = {"Warning": "#FF7F00", "Emergency": "#E60026"}
-
-def render_jma_grouped(entries, conf):
-    """
-    Grouped renderer for JMA feed.
-    Marks NEW using a single last-seen timestamp stored in session_state.
-    """
-    feed_key = conf.get("key", "jma")
-    items = _as_list(entries)
-    if not items:
-        render_empty_state()
-        return
-
-    items = sort_newest(attach_timestamp(items))
-    last_seen = float(st.session_state.get(f"{feed_key}_last_seen_time") or 0.0)
-    items = mark_is_new_ts(items, last_seen_ts=last_seen)
-
-    # group by region
-    groups = OrderedDict()
-    for e in items:
-        region = _norm(e.get("region", "")) or "(Unknown Region)"
-        groups.setdefault(region, []).append(e)
-
-    any_rendered = False
-    for region, alerts in groups.items():
-        if not alerts:
-            continue
-        any_rendered = True
-
-        region_header = _stripe_wrap(
-            f"<h2>{html.escape(region)}</h2>",
-            any(a.get("_is_new") for a in alerts)
-        )
-        st.markdown(region_header, unsafe_allow_html=True)
-
-        # title -> is_new_any
-        title_new_map = OrderedDict()
-        for a in alerts:
-            t = _norm(a.get("title", ""))
-            if not t:
-                continue
-            title_new_map[t] = title_new_map.get(t, False) or bool(a.get("_is_new"))
-
-        for t, is_new_any in title_new_map.items():
-            level = "Emergency" if "Emergency" in t else ("Warning" if "Warning" in t else None)
-            color = JMA_COLORS.get(level, "#888")
-            prefix = "[NEW] " if is_new_any else ""
-            st.markdown(
-                f"<div style='margin-bottom:4px;'>"
-                f"<span style='color:{color};font-size:16px;'>&#9679;</span> {prefix}{html.escape(t)}"
-                f"</div>",
-                unsafe_allow_html=True
-            )
-
-        newest = alerts[0]
-        ts = float(newest.get("timestamp") or 0.0)
-        if ts:
-            st.caption(f"Published: {_fmt_utc(ts)}")
-        link = _norm(newest.get("link"))
-        if link:
-            st.markdown(f"[Read more]({link})")
-
-        st.markdown("---")
-
-    if not any_rendered:
-        render_empty_state()
-
-    st.session_state[f"{feed_key}_last_seen_time"] = time.time()
 
 # ============================================================
 # PAGASA renderer (colored bullet)
