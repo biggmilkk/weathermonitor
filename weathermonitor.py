@@ -340,17 +340,16 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                 st.session_state[f"{active}_last_seen_time"] = float(pending)
             st.session_state.pop(pkey, None)
 
-
 # --------------------------------------------------------------------
-# Desktop (buttons row + details) — 8 buttons per row
+# Desktop (buttons row + details) — button + badge layout
 # --------------------------------------------------------------------
 if not FEED_CONFIG:
     st.info("No feeds configured.")
     st.stop()
 
-MAX_BTNS_PER_ROW = 8
-items = list(FEED_CONFIG.items())
+MAX_BTNS_PER_ROW = 4  # feeds per row (each gets 2 cols: button+badge)
 
+items = list(FEED_CONFIG.items())
 badge_placeholders = {}
 _toggled = False
 global_idx = 0
@@ -375,12 +374,20 @@ def _new_count_for_feed(key, conf, entries):
 
 for start in range(0, len(items), MAX_BTNS_PER_ROW):
     row_items = items[start : start + MAX_BTNS_PER_ROW]
-    cols = st.columns(MAX_BTNS_PER_ROW)
-    for ci, (key, conf) in enumerate(row_items):
+    # Build column layout: 2 columns per feed (button + badge)
+    col_widths = []
+    for _ in row_items:
+        col_widths.extend([0.9, 0.1])
+    row_cols = st.columns(col_widths)
+
+    for i, (key, conf) in enumerate(row_items):
         entries = st.session_state[f"{key}_data"]
         new_count = _new_count_for_feed(key, conf, entries)
 
-        with cols[ci]:
+        btn_col = row_cols[i*2]
+        badge_col = row_cols[i*2 + 1]
+
+        with btn_col:
             is_active = (st.session_state.get("active_feed") == key)
             clicked = st.button(
                 conf.get("label", key.upper()),
@@ -388,32 +395,33 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
                 use_container_width=True,
                 type=("primary" if is_active else "secondary"),
             )
-            badge_ph = st.empty()
-            badge_placeholders[key] = badge_ph
-            draw_badge(badge_ph, safe_int(new_count))
 
-            if clicked:
-                if st.session_state.get("active_feed") == key:
-                    if conf["type"] == "rss_meteoalarm":
-                        st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                    elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                        pass
-                    elif conf["type"] == "uk_grouped_compact":
-                        st.session_state[f"{key}_last_seen_time"] = time.time()
-                    else:
-                        st.session_state[f"{key}_last_seen_time"] = time.time()
-                    st.session_state["active_feed"] = None
+        with badge_col:
+            badge_placeholders[key] = st.empty()
+            draw_badge(badge_placeholders[key], safe_int(new_count))
+
+        if clicked:
+            if st.session_state.get("active_feed") == key:
+                if conf["type"] == "rss_meteoalarm":
+                    st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
+                elif conf["type"] in ("ec_async", "nws_grouped_compact"):
+                    pass
+                elif conf["type"] == "uk_grouped_compact":
+                    st.session_state[f"{key}_last_seen_time"] = time.time()
                 else:
-                    st.session_state["active_feed"] = key
-                    if conf["type"] == "rss_meteoalarm":
-                        st.session_state[f"{key}_pending_seen_time"] = time.time()
-                    elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                        st.session_state[f"{key}_pending_seen_time"] = None
-                    elif conf["type"] == "uk_grouped_compact":
-                        st.session_state[f"{key}_pending_seen_time"] = time.time()
-                    else:
-                        st.session_state[f"{key}_pending_seen_time"] = time.time()
-                _toggled = True
+                    st.session_state[f"{key}_last_seen_time"] = time.time()
+                st.session_state["active_feed"] = None
+            else:
+                st.session_state["active_feed"] = key
+                if conf["type"] == "rss_meteoalarm":
+                    st.session_state[f"{key}_pending_seen_time"] = time.time()
+                elif conf["type"] in ("ec_async", "nws_grouped_compact"):
+                    st.session_state[f"{key}_pending_seen_time"] = None
+                elif conf["type"] == "uk_grouped_compact":
+                    st.session_state[f"{key}_pending_seen_time"] = time.time()
+                else:
+                    st.session_state[f"{key}_pending_seen_time"] = time.time()
+            _toggled = True
 
         global_idx += 1
 
