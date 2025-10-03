@@ -352,7 +352,6 @@ MAX_BTNS_PER_ROW = 6  # feeds per row (button + badge each)
 # Optional fixed feed positions: row, col (zero-based)
 # Example: nws at row 0 col 0, bom_australia at row 1 col 5
 FEED_POSITIONS = {
-    "nws": (0, 0),
     "bom_multi": (1, 5),
     # add more if needed
 }
