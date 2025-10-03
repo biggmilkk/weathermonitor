@@ -6,8 +6,9 @@ def get_feed_definitions():
             "label": "EC (Canada)",
             "type": "ec_async",
             "source_file": "environment_canada_sources.json",
+            "ttl": 120,
         },
-        
+
         "metoffice_uk": {
             "label": "Met Office (UK)",
             "type": "uk_grouped_compact",
@@ -47,22 +48,25 @@ def get_feed_definitions():
                 "South West England",
                 "London & South East England",
             ],
+            "ttl": 600,
         },
-        
+
         "meteoalarm": {
             "label": "Meteoalarm (Europe)",
             "type": "rss_meteoalarm",
             "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe",
+            "ttl": 60,
         },
-        
+
         "imd_india_today": {
             "label": "IMD (India)",
             "type": "imd_current_orange_red",
             "conf": {
                 "ids": list(range(1, 35))
             },
+            "ttl": 600,
         },
-        
+
         "cma_china": {
             "label": "CMA (China)",
             "type": "rss_cma",
@@ -70,6 +74,7 @@ def get_feed_definitions():
                 "translate_to_en": True,
                 "expiry_grace_minutes": 0,
             },
+            "ttl": 600,
         },
 
         "jma": {
@@ -86,8 +91,9 @@ def get_feed_definitions():
                 "420000","430000","440000","450000","460100","460040","471000","472000",
                 "473000","474000"
             ],
+            "ttl": 300,
         },
-        
+
         "pagasa": {
             "label": "PAGASA (Philippines)",
             "type": "rss_pagasa",
@@ -95,8 +101,9 @@ def get_feed_definitions():
             # Optional tuning:
             # "per_feed_limit": 200,
             # "max_caps": 400,
+            "ttl": 180,
         },
-        
+
         "bom_multi": {
             "label": "BOM (Australia)",
             "type": "rss_bom_multi",
@@ -118,11 +125,13 @@ def get_feed_definitions():
                 "Tasmania",
                 "Northern Territory",
             ],
+            "ttl": 180,
         },
 
         "nws": {
             "label": "NWS (US)",
             "type": "nws_grouped_compact",
             "url": "https://api.weather.gov/alerts/active",
+            "ttl": 60,
         },
     }
