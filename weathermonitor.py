@@ -353,6 +353,7 @@ MAX_BTNS_PER_ROW = 6  # feeds per row (button + badge each)
 # Example: nws at row 0 col 0, bom_australia at row 1 col 5
 FEED_POSITIONS = {
     "nws": (0, 0),
+    "bom_australia": (1, 5),
     # add more if needed
 }
 
@@ -379,12 +380,13 @@ def _new_count_for_feed(key, conf, entries):
     _, new_count = compute_counts(entries, conf, seen_ts)
     return new_count
 
-# Decide how many rows we need
+# Calculate required rows: sequential + pinned
+seq_rows = (len(items) + MAX_BTNS_PER_ROW - 1) // MAX_BTNS_PER_ROW
 if FEED_POSITIONS:
-    max_row = max(r for r, _ in FEED_POSITIONS.values())
-    num_rows = max_row + 1
+    pinned_rows = max(r for r, _ in FEED_POSITIONS.values()) + 1
+    num_rows = max(seq_rows, pinned_rows)
 else:
-    num_rows = (len(items) + MAX_BTNS_PER_ROW - 1) // MAX_BTNS_PER_ROW
+    num_rows = seq_rows
 
 # Sequential fallback iterator for feeds without pinned positions
 seq_iter = iter(items)
@@ -473,7 +475,7 @@ for row in range(num_rows):
 
             global_idx += 1
         else:
-            # Empty slot
+            # Empty slot to keep grid stable
             with btn_col:
                 st.write("")
             with badge_col:
@@ -488,3 +490,4 @@ if active:
     conf = FEED_CONFIG[active]
     entries = st.session_state[f"{active}_data"]
     _render_feed_details(active, conf, entries, badge_placeholders)
+
