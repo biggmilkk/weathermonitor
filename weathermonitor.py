@@ -5,22 +5,29 @@ from dateutil import parser as dateparser
 from streamlit_autorefresh import st_autorefresh
 
 from feeds import get_feed_definitions
+from utils.fetcher import run_fetch_round
+
+# Pure logic imports
 from computation import (
     compute_counts,
     meteoalarm_unseen_active_instances,
-    meteoalarm_mark_and_sort,
-    meteoalarm_snapshot_ids,
-    ec_bucket_from_title,   # pure helper (moved out of renderer)
-    parse_timestamp,        # robust timestamp parser
+    meteoalarm_mark_and_sort,      # expects to live in computation.py
+    meteoalarm_snapshot_ids,       # expects to live in computation.py
+    ec_bucket_from_title,          # expects to live in computation.py
+    parse_timestamp,
+    compute_imd_timestamps,        # moved IMD logic into computation.py (fix #3)
 )
-from utils.fetcher import run_fetch_round
 
-# UI-only imports from renderer
+# UI-only imports
 from renderer import (
     RENDERERS,
     draw_badge,
     render_empty_state,
 )
+
+# Shared constants (fix #2: deduped)
+from constants import PROVINCE_NAMES
+
 
 # --------------------------------------------------------------------
 # Setup
@@ -47,6 +54,7 @@ elif rss_before < MEMORY_LOW_WATER:
 MAX_CONCURRENCY = st.session_state["concurrency"]
 st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss_before // (1024*1024)} MB")
 
+
 # --------------------------------------------------------------------
 # State & Config
 # --------------------------------------------------------------------
@@ -70,17 +78,10 @@ for key, conf in FEED_CONFIG.items():
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
 
-# --------------------------------------------------------------------
-# Small controller-local helpers (UI/controller layer)
-# --------------------------------------------------------------------
-_PROVINCE_NAMES = {
-    "AB": "Alberta", "BC": "British Columbia", "MB": "Manitoba",
-    "NB": "New Brunswick", "NL": "Newfoundland and Labrador",
-    "NT": "Northwest Territories", "NS": "Nova Scotia", "NU": "Nunavut",
-    "ON": "Ontario", "PE": "Prince Edward Island", "QC": "Quebec",
-    "SK": "Saskatchewan", "YT": "Yukon",
-}
 
+# --------------------------------------------------------------------
+# Small controller-local helpers (keep UI/controller thin)
+# --------------------------------------------------------------------
 def safe_int(x) -> int:
     try:
         return max(0, int(x))
@@ -99,8 +100,7 @@ def _entry_ts(e: dict) -> float:
 
 def ec_remaining_new_total(feed_key: str, entries: list) -> int:
     """
-    Remaining NEW across all EC 'Province|Warning' buckets using committed last_seen map
-    kept by the EC compact renderer:
+    Remaining NEW across all EC 'Province|Warning' buckets using committed last_seen map:
       st.session_state[f"{feed_key}_bucket_last_seen"]
     """
     lastseen_map = st.session_state.get(f"{feed_key}_bucket_last_seen", {}) or {}
@@ -110,7 +110,7 @@ def ec_remaining_new_total(feed_key: str, entries: list) -> int:
         if not bucket:
             continue
         code = e.get("province", "")
-        prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
+        prov_name = PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
         bkey = f"{prov_name}|{bucket}"
         last_seen = float(lastseen_map.get(bkey, 0.0))
         if _entry_ts(e) > last_seen:
@@ -135,6 +135,7 @@ def nws_remaining_new_total(feed_key: str, entries: list) -> int:
             total += 1
     return total
 
+
 # --------------------------------------------------------------------
 # Refresh (uses centralized fetcher)
 # --------------------------------------------------------------------
@@ -151,61 +152,26 @@ if to_fetch:
         entries = raw.get("entries", [])
         conf = FEED_CONFIG[key]
 
-        # --- IMD-specific: fingerprint & timestamping -----------------
+        # --- IMD-specific: timestamps & "new" flags (fix #3: now computed in computation.py) ---
         if conf["type"] == "imd_current_orange_red":
             fp_key = f"{key}_fp_by_region"
             ts_key = f"{key}_ts_by_region"
             prev_fp = dict(st.session_state.get(fp_key, {}) or {})
             prev_ts = dict(st.session_state.get(ts_key, {}) or {})
-            now_ts = time.time()
+            now_ts  = time.time()
 
-            def _fingerprint(e: dict) -> str:
-                region = (e.get("region") or "").strip()
-                days = e.get("days") or {}
-                norm = {
-                    "region": region,
-                    "today": {
-                        "severity": (days.get("today") or {}).get("severity"),
-                        "hazards": (days.get("today") or {}).get("hazards") or [],
-                        "date":    (days.get("today") or {}).get("date"),
-                    },
-                    "tomorrow": {
-                        "severity": (days.get("tomorrow") or {}).get("severity"),
-                        "hazards": (days.get("tomorrow") or {}).get("hazards") or [],
-                        "date":    (days.get("tomorrow") or {}).get("date"),
-                    },
-                }
-                import json
-                return json.dumps(norm, sort_keys=True, separators=(",", ":"))
-
-            fp_by_region, ts_by_region = {}, {}
-            for e in entries:
-                region = (e.get("region") or "").strip()
-                fp = _fingerprint(e)
-                changed = (prev_fp.get(region) != fp)
-
-                if changed:
-                    ts = now_ts
-                else:
-                    ts = float(prev_ts.get(region) or 0.0)
-                    if ts <= 0:
-                        ts = now_ts
-
-                e["timestamp"] = ts
-                e["is_new"] = changed
-                days = e.get("days") or {}
-                for dkey in ("today", "tomorrow"):
-                    if dkey in days:
-                        days[dkey]["is_new"] = changed
-
-                fp_by_region[region] = fp
-                ts_by_region[region] = ts
+            entries, fp_by_region, ts_by_region = compute_imd_timestamps(
+                entries=entries,
+                prev_fp=prev_fp,
+                prev_ts=prev_ts,
+                now_ts=now_ts,
+            )
 
             st.session_state[fp_key] = fp_by_region
             st.session_state[ts_key] = ts_by_region
 
-        # --------------------------------------------------------------
-
+        # ------------------------------------------------------------------
+        # Persist
         st.session_state[f"{key}_data"] = entries
         st.session_state[f"{key}_last_fetch"] = now
         st.session_state["last_refreshed"] = now
@@ -218,7 +184,7 @@ if to_fetch:
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
             elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                pass
+                pass  # handled by per-bucket logic in renderer + our totals below
             elif conf["type"] == "uk_grouped_compact":
                 last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
                 _, new_count = compute_counts(entries, conf, last_seen_ts)
@@ -230,6 +196,7 @@ if to_fetch:
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_time"] = now
 
+        # Keep EC/NWS "remaining new total" in sync for badges
         if conf["type"] == "ec_async":
             st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
         elif conf["type"] == "nws_grouped_compact":
@@ -241,6 +208,7 @@ rss_after = _rss_bytes()
 if rss_after > MEMORY_HIGH_WATER:
     st.session_state["concurrency"] = max(MIN_CONC, st.session_state["concurrency"] - STEP)
 
+
 # --------------------------------------------------------------------
 # Header
 # --------------------------------------------------------------------
@@ -249,6 +217,7 @@ st.caption(
     f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
 )
 st.markdown("---")
+
 
 # --------------------------------------------------------------------
 # Details renderer (per feed panel)
@@ -274,7 +243,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
         cols = st.columns([0.25, 0.75])
         with cols[0]:
             if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
-                lastseen_key = f"{active}_bucket_last_seen"
+                lastseen_key   = f"{active}_bucket_last_seen"
                 bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
                 now_ts = time.time()
                 # Commit now for all known buckets
@@ -286,7 +255,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                     if not bucket:
                         continue
                     code = e.get("province", "")
-                    prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
+                    prov_name = PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
                     bkey = f"{prov_name}|{bucket}"
                     bucket_lastseen[bkey] = now_ts
                 st.session_state[lastseen_key] = bucket_lastseen
@@ -311,7 +280,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
             st.session_state[f"{active}_remaining_new_total"] = 0
             return
 
-        lastseen_key = f"{active}_bucket_last_seen"
+        lastseen_key    = f"{active}_bucket_last_seen"
         bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
 
         cols = st.columns([0.25, 0.75])
@@ -319,7 +288,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
             if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
                 now_ts = time.time()
                 for a in entries:
-                    state = (a.get("state") or a.get("state_name") or a.get("state_code") or "Unknown")
+                    state  = (a.get("state") or a.get("state_name") or a.get("state_code") or "Unknown")
                     bucket = (a.get("bucket") or a.get("event") or a.get("title") or "Alert")
                     bkey = f"{state}|{bucket}"
                     bucket_lastseen[bkey] = now_ts
@@ -382,26 +351,6 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                 st.session_state[f"{active}_last_seen_time"] = float(pending)
             st.session_state.pop(pkey, None)
 
-# --------------------------------------------------------------------
-# New count helper for the badge row
-# --------------------------------------------------------------------
-def _new_count_for(key, conf, entries):
-    if conf["type"] == "rss_meteoalarm":
-        seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-        return meteoalarm_unseen_active_instances(entries, seen_ids)
-    if conf["type"] == "ec_async":
-        val = st.session_state.get(f"{key}_remaining_new_total")
-        return int(val) if isinstance(val, int) else int(ec_remaining_new_total(key, entries) or 0)
-    if conf["type"] == "nws_grouped_compact":
-        val = st.session_state.get(f"{key}_remaining_new_total")
-        return int(val) if isinstance(val, int) else int(nws_remaining_new_total(key, entries) or 0)
-    if conf["type"] == "uk_grouped_compact":
-        seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
-        _, new_count = compute_counts(entries, conf, seen_ts)
-        return new_count
-    seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
-    _, new_count = compute_counts(entries, conf, seen_ts)
-    return new_count
 
 # --------------------------------------------------------------------
 # Desktop (buttons row + details) — 8 buttons per row
@@ -456,9 +405,11 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
 
             if clicked:
                 if st.session_state.get("active_feed") == key:
+                    # Closing: apply 'mark-as-seen' policy per feed
                     if conf["type"] == "rss_meteoalarm":
                         st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
                     elif conf["type"] in ("ec_async", "nws_grouped_compact"):
+                        # Per-bucket logic is committed within the renderer’s toggles or via "Mark all as seen"
                         pass
                     elif conf["type"] == "uk_grouped_compact":
                         st.session_state[f"{key}_last_seen_time"] = time.time()
@@ -466,6 +417,7 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
                         st.session_state[f"{key}_last_seen_time"] = time.time()
                     st.session_state["active_feed"] = None
                 else:
+                    # Opening: set pending seen time for timestamped feeds
                     st.session_state["active_feed"] = key
                     if conf["type"] == "rss_meteoalarm":
                         st.session_state[f"{key}_pending_seen_time"] = time.time()
@@ -480,10 +432,7 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
         global_idx += 1
 
 if _toggled:
-    if hasattr(st, "rerun"):
-        st.rerun()
-    elif hasattr(st, "experimental_rerun"):
-        st.experimental_rerun()
+    _immediate_rerun()
 
 active = st.session_state["active_feed"]
 if active:
