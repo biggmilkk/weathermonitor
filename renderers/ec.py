@@ -4,8 +4,8 @@ import time
 from collections import OrderedDict
 
 import streamlit as st
-
 from dateutil import parser as dateparser
+
 from computation import (
     attach_timestamp,
     sort_newest,
@@ -17,7 +17,6 @@ from computation import (
 # ============================================================
 
 def _to_utc_label(pub: str | None) -> str | None:
-    """Return a uniform UTC label for display, falling back to the original string."""
     if not pub:
         return None
     try:
@@ -32,7 +31,6 @@ def _norm(s: str | None) -> str:
     return (s or "").strip()
 
 def _stripe_wrap(content: str, is_new: bool) -> str:
-    """Add red stripe to highlight NEW content."""
     if not is_new:
         return content
     return (
@@ -45,24 +43,8 @@ def render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
 # ============================================================
-# EC Province names + ordering
+# Province ordering (display names expected in entries.province_name)
 # ============================================================
-
-_PROVINCE_NAMES = {
-    "AB": "Alberta",
-    "BC": "British Columbia",
-    "MB": "Manitoba",
-    "NB": "New Brunswick",
-    "NL": "Newfoundland and Labrador",
-    "NT": "Northwest Territories",
-    "NS": "Nova Scotia",
-    "NU": "Nunavut",
-    "ON": "Ontario",
-    "PE": "Prince Edward Island",
-    "QC": "Quebec",
-    "SK": "Saskatchewan",
-    "YT": "Yukon",
-}
 
 _PROVINCE_ORDER = [
     "Alberta",
@@ -79,9 +61,6 @@ _PROVINCE_ORDER = [
     "Saskatchewan",
     "Yukon",
 ]
-
-def _ec_province_name(code_or_name: str) -> str:
-    return _PROVINCE_NAMES.get(code_or_name, code_or_name)
 
 # ============================================================
 # EC Grouped Compact Renderer
@@ -110,17 +89,17 @@ def render(entries, conf):
     pending_seen    = st.session_state[pending_map_key]
     bucket_lastseen = st.session_state[lastseen_key]
 
-    # Normalize
-    items = attach_timestamp(entries or [])
-    items = sort_newest(items)
+    items = sort_newest(attach_timestamp(entries or []))
 
     filtered = []
     for e in items:
         bucket = ec_bucket_from_title(e.get("title", ""))
         if not bucket:
             continue
-        code = e.get("province", "")
-        prov_name = _ec_province_name(code if isinstance(code, str) else str(code))
+        prov_name = (e.get("province_name")
+                     or str(e.get("province") or "")).strip()
+        if not prov_name:
+            prov_name = "Unknown"
         d = dict(e, bucket=bucket, province_name=prov_name, bkey=f"{prov_name}|{bucket}")
         filtered.append(d)
 
@@ -128,7 +107,6 @@ def render(entries, conf):
         render_empty_state()
         return
 
-    # Group by province
     groups = OrderedDict()
     for e in filtered:
         groups.setdefault(e["province_name"], []).append(e)
@@ -137,7 +115,6 @@ def render(entries, conf):
         p for p in groups if p not in _PROVINCE_ORDER
     ]
 
-    # Draw
     for prov in provinces:
         alerts = groups.get(prov, [])
         if not alerts:
@@ -187,16 +164,18 @@ def render(entries, conf):
             with cols[1]:
                 active_count = len(items)
                 st.markdown(
-                    f"<span style='margin-left:6px;padding:2px 6px;"
-                    f"border-radius:4px;background:#eef0f3;color:#000;font-size:0.9em;"
-                    f"font-weight:600;display:inline-block;'>{active_count} Active</span>",
+                    "<span style='margin-left:6px;padding:2px 6px;"
+                    "border-radius:4px;background:#eef0f3;color:#000;font-size:0.9em;"
+                    "font-weight:600;display:inline-block;'>"
+                    f"{active_count} Active</span>",
                     unsafe_allow_html=True,
                 )
                 if new_count > 0:
                     st.markdown(
-                        f"<span style='margin-left:6px;padding:2px 6px;"
-                        f"border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
-                        f"font-weight:bold;display:inline-block;'>❗ {new_count} New</span>",
+                        "<span style='margin-left:6px;padding:2px 6px;"
+                        "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
+                        "font-weight:bold;display:inline-block;'>"
+                        f"❗ {new_count} New</span>",
                         unsafe_allow_html=True,
                     )
 
@@ -204,7 +183,7 @@ def render(entries, conf):
                 for a in items:
                     is_new = float(a.get("timestamp") or 0.0) > last_seen
                     prefix = "[NEW] " if is_new else ""
-                    title  = _norm(a.get("title", ""))
+                    title  = _norm(a.get("title", "")) or "(no title)"
                     region = _norm(a.get("region", ""))
                     link   = _norm(a.get("link"))
                     if link and title:
