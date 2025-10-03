@@ -3,6 +3,7 @@ from .ec import render as render_ec_grouped_compact
 from .uk import render as render_uk_grouped
 from .cma import render as render_cma
 from .meteoalarm import render as render_meteoalarm
+from .bom import render as render_bom_grouped
 
 
 RENDERERS = {
@@ -11,5 +12,6 @@ RENDERERS = {
     "uk_grouped_compact": render_uk_grouped,
     "rss_cma": render_cma,
     "rss_meteoalarm": render_meteoalarm,
+    "rss_bom_multi": render_bom_grouped,
 
 }
