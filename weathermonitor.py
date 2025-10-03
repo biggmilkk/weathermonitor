@@ -357,7 +357,10 @@ FEED_POSITIONS = {
     # add more if needed
 }
 
-items = list(FEED_CONFIG.items())
+# Remove pinned feeds from sequential flow
+pinned_keys = set(FEED_POSITIONS.keys())
+items = [(k, v) for k, v in FEED_CONFIG.items() if k not in pinned_keys]
+
 badge_placeholders = {}
 _toggled = False
 global_idx = 0
@@ -490,4 +493,3 @@ if active:
     conf = FEED_CONFIG[active]
     entries = st.session_state[f"{active}_data"]
     _render_feed_details(active, conf, entries, badge_placeholders)
-
