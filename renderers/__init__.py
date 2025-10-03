@@ -6,7 +6,7 @@ from .meteoalarm import render as render_meteoalarm
 from .bom import render as render_bom_grouped
 from .jma import render as render_jma_grouped
 from .pagasa import render as render_pagasa
-
+from .imd import render as render_imd_compact
 
 RENDERERS = {
     "nws_grouped_compact": render_nws_grouped_compact,
@@ -17,5 +17,6 @@ RENDERERS = {
     "rss_bom_multi": render_bom_grouped,
     "rss_jma": render_jma_grouped,
     "rss_pagasa": render_pagasa,
+    "imd_current_orange_red": render_imd_compact,
 
 }
