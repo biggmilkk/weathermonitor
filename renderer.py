@@ -12,6 +12,7 @@ from renderers.ec import render as render_ec_grouped_compact
 from renderers.uk import render as render_uk_grouped
 from renderers.cma import render as render_cma
 from renderers.meteoalarm import render as render_meteoalarm
+from renderers.bom import render as render_bom_grouped
 
 # Pure helpers from computation.py (logic lives there)
 from computation import (
@@ -120,69 +121,6 @@ def render_json(item, conf):
         st.caption(f"Published: {published}")
 
     st.markdown("---")
-
-# ============================================================
-# BOM (Australia) – grouped by state
-# ============================================================
-
-_BOM_ORDER = [
-    "NSW & ACT",
-    "Northern Territory",
-    "Queensland",
-    "South Australia",
-    "Tasmania",
-    "Victoria",
-    "Western Australia",
-]
-
-def render_bom_grouped(entries, conf):
-    """
-    Grouped renderer for BOM multi-state feed.
-    Marks NEW using a single last-seen timestamp stored in session_state.
-    """
-    feed_key = conf.get("key", "bom")
-    items = sort_newest(attach_timestamp(_as_list(entries)))
-
-    last_seen = float(st.session_state.get(f"{feed_key}_last_seen_time") or 0.0)
-    items = mark_is_new_ts(items, last_seen_ts=last_seen)
-
-    groups = OrderedDict()
-    for e in items:
-        st_name = _norm(e.get("state", ""))
-        groups.setdefault(st_name, []).append(e)
-
-    any_rendered = False
-    for state in _BOM_ORDER:
-        alerts = groups.get(state, [])
-        if not alerts:
-            continue
-        any_rendered = True
-
-        state_header = _stripe_wrap(
-            f"<h2>{html.escape(state)}</h2>",
-            any(a.get("_is_new") for a in alerts)
-        )
-        st.markdown(state_header, unsafe_allow_html=True)
-
-        for a in alerts:
-            prefix = "[NEW] " if a.get("_is_new") else ""
-            title = _norm(a.get("title", ""))
-            link = _norm(a.get("link"))
-            if title and link:
-                st.markdown(f"{prefix}**[{title}]({link})**")
-            else:
-                st.markdown(f"{prefix}**{title}**")
-            if a.get("summary"):
-                st.write(a["summary"])
-            pub_label = _to_utc_label(a.get("published"))
-            if pub_label:
-                st.caption(f"Published: {pub_label}")
-        st.markdown("---")
-
-    if not any_rendered:
-        render_empty_state()
-
-    st.session_state[f"{feed_key}_last_seen_time"] = time.time()
 
 # ============================================================
 # JMA (Japan) – grouped by region, dedup titles, colored bullets
