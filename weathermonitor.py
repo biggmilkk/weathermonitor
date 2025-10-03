@@ -398,14 +398,27 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
             )
 
         with badge_col:
-            # No-wrap badge using &nbsp;; keep slot even when 0
             try:
                 cnt = int(new_count)
             except Exception:
                 cnt = 0
+
             if cnt > 0:
-                badge_col.markdown(f"❗&nbsp;{cnt}&nbsp;New", unsafe_allow_html=True)
+                badge_col.markdown(
+                    "<span style='display:inline-block;"
+                    "background:#FFEB99;"
+                    "color:#000;"
+                    "padding:2px 8px;"
+                    "border-radius:6px;"
+                    "font-weight:700;"
+                    "font-size:0.90em;"
+                    "white-space:nowrap;'>"
+                    f"❗&nbsp;{cnt}&nbsp;New"
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
             else:
+                # keep slot height for alignment even when 0
                 badge_col.markdown("&nbsp;", unsafe_allow_html=True)
 
         if clicked:
