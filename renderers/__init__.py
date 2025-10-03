@@ -5,6 +5,7 @@ from .cma import render as render_cma
 from .meteoalarm import render as render_meteoalarm
 from .bom import render as render_bom_grouped
 from .jma import render as render_jma_grouped
+from .pagasa import render as render_pagasa
 
 
 RENDERERS = {
@@ -15,5 +16,6 @@ RENDERERS = {
     "rss_meteoalarm": render_meteoalarm,
     "rss_bom_multi": render_bom_grouped,
     "rss_jma": render_jma_grouped,
+    "rss_pagasa": render_pagasa,
 
 }
