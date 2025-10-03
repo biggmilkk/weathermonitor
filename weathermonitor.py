@@ -20,15 +20,11 @@ from computation import (
 # Renderers (per-feed render functions live in renderers/)
 from renderers import RENDERERS
 
-# Shared constants
-from constants import PROVINCE_NAMES
-
 
 # --------------------------------------------------------------------
 # Helpers moved here (draw_badge + empty state)
 # --------------------------------------------------------------------
 def draw_badge(placeholder, count: int):
-    """Draw or clear a numeric badge."""
     if not placeholder:
         return
     if count > 0:
@@ -49,7 +45,6 @@ def draw_badge(placeholder, count: int):
 
 
 def render_empty_state():
-    """Generic empty-state renderer for feeds with no entries."""
     st.info("No active warnings at this time.")
 
 
@@ -133,8 +128,7 @@ def ec_remaining_new_total(feed_key: str, entries: list) -> int:
         bucket = ec_bucket_from_title((e.get("title") or "") or "")
         if not bucket:
             continue
-        code = e.get("province", "")
-        prov_name = PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
+        prov_name = (e.get("province_name") or str(e.get("province") or "")) or "Unknown"
         bkey = f"{prov_name}|{bucket}"
         last_seen = float(lastseen_map.get(bkey, 0.0))
         if _entry_ts(e) > last_seen:
@@ -155,6 +149,8 @@ def nws_remaining_new_total(feed_key: str, entries: list) -> int:
             total += 1
     return total
     
+
+
 # --------------------------------------------------------------------
 # Refresh (uses centralized fetcher)
 # --------------------------------------------------------------------
@@ -266,8 +262,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                     bucket = ec_bucket_from_title(e.get("title", "") or "")
                     if not bucket:
                         continue
-                    code = e.get("province", "")
-                    prov_name = PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
+                    prov_name = (e.get("province_name") or str(e.get("province") or "")) or "Unknown"
                     bkey = f"{prov_name}|{bucket}"
                     bucket_lastseen[bkey] = now_ts
                 st.session_state[lastseen_key] = bucket_lastseen
@@ -363,6 +358,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
                 st.session_state[f"{active}_last_seen_time"] = float(pending)
             st.session_state.pop(pkey, None)
 
+
 # --------------------------------------------------------------------
 # Desktop (buttons row + details) — 6 feeds/row, fixed widths, no-wrap
 # --------------------------------------------------------------------
@@ -370,23 +366,20 @@ if not FEED_CONFIG:
     st.info("No feeds configured.")
     st.stop()
 
-MAX_BTNS_PER_ROW = 6  # feeds per row (button + badge each)
+MAX_BTNS_PER_ROW = 6
 
-# Optional fixed feed positions: row, col (zero-based)
-# Example: nws at row 0 col 0, bom_australia at row 1 col 5
 FEED_POSITIONS = {
-    "ec":               (0, 0),  # Canada
-    "metoffice_uk":     (0, 1),  # UK
-    "nws":              (1, 0),  # US
-    "meteoalarm":       (1, 1),  # Europe
-    "imd_india_today":  (1, 3),  # India
-    "cma_china":        (0, 3),  # China
-    "jma":              (0, 4),  # Japan
-    "pagasa":           (1, 4),  # Philippines
-    "bom_multi":        (1, 5),  # Australia
+    "ec":               (0, 0),
+    "metoffice_uk":     (0, 1),
+    "nws":              (1, 0),
+    "meteoalarm":       (1, 1),
+    "imd_india_today":  (1, 3),
+    "cma_china":        (0, 3),
+    "jma":              (0, 4),
+    "pagasa":           (1, 4),
+    "bom_multi":        (1, 5),
 }
 
-# Remove pinned feeds from sequential flow
 pinned_keys = set(FEED_POSITIONS.keys())
 items = [(k, v) for k, v in FEED_CONFIG.items() if k not in pinned_keys]
 
@@ -412,7 +405,6 @@ def _new_count_for_feed(key, conf, entries):
     _, new_count = compute_counts(entries, conf, seen_ts)
     return new_count
 
-# Calculate required rows: sequential + pinned
 seq_rows = (len(items) + MAX_BTNS_PER_ROW - 1) // MAX_BTNS_PER_ROW
 if FEED_POSITIONS:
     pinned_rows = max(r for r, _ in FEED_POSITIONS.values()) + 1
@@ -420,25 +412,21 @@ if FEED_POSITIONS:
 else:
     num_rows = seq_rows
 
-# Sequential fallback iterator for feeds without pinned positions
 seq_iter = iter(items)
 
 for row in range(num_rows):
-    # fixed-width grid for a full row (6 feeds => 12 columns)
     col_widths = []
     for _ in range(MAX_BTNS_PER_ROW):
-        col_widths.extend([1.5, 0.7])  # button, badge
+        col_widths.extend([1.5, 0.7])
     row_cols = st.columns(col_widths, gap="small")
 
     for col in range(MAX_BTNS_PER_ROW):
-        # Find if a feed is pinned here
         feed_key = None
         for k, (r, c) in FEED_POSITIONS.items():
             if r == row and c == col:
                 feed_key = k
                 break
 
-        # Otherwise take the next sequential feed
         if not feed_key:
             try:
                 feed_key, conf = next(seq_iter)
@@ -507,7 +495,6 @@ for row in range(num_rows):
 
             global_idx += 1
         else:
-            # Empty slot to keep grid stable
             with btn_col:
                 st.write("")
             with badge_col:
