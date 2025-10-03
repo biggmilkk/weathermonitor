@@ -7,7 +7,7 @@ from datetime import timezone as _tz
 import streamlit as st
 from dateutil import parser as dateparser
 
-from renderer.nws import render as render_nws_grouped_compact
+from renderers.nws import render as render_nws_grouped_compact
 
 # Pure helpers from computation.py (logic lives there)
 from computation import (
