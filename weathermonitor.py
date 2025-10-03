@@ -1,3 +1,4 @@
+# weathermonitor.py
 import os, sys, time, gc, logging, psutil
 import streamlit as st
 from dateutil import parser as dateparser
@@ -7,19 +8,17 @@ from feeds import get_feed_definitions
 from computation import (
     compute_counts,
     meteoalarm_unseen_active_instances,
+    meteoalarm_mark_and_sort,
+    meteoalarm_snapshot_ids,
+    ec_bucket_from_title,   # pure helper (moved out of renderer)
+    parse_timestamp,        # robust timestamp parser
 )
 from utils.fetcher import run_fetch_round
 
+# UI-only imports from renderer
 from renderer import (
     RENDERERS,
-    ec_remaining_new_total,
-    nws_remaining_new_total,
-    ec_bucket_from_title,
     draw_badge,
-    safe_int,
-    meteoalarm_country_has_alerts,
-    meteoalarm_mark_and_sort,
-    meteoalarm_snapshot_ids,
     render_empty_state,
 )
 
@@ -70,6 +69,71 @@ for key, conf in FEED_CONFIG.items():
         st.session_state.setdefault(f"{key}_last_seen_alerts", tuple())
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
+
+# --------------------------------------------------------------------
+# Small controller-local helpers (UI/controller layer)
+# --------------------------------------------------------------------
+_PROVINCE_NAMES = {
+    "AB": "Alberta", "BC": "British Columbia", "MB": "Manitoba",
+    "NB": "New Brunswick", "NL": "Newfoundland and Labrador",
+    "NT": "Northwest Territories", "NS": "Nova Scotia", "NU": "Nunavut",
+    "ON": "Ontario", "PE": "Prince Edward Island", "QC": "Quebec",
+    "SK": "Saskatchewan", "YT": "Yukon",
+}
+
+def safe_int(x) -> int:
+    try:
+        return max(0, int(x))
+    except Exception:
+        return 0
+
+def meteoalarm_country_has_alerts(country: dict) -> bool:
+    a = (country.get("alerts") or {})
+    return bool(a.get("today")) or bool(a.get("tomorrow"))
+
+def _entry_ts(e: dict) -> float:
+    ts = e.get("timestamp")
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    return parse_timestamp(e.get("published"))
+
+def ec_remaining_new_total(feed_key: str, entries: list) -> int:
+    """
+    Remaining NEW across all EC 'Province|Warning' buckets using committed last_seen map
+    kept by the EC compact renderer:
+      st.session_state[f"{feed_key}_bucket_last_seen"]
+    """
+    lastseen_map = st.session_state.get(f"{feed_key}_bucket_last_seen", {}) or {}
+    total = 0
+    for e in entries or []:
+        bucket = ec_bucket_from_title((e.get("title") or "") or "")
+        if not bucket:
+            continue
+        code = e.get("province", "")
+        prov_name = _PROVINCE_NAMES.get(code, code) if isinstance(code, str) else str(code)
+        bkey = f"{prov_name}|{bucket}"
+        last_seen = float(lastseen_map.get(bkey, 0.0))
+        if _entry_ts(e) > last_seen:
+            total += 1
+    return total
+
+def nws_remaining_new_total(feed_key: str, entries: list) -> int:
+    """
+    Remaining NEW across all NWS 'State|Bucket' buckets using committed last_seen map:
+      st.session_state[f"{feed_key}_bucket_last_seen"]
+    """
+    lastseen_map = st.session_state.get(f"{feed_key}_bucket_last_seen", {}) or {}
+    total = 0
+    for e in entries or []:
+        state  = (e.get("state") or e.get("state_name") or e.get("state_code") or "Unknown")
+        bucket = (e.get("bucket") or e.get("event") or e.get("title") or "Alert")
+        if not state or not bucket:
+            continue
+        bkey = f"{state}|{bucket}"
+        last_seen = float(lastseen_map.get(bkey, 0.0))
+        if _entry_ts(e) > last_seen:
+            total += 1
+    return total
 
 # --------------------------------------------------------------------
 # Refresh (uses centralized fetcher)
@@ -207,21 +271,16 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
             st.session_state[f"{active}_remaining_new_total"] = 0
             return
 
-        _PROVINCE_NAMES = {
-            "AB": "Alberta", "BC": "British Columbia", "MB": "Manitoba",
-            "NB": "New Brunswick", "NL": "Newfoundland and Labrador",
-            "NT": "Northwest Territories", "NS": "Nova Scotia", "NU": "Nunavut",
-            "ON": "Ontario", "PE": "Prince Edward Island", "QC": "Quebec",
-            "SK": "Saskatchewan", "YT": "Yukon",
-        }
         cols = st.columns([0.25, 0.75])
         with cols[0]:
             if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
                 lastseen_key = f"{active}_bucket_last_seen"
                 bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
                 now_ts = time.time()
+                # Commit now for all known buckets
                 for k in list(bucket_lastseen.keys()):
                     bucket_lastseen[k] = now_ts
+                # And for all present entries (derive bkeys)
                 for e in entries:
                     bucket = ec_bucket_from_title(e.get("title", "") or "")
                     if not bucket:
@@ -421,7 +480,10 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
         global_idx += 1
 
 if _toggled:
-    _immediate_rerun()
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
 
 active = st.session_state["active_feed"]
 if active:
