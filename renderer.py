@@ -1,6 +1,5 @@
 # renderer.py
 import html
-import re
 import time
 from collections import OrderedDict
 from datetime import timezone as _tz
@@ -8,17 +7,13 @@ from datetime import timezone as _tz
 import streamlit as st
 from dateutil import parser as dateparser
 
-# Pure helpers from computation.py
+# Pure helpers from computation.py (logic lives there)
 from computation import (
     attach_timestamp,
     sort_newest,
     mark_is_new_ts,
-    group_by,
     alphabetic_with_last,
-    ec_bucket_from_title,
-    compute_remaining_new_by_region,
-    meteoalarm_mark_and_sort,      # controller may also call these beforehand
-    meteoalarm_snapshot_ids,       # kept for compatibility if you still call from UI
+    ec_bucket_from_title,  # keeps EC bucket detection in one place
 )
 
 # ============================================================
@@ -63,11 +58,15 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
 
 def draw_badge(placeholder, count: int):
     """Render the ❗ New badge in a consistent style."""
-    if count and count > 0:
+    try:
+        count = int(count)
+    except Exception:
+        count = 0
+    if count > 0:
         placeholder.markdown(
             "<span style='margin-left:8px;padding:2px 6px;"
             "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;font-weight:bold;'>"
-            f"❗ {int(count)} New</span>",
+            f"❗ {count} New</span>",
             unsafe_allow_html=True,
         )
     else:
@@ -76,13 +75,19 @@ def draw_badge(placeholder, count: int):
 def render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
+def _safe_rerun():
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+
 # ============================================================
 # Generic JSON-like renderer (simple cards)
 # ============================================================
 
 def render_json(item, conf):
     """
-    Generic JSON/NWS-like item renderer.
+    Generic JSON/RSS-like item renderer.
     Shows a left stripe on the title if item['is_new'] is True.
     """
     is_new = bool(item.get("is_new"))
@@ -148,43 +153,6 @@ _PROVINCE_ORDER = [
     "Yukon",
 ]
 
-# Keep ONLY these warning buckets (strict, word-boundary matching)
-EC_WARNING_TYPES = [
-    "Arctic Outflow Warning",
-    "Blizzard Warning",
-    "Blowing Snow Warning",
-    "Coastal Flooding Warning",
-    "Dust Storm Warning",
-    "Extreme Cold Warning",
-    "Flash Freeze Warning",
-    "Fog Warning",
-    "Freezing Drizzle Warning",
-    "Freezing Rain Warning",
-    "Frost Warning",
-    "Heat Warning",
-    "Hurricane Warning",
-    "Rainfall Warning",
-    "Severe Thunderstorm Warning",
-    "Severe Thunderstorm Watch",
-    "Snowfall Warning",
-    "Snow Squall Warning",
-    "Tornado Warning",
-    "Tropical Storm Warning",
-    "Tsunami Warning",
-    "Weather Warning",
-    "Wind Warning",
-    "Winter Storm Warning",
-]
-_EC_BUCKET_PATTERNS = {w: re.compile(rf"\b{re.escape(w)}\b", flags=re.IGNORECASE) for w in EC_WARNING_TYPES}
-
-def _ec_bucket_from_title(title: str) -> str | None:
-    if not title:
-        return None
-    for canon, pat in _EC_BUCKET_PATTERNS.items():
-        if pat.search(title):
-            return canon
-    return None
-
 def _ec_province_name(code_or_name: str) -> str:
     return _PROVINCE_NAMES.get(code_or_name, code_or_name)
 
@@ -192,18 +160,12 @@ def render_ec_grouped_compact(entries, conf):
     """
     Grouped compact renderer for Environment Canada:
       Province (canonical name)
-        → Warning bucket (filtered list above)
+        → Warning bucket
           → list of alerts
 
     Maintains per-bucket last-seen keyed by "Province|Warning" in session_state.
     """
     feed_key = conf.get("key", "ec")
-
-    def _safe_rerun():
-        if hasattr(st, "rerun"):
-            st.rerun()
-        elif hasattr(st, "experimental_rerun"):
-            st.experimental_rerun()
 
     open_key        = f"{feed_key}_active_bucket"
     pending_map_key = f"{feed_key}_bucket_pending_seen"
@@ -226,7 +188,7 @@ def render_ec_grouped_compact(entries, conf):
     items = sort_newest(items)
     filtered = []
     for e in items:
-        bucket = _ec_bucket_from_title(e.get("title", "")) or ec_bucket_from_title(e.get("title", ""))
+        bucket = ec_bucket_from_title(e.get("title", ""))
         if not bucket:
             continue
         code = e.get("province", "")
@@ -236,7 +198,6 @@ def render_ec_grouped_compact(entries, conf):
 
     if not filtered:
         render_empty_state()
-        st.session_state[f"{feed_key}_remaining_new_total"] = 0
         return
 
     # Group by province (preserve chosen order)
@@ -244,11 +205,6 @@ def render_ec_grouped_compact(entries, conf):
     for e in filtered:
         groups.setdefault(e["province_name"], []).append(e)
     provinces = [p for p in _PROVINCE_ORDER if p in groups] + [p for p in groups if p not in _PROVINCE_ORDER]
-
-    # Compute a feed-level "remaining new" using committed per-bucket last_seen
-    total_remaining_new = compute_remaining_new_by_region(
-        filtered, region_field="bkey", last_seen_map=bucket_lastseen, ts_key="timestamp"
-    )
 
     # Draw provinces/buckets
     for prov in provinces:
@@ -343,8 +299,6 @@ def render_ec_grouped_compact(entries, conf):
 
         st.markdown("---")
 
-    st.session_state[f"{feed_key}_remaining_new_total"] = int(max(0, total_remaining_new or 0))
-
 # ============================================================
 # NWS (US) – grouped compact
 # ============================================================
@@ -359,12 +313,6 @@ def render_nws_grouped_compact(entries, conf):
     Maintains per-bucket last-seen keyed by "State|Bucket" in session_state.
     """
     feed_key = conf.get("key", "nws")
-
-    def _safe_rerun():
-        if hasattr(st, "rerun"):
-            st.rerun()
-        elif hasattr(st, "experimental_rerun"):
-            st.experimental_rerun()
 
     open_key        = f"{feed_key}_active_bucket"
     pending_map_key = f"{feed_key}_bucket_pending_seen"
@@ -395,7 +343,6 @@ def render_nws_grouped_compact(entries, conf):
 
     if not normalized:
         render_empty_state()
-        st.session_state[f"{feed_key}_remaining_new_total"] = 0
         return
 
     # Group by state
@@ -405,11 +352,6 @@ def render_nws_grouped_compact(entries, conf):
 
     # Order states alphabetically, placing Marine last if present
     states = alphabetic_with_last(list(groups.keys()), last_value="Marine")
-
-    # Feed-level "remaining new" using committed per-bucket last_seen
-    total_remaining_new = compute_remaining_new_by_region(
-        normalized, region_field="bkey", last_seen_map=bucket_lastseen, ts_key="timestamp"
-    )
 
     for state in states:
         alerts = groups.get(state, [])
@@ -501,8 +443,6 @@ def render_nws_grouped_compact(entries, conf):
                     st.markdown("---")
 
         st.markdown("---")
-
-    st.session_state[f"{feed_key}_remaining_new_total"] = int(max(0, total_remaining_new or 0))
 
 # ============================================================
 # UK (Met Office) – grouped
@@ -613,17 +553,29 @@ def render_cma(item, conf):
 # Meteoalarm renderer (country block)
 # ============================================================
 
+def _is_new_flag(obj) -> bool:
+    """Accept either '_is_new' (from computation.meteoalarm_mark_and_sort) or 'is_new'."""
+    return bool((obj or {}).get("_is_new") or (obj or {}).get("is_new"))
+
+def _alerts_for_day(alerts_map: dict, day: str):
+    """Case-insensitive access for 'today'/'tomorrow' keys."""
+    return (
+        (alerts_map or {}).get(day)
+        or (alerts_map or {}).get(day.capitalize())
+        or (alerts_map or {}).get(day.title())
+        or []
+    )
+
 def render_meteoalarm(item, conf):
     """
     Render a single Meteoalarm country block.
-    Stripe the country header if any alert (today/tomorrow) is marked is_new.
-    The controller typically sets e['is_new'] using seen-id snapshots.
+    Stripe the country header if any alert (today/tomorrow) is marked as new.
     """
     def _any_new(country) -> bool:
         alerts_dict = (country.get("alerts") or {})
         for day in ("today", "tomorrow"):
-            for e in alerts_dict.get(day, []) or []:
-                if e.get("is_new"):
+            for e in _alerts_for_day(alerts_dict, day):
+                if _is_new_flag(e):
                     return True
         return False
 
@@ -645,7 +597,7 @@ def render_meteoalarm(item, conf):
     def _day_level_type_count(day: str, level: str, typ: str) -> int | None:
         """Prefer exact per-day count; fall back to per-type bucket totals if missing."""
         if isinstance(by_day, dict):
-            d = by_day.get(day)
+            d = by_day.get(day) or by_day.get(day.capitalize()) or by_day.get(day.title())
             if isinstance(d, dict):
                 n = d.get(f"{level}|{typ}")
                 if isinstance(n, int) and n > 0:
@@ -659,7 +611,7 @@ def render_meteoalarm(item, conf):
         return None
 
     for day in ["today", "tomorrow"]:
-        alerts = (item.get("alerts", {}) or {}).get(day, [])
+        alerts = _alerts_for_day(item.get("alerts") or {}, day)
         if alerts:
             st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>", unsafe_allow_html=True)
             for e in alerts:
@@ -672,7 +624,7 @@ def render_meteoalarm(item, conf):
                 level = _norm(e.get("level", ""))
                 typ   = _norm(e.get("type", ""))
                 color = {"Orange": "#FF7F00", "Red": "#E60026"}.get(level, "#888")
-                prefix = "[NEW] " if e.get("is_new") else ""
+                prefix = "[NEW] " if _is_new_flag(e) else ""
 
                 n = _day_level_type_count(day, level, typ)
                 count_str = f" ({n} active)" if isinstance(n, int) and n > 0 else ""
@@ -896,7 +848,7 @@ def render_imd_compact(item: dict, conf: dict) -> None:
     """
     One card per region:
       - region (str)
-      - days: {"today": {"severity","hazards","date","is_new"?}, "tomorrow": {...}}  # either/both present
+      - days: {"today": {"severity","hazards","date","is_new"?}, "tomorrow": {...}}
       - published (str)
       - source_url (str)
       - is_new (bool)
@@ -946,11 +898,11 @@ RENDERERS = {
     "json": render_json,
     "ec_grouped_compact": render_ec_grouped_compact,
     "nws_grouped_compact": render_nws_grouped_compact,
+    "uk_grouped_compact": render_uk_grouped,
     "rss_cma": render_cma,
     "rss_meteoalarm": render_meteoalarm,
     "rss_bom_multi": render_bom_grouped,
     "rss_jma": render_jma_grouped,
-    "uk_grouped_compact": render_uk_grouped,
     "rss_pagasa": render_pagasa,
     "imd_current_orange_red": render_imd_compact,
 }
