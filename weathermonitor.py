@@ -378,7 +378,7 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
     # Wider badge column; compact gaps
     col_widths = []
     for _ in row_items:
-        col_widths.extend([1.2, 0.7])  # button, badge
+        col_widths.extend([1.5, 0.7])  # button, badge
     row_cols = st.columns(col_widths, gap="small")
 
     for i, (key, conf) in enumerate(row_items):
