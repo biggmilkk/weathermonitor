@@ -10,7 +10,7 @@ from dateutil import parser as dateparser
 from renderers.nws import render as render_nws_grouped_compact
 from renderers.ec import render as render_ec_grouped_compact
 from renderers.uk import render as render_uk_grouped
-
+from renderers.cma import render as render_cma
 
 # Pure helpers from computation.py (logic lives there)
 from computation import (
@@ -120,48 +120,6 @@ def render_json(item, conf):
 
     st.markdown("---")
 
-# ============================================================
-# CMA renderer (simple colored bullet)
-# ============================================================
-
-CMA_COLORS = {
-    "Yellow": "#FFD400",
-    "Orange": "#FF7F00",
-    "Red":    "#E60026",
-    "Blue":   "#1E90FF",
-}
-
-def render_cma(item, conf):
-    """
-    CMA item renderer. Shows left stripe on the title line if item['is_new'] True.
-    """
-    is_new = bool(item.get("is_new"))
-    title  = _norm(item.get("title", ""))
-    level  = _norm(item.get("level", ""))
-    bullet_color = CMA_COLORS.get(level, "#888")  # default to gray
-
-    title_html = (
-        f"<div><span style='color:{bullet_color};font-size:18px;'>&#9679;</span> "
-        f"<strong>{html.escape(title)}</strong></div>"
-    )
-    st.markdown(_stripe_wrap(title_html, is_new), unsafe_allow_html=True)
-
-    region = _norm(item.get("region", ""))
-    if region:
-        st.caption(f"Region: {region}")
-
-    if item.get("summary"):
-        st.markdown(item["summary"])
-
-    link = _norm(item.get("link"))
-    if link and title:
-        st.markdown(f"[Read more]({link})")
-
-    published = _to_utc_label(item.get("published"))
-    if published:
-        st.caption(f"Published: {published}")
-
-    st.markdown("---")
 
 # ============================================================
 # Meteoalarm renderer (country block)
