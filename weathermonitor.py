@@ -349,6 +349,14 @@ if not FEED_CONFIG:
 
 MAX_BTNS_PER_ROW = 6  # feeds per row (button + badge each)
 
+# Optional fixed feed positions: row, col (zero-based)
+# Example: nws at row 0 col 0, bom_australia at row 1 col 5
+FEED_POSITIONS = {
+    "nws": (0, 0),
+    "bom_australia": (1, 5),
+    # add more if needed
+}
+
 items = list(FEED_CONFIG.items())
 badge_placeholders = {}
 _toggled = False
@@ -372,30 +380,51 @@ def _new_count_for_feed(key, conf, entries):
     _, new_count = compute_counts(entries, conf, seen_ts)
     return new_count
 
-for start in range(0, len(items), MAX_BTNS_PER_ROW):
-    row_items = items[start : start + MAX_BTNS_PER_ROW]
+# Decide how many rows we need
+if FEED_POSITIONS:
+    max_row = max(r for r, _ in FEED_POSITIONS.values())
+    num_rows = max_row + 1
+else:
+    num_rows = (len(items) + MAX_BTNS_PER_ROW - 1) // MAX_BTNS_PER_ROW
 
-    # Build a fixed-width grid for a full row (6 feeds => 12 columns)
+# Sequential fallback iterator for feeds without pinned positions
+seq_iter = iter(items)
+
+for row in range(num_rows):
+    # fixed-width grid for a full row (6 feeds => 12 columns)
     col_widths = []
     for _ in range(MAX_BTNS_PER_ROW):
         col_widths.extend([1.5, 0.7])  # button, badge
     row_cols = st.columns(col_widths, gap="small")
 
-    # Fill actual items first; leave remaining slots empty to preserve width
-    for i in range(MAX_BTNS_PER_ROW):
-        if i < len(row_items):
-            key, conf = row_items[i]
-            entries = st.session_state[f"{key}_data"]
-            new_count = _new_count_for_feed(key, conf, entries)
+    for col in range(MAX_BTNS_PER_ROW):
+        # Find if a feed is pinned here
+        feed_key = None
+        for k, (r, c) in FEED_POSITIONS.items():
+            if r == row and c == col:
+                feed_key = k
+                break
 
-            btn_col   = row_cols[i * 2]
-            badge_col = row_cols[i * 2 + 1]
+        # Otherwise take the next sequential feed
+        if not feed_key:
+            try:
+                feed_key, conf = next(seq_iter)
+            except StopIteration:
+                feed_key = None
+
+        btn_col = row_cols[col * 2]
+        badge_col = row_cols[col * 2 + 1]
+
+        if feed_key:
+            conf = FEED_CONFIG[feed_key]
+            entries = st.session_state[f"{feed_key}_data"]
+            new_count = _new_count_for_feed(feed_key, conf, entries)
 
             with btn_col:
-                is_active = (st.session_state.get("active_feed") == key)
+                is_active = (st.session_state.get("active_feed") == feed_key)
                 clicked = st.button(
-                    conf.get("label", key.upper()),
-                    key=f"btn_{key}_{global_idx}",
+                    conf.get("label", feed_key.upper()),
+                    key=f"btn_{feed_key}_{global_idx}",
                     use_container_width=True,
                     type=("primary" if is_active else "secondary"),
                 )
@@ -405,7 +434,6 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
                     cnt = int(new_count)
                 except Exception:
                     cnt = 0
-
                 if cnt > 0:
                     badge_col.markdown(
                         "<span style='display:inline-block;"
@@ -424,34 +452,33 @@ for start in range(0, len(items), MAX_BTNS_PER_ROW):
                     badge_col.markdown("&nbsp;", unsafe_allow_html=True)
 
             if clicked:
-                if st.session_state.get("active_feed") == key:
+                if st.session_state.get("active_feed") == feed_key:
                     if conf["type"] == "rss_meteoalarm":
-                        st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
+                        st.session_state[f"{feed_key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
                     elif conf["type"] == "uk_grouped_compact":
-                        st.session_state[f"{key}_last_seen_time"] = time.time()
+                        st.session_state[f"{feed_key}_last_seen_time"] = time.time()
                     else:
-                        st.session_state[f"{key}_last_seen_time"] = time.time()
+                        st.session_state[f"{feed_key}_last_seen_time"] = time.time()
                     st.session_state["active_feed"] = None
                 else:
-                    st.session_state["active_feed"] = key
+                    st.session_state["active_feed"] = feed_key
                     if conf["type"] == "rss_meteoalarm":
-                        st.session_state[f"{key}_pending_seen_time"] = time.time()
+                        st.session_state[f"{feed_key}_pending_seen_time"] = time.time()
                     elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                        st.session_state[f"{key}_pending_seen_time"] = None
+                        st.session_state[f"{feed_key}_pending_seen_time"] = None
                     elif conf["type"] == "uk_grouped_compact":
-                        st.session_state[f"{key}_pending_seen_time"] = time.time()
+                        st.session_state[f"{feed_key}_pending_seen_time"] = time.time()
                     else:
-                        st.session_state[f"{key}_pending_seen_time"] = time.time()
+                        st.session_state[f"{feed_key}_pending_seen_time"] = time.time()
                 _toggled = True
 
             global_idx += 1
-
         else:
-            # Empty slot to keep row width identical to full rows
-            with row_cols[i * 2]:
-                st.write("")  # empty button cell
-            with row_cols[i * 2 + 1]:
-                st.markdown("&nbsp;", unsafe_allow_html=True)  # empty badge cell
+            # Empty slot
+            with btn_col:
+                st.write("")
+            with badge_col:
+                st.markdown("&nbsp;", unsafe_allow_html=True)
 
 if _toggled:
     _immediate_rerun()
@@ -462,4 +489,3 @@ if active:
     conf = FEED_CONFIG[active]
     entries = st.session_state[f"{active}_data"]
     _render_feed_details(active, conf, entries, badge_placeholders)
-
