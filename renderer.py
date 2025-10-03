@@ -9,6 +9,8 @@ from dateutil import parser as dateparser
 
 from renderers.nws import render as render_nws_grouped_compact
 from renderers.ec import render as render_ec_grouped_compact
+from renderers.uk import render as render_uk_grouped
+
 
 # Pure helpers from computation.py (logic lives there)
 from computation import (
