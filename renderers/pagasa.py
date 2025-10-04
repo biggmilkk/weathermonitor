@@ -2,6 +2,10 @@
 import html
 import streamlit as st
 from dateutil import parser as dateparser
+from datetime import timezone as _tz
+
+# Pure logic helpers (no UI side effects)
+from computation import attach_timestamp, sort_newest
 
 # --------------------------
 # Local UI helpers (no deps)
@@ -17,7 +21,7 @@ def _to_utc_label(pub: str | None) -> str | None:
     try:
         dt = dateparser.parse(pub)
         if dt:
-            return dt.astimezone().strftime("%a, %d %b %y %H:%M:%S UTC")
+            return dt.astimezone(_tz.utc).strftime("%a, %d %b %y %H:%M:%S UTC")
     except Exception:
         pass
     return pub
@@ -35,21 +39,21 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
         f"{content}</div>"
     )
 
-def render_empty_state():
+def _render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
 # --------------------------
-# PAGASA-specific renderer
+# Single-card renderer
 # --------------------------
 
-def render(item: dict, conf: dict) -> None:
+def _render_card(item: dict, *, is_new: bool) -> None:
     """
-    PAGASA renderer with colored bullets:
+    PAGASA card with colored bullets:
       - Severe   -> red (#E60026)
       - Moderate -> amber (#FF7F00)
 
     Expected item fields:
-      - title/bucket, severity, region, summary, link, published, is_new
+      - title/bucket, severity, region, summary, link, published
     """
     severity = (_norm(item.get("severity")) or "").title()
     color = "#E60026" if severity == "Severe" else "#FF7F00"  # amber for Moderate
@@ -60,7 +64,6 @@ def render(item: dict, conf: dict) -> None:
         f"<strong>{html.escape(title)}</strong></div>"
     )
 
-    is_new = bool(item.get("is_new"))
     st.markdown(_stripe_wrap(title_html, is_new), unsafe_allow_html=True)
 
     region = _norm(item.get("region", ""))
@@ -80,3 +83,39 @@ def render(item: dict, conf: dict) -> None:
         st.caption(f"Published: {pub_label}")
 
     st.markdown("---")
+
+# --------------------------
+# Public renderer entrypoint
+# --------------------------
+
+def render(entries: list[dict], conf: dict) -> None:
+    """
+    PAGASA renderer (list-aware, read-only).
+    - Accepts the full entries list from the controller.
+    - Normalizes timestamps and sorts newest-first.
+    - Highlights each item as NEW if its timestamp > feed-level last_seen_time.
+    - DOES NOT commit 'seen' state; controller handles clear-on-close.
+    """
+    feed_key = conf.get("key", "pagasa")
+    items = entries or []
+
+    if not items:
+        _render_empty_state()
+        return
+
+    # Normalize & order
+    items = sort_newest(attach_timestamp(items))
+
+    # Read-only 'seen' reference (controller commits on CLOSE)
+    last_seen_ts = float(st.session_state.get(f"{feed_key}_last_seen_time") or 0.0)
+
+    for item in items:
+        ts = float(item.get("timestamp") or 0.0)
+        if ts <= 0.0:
+            # Fallback if any item missed normalization
+            try:
+                ts = dateparser.parse(item.get("published") or "").timestamp()
+            except Exception:
+                ts = 0.0
+        is_new = ts > last_seen_ts
+        _render_card(item, is_new=is_new)
