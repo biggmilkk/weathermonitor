@@ -50,44 +50,51 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
         f"{content}</div>"
     )
 
-def _extract_severity(alert: dict) -> str | None:
-    """
-    Try to pull a UK severity label (Yellow/Amber/Red) from known fields,
-    falling back to a case-insensitive search in the text fields.
-    """
-    for key in ("severity", "level", "bucket"):
-        v = _norm(alert.get(key))
-        if v:
-            v_low = v.lower()
-            if any(x in v_low for x in ("yellow", "amber", "red")):
-                return v_low.title()
-
-    # Fallback: look inside title/summary text
-    text = " ".join(
-        t for t in [
-            _norm(alert.get("title")),
-            _norm(alert.get("summary")),
-        ] if t
-    ).lower()
-
-    if "amber" in text:
-        return "Amber"
-    if "red" in text:
-        return "Red"
-    if "yellow" in text:
-        return "Yellow"
-    return None
-
 def _severity_dot(sev: str | None) -> str:
     """
     Return a colored • span matching the severity (defaults to neutral gray).
     """
     hexcolor = _UK_DOT.get((sev or "").lower(), "#888")
-    return f"<span style='color:{hexcolor};font-size:16px;'>&#9679;</span>"
+    return f"<span style='color:{hexcolor};font-size:16px;vertical-align:middle;'>&#9679;</span>"
+
+def _extract_severity(alert: dict) -> str | None:
+    """
+    Extracts the severity (Amber/Red/Yellow) from Met Office UK alerts.
+    Priority: bucket → title → summary → enclosure/image.
+    """
+    # 1. Preferred field: bucket ("Amber — Wind", "Red — Rain", etc.)
+    bucket = _norm(alert.get("bucket"))
+    if bucket:
+        b = bucket.lower()
+        if b.startswith("red"):
+            return "Red"
+        if b.startswith("amber"):
+            return "Amber"
+        if b.startswith("yellow"):
+            return "Yellow"
+
+    # 2. Fallback to title text
+    title = _norm(alert.get("title"))
+    for color in ("Red", "Amber", "Yellow"):
+        if color.lower() in title.lower():
+            return color
+
+    # 3. Fallback to description/summary
+    summary = _norm(alert.get("summary"))
+    for color in ("Red", "Amber", "Yellow"):
+        if color.lower() in summary.lower():
+            return color
+
+    # 4. Fallback to enclosure image (image name contains "amber-", "red-", etc.)
+    enc = _norm(alert.get("enclosure") or alert.get("image") or "")
+    for color in ("Red", "Amber", "Yellow"):
+        if color.lower() in enc.lower():
+            return color
+
+    return None
 
 def _render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
-
 
 # -------------------------------------------------
 # Public renderer entrypoint
