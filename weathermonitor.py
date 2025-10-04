@@ -209,8 +209,8 @@ if to_fetch:
                 if new_count == 0:
                     # nothing new; keep last_seen_alerts as-is
                     pass
-            elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                # EC/NWS 'seen' logic is handled inside their renderers
+            elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact"):
+                # EC/NWS 'seen' logic is handled inside their renderers (per-bucket / per-event).
                 pass
             elif conf["type"] == "uk_grouped_compact":
                 last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
@@ -224,7 +224,7 @@ if to_fetch:
                     st.session_state[f"{key}_last_seen_time"] = now
 
         # Badge counts that the buttons need (pre-panel)
-        if conf["type"] == "ec_async":
+        if conf["type"] in ("ec_async", "ec_grouped_compact"):
             last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
             st.session_state[f"{key}_remaining_new_total"] = ec_new_total(
                 entries, last_seen_bkey_map=last_map
@@ -283,7 +283,7 @@ def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
         return meteoalarm_unseen_active_instances(entries, seen_ids)
-    if conf["type"] == "ec_async":
+    if conf["type"] in ("ec_async", "ec_grouped_compact"):
         val = st.session_state.get(f"{key}_remaining_new_total")
         if isinstance(val, int):
             return int(val)
@@ -373,8 +373,8 @@ for row in range(num_rows):
                     # CLOSING: commit "seen" now (clear-on-close behavior)
                     if conf["type"] == "rss_meteoalarm":
                         st.session_state[f"{feed_key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                    elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                        # EC/NWS commit inside their renderers (per-bucket / mark-all). Do nothing here.
+                    elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact"):
+                        # EC/NWS commit inside their renderers (per-bucket / per-event). Do nothing here.
                         pass
                     else:
                         # Timestamp-based (UK, JMA, generic)
