@@ -83,6 +83,7 @@ for key, conf in FEED_CONFIG.items():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
     st.session_state.setdefault(f"{key}_last_seen_time", 0.0)
+    # NOTE: clear-on-close flow does not use *_pending_seen_time anymore, but we keep the key harmlessly
     st.session_state.setdefault(f"{key}_pending_seen_time", None)
     if conf["type"] == "rss_meteoalarm":
         st.session_state.setdefault(f"{key}_last_seen_alerts", tuple())
@@ -277,28 +278,22 @@ def _render_feed_details(active, conf, entries):
         return
 
     if conf["type"] == "rss_meteoalarm":
-        # Keep legacy controller logic until migrated into renderer
+        # Keep legacy controller logic for rendering; do NOT auto-commit seen here
         seen_ids = set(st.session_state[f"{active}_last_seen_alerts"])
         countries = [c for c in data_list if (c.get("alerts") or {}).get("today") or (c.get("alerts") or {}).get("tomorrow")]
         countries = meteoalarm_mark_and_sort(countries, seen_ids)
         for country in countries:
             RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
-        st.session_state[f"{active}_last_seen_alerts"] = meteoalarm_snapshot_ids(countries)
         return
 
     if conf["type"] == "rss_jma":
         RENDERERS["rss_jma"](entries, {**conf, "key": active})
         return
 
-    # Generic fallback
+    # Generic fallback (timestamp-based)
     seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
     if not data_list:
         render_empty_state()
-        pkey = f"{active}_pending_seen_time"
-        pending = st.session_state.get(pkey, None)
-        if pending is not None:
-            st.session_state[f"{active}_last_seen_time"] = float(pending)
-        st.session_state.pop(pkey, None)
     else:
         for item in data_list:
             ts = item.get("timestamp")
@@ -310,11 +305,6 @@ def _render_feed_details(active, conf, entries):
                     ts = 0.0
             item["is_new"] = bool(ts > seen_ts)
             RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
-        pkey = f"{active}_pending_seen_time"
-        pending = st.session_state.get(pkey, None)
-        if pending is not None:
-            st.session_state[f"{active}_last_seen_time"] = float(pending)
-        st.session_state.pop(pkey, None)
 
 
 # --------------------------------------------------------------------
@@ -428,28 +418,24 @@ for row in range(num_rows):
                     badge_col.markdown("&nbsp;", unsafe_allow_html=True)
 
             if clicked:
-                if st.session_state.get("active_feed") == feed_key:
+                is_open = (st.session_state.get("active_feed") == feed_key)
+                if is_open:
+                    # CLOSING: commit "seen" now (clear-on-close behavior)
                     if conf["type"] == "rss_meteoalarm":
                         st.session_state[f"{feed_key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                    elif conf["type"] == "uk_grouped_compact":
-                        st.session_state[f"{feed_key}_last_seen_time"] = time.time()
+                    elif conf["type"] in ("ec_async", "nws_grouped_compact"):
+                        # EC/NWS commit inside their renderers (per-bucket / mark-all)
+                        pass
                     else:
+                        # Timestamp-based (UK, JMA, generic)
                         st.session_state[f"{feed_key}_last_seen_time"] = time.time()
+
                     st.session_state["active_feed"] = None
                 else:
+                    # OPENING: do NOT set any pending seen markers
                     st.session_state["active_feed"] = feed_key
-                    if conf["type"] == "rss_meteoalarm":
-                        st.session_state[f"{feed_key}_pending_seen_time"] = time.time()
-                    elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                        # EC/NWS manage seen state internally
-                        st.session_state[f"{feed_key}_pending_seen_time"] = None
-                    elif conf["type"] == "uk_grouped_compact":
-                        st.session_state[f"{feed_key}_pending_seen_time"] = time.time()
-                    else:
-                        st.session_state[f"{feed_key}_pending_seen_time"] = time.time()
+
                 _toggled = True
-            else:
-                _toggled = False  # keep last click state per iteration
 
             global_idx += 1
         else:
@@ -459,7 +445,7 @@ for row in range(num_rows):
                 st.markdown("&nbsp;", unsafe_allow_html=True)
 
 # instant rerun if a toggle happened (keeps UI snappy)
-if '_toggled' in locals() and _toggled:
+if _toggled:
     _immediate_rerun()
 
 # details panel
