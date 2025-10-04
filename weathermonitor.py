@@ -1,5 +1,8 @@
 # weathermonitor.py
 
+# --------------------------------------------------------------------
+# Imports
+# --------------------------------------------------------------------
 import os, sys, time, gc, logging, psutil
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
@@ -7,7 +10,6 @@ from streamlit_autorefresh import st_autorefresh
 from feeds import get_feed_definitions
 from utils.fetcher import run_fetch_round
 
-# Pure logic (no Streamlit state writes)
 from computation import (
     compute_counts,
     meteoalarm_unseen_active_instances,
@@ -19,47 +21,35 @@ from computation import (
     meteoalarm_total_active_instances,
 )
 
-# Renderers registry (each feed owns its UI)
 from renderers import RENDERERS
 
 
 # --------------------------------------------------------------------
-# Helpers (UI-only)
+# UI helpers
 # --------------------------------------------------------------------
 def render_empty_state():
     st.info("No active warnings at this time.")
 
 def _immediate_rerun():
-    if hasattr(st, "rerun"):
-        st.rerun()
-    elif hasattr(st, "experimental_rerun"):
-        st.experimental_rerun()
+    if hasattr(st, "rerun"): st.rerun()
+    elif hasattr(st, "experimental_rerun"): st.experimental_rerun()
 
 def commit_seen_for_feed(prev_key: str):
-    """
-    Treat 'switching away' from a feed as a close for the previous feed.
-    This mirrors the explicit close branch, so badges clear when you open another feed.
-    """
-    if not prev_key:
-        return
+    """Commit 'seen' when closing/switching away from a feed."""
+    if not prev_key: return
     conf = FEED_CONFIG.get(prev_key)
-    if not conf:
-        return
+    if not conf: return
 
     entries = st.session_state.get(f"{prev_key}_data", [])
 
     if conf["type"] == "rss_meteoalarm":
-        # Snapshot IDs so unseen count drops to 0 on next rerun
         st.session_state[f"{prev_key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
 
     elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact"):
-        # EC/NWS commit inside their renderers (per-bucket / per-event). Do nothing here.
-        pass
+        pass  # handled in renderers
 
     elif conf["type"] == "imd_current_orange_red":
-        # Snapshot fingerprints AND clear flags immediately
-        fp_key = f"{prev_key}_fp_by_region"
-        ts_key = f"{prev_key}_ts_by_region"
+        fp_key, ts_key = f"{prev_key}_fp_by_region", f"{prev_key}_ts_by_region"
         fp_by_region, ts_by_region, cleared = snapshot_imd_seen(entries, now_ts=time.time())
         st.session_state[fp_key] = fp_by_region
         st.session_state[ts_key] = ts_by_region
@@ -67,12 +57,11 @@ def commit_seen_for_feed(prev_key: str):
         st.session_state[f"{prev_key}_last_seen_time"] = time.time()
 
     else:
-        # Timestamp-based feeds (UK, CMA, JMA, PAGASA, etc.)
         st.session_state[f"{prev_key}_last_seen_time"] = time.time()
 
 
 # --------------------------------------------------------------------
-# Setup
+# App setup
 # --------------------------------------------------------------------
 os.environ.setdefault("STREAMLIT_WATCHER_TYPE", "poll")
 st.set_page_config(page_title="Global Weather Monitor", layout="wide")
@@ -84,8 +73,7 @@ MEMORY_HIGH_WATER = 0.85 * MEMORY_LIMIT
 MEMORY_LOW_WATER  = 0.50 * MEMORY_LIMIT
 MIN_CONC, MAX_CONC, STEP = 5, 50, 5
 
-def _rss_bytes():
-    return psutil.Process(os.getpid()).memory_info().rss
+def _rss_bytes(): return psutil.Process(os.getpid()).memory_info().rss
 
 st.session_state.setdefault("concurrency", 20)
 rss_before = _rss_bytes()
@@ -98,9 +86,9 @@ st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss_before // (1024*1024)} MB
 
 
 # --------------------------------------------------------------------
-# State & Config
+# State & config
 # --------------------------------------------------------------------
-FETCH_TTL = 60  # one scheduler tick = 60 seconds
+FETCH_TTL = 60
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 tick_counter = st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 
@@ -108,7 +96,6 @@ tick_counter = st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main"
 def load_feeds():
     return get_feed_definitions()
 
-# Pass concurrency knob through the cached wrapper (dedupes duplicate reruns in same minute)
 @st.cache_data(ttl=FETCH_TTL, show_spinner=False)
 def cached_fetch_round(to_fetch: dict, max_conc: int):
     return run_fetch_round(to_fetch, max_concurrency=max_conc)
@@ -127,11 +114,10 @@ st.session_state.setdefault("active_feed", None)
 
 
 # --------------------------------------------------------------------
-# Cold boot: fetch ALL feeds once, ignoring groups
+# Cold boot: fetch all feeds once
 # --------------------------------------------------------------------
-do_cold_boot = not st.session_state.get("_cold_boot_done", False)
-if not do_cold_boot:
-    do_cold_boot = all(len(st.session_state.get(f"{k}_data", [])) == 0 for k in FEED_CONFIG)
+do_cold_boot = not st.session_state.get("_cold_boot_done", False) or \
+               all(len(st.session_state.get(f"{k}_data", [])) == 0 for k in FEED_CONFIG)
 
 if do_cold_boot:
     all_results = cached_fetch_round(FEED_CONFIG, MAX_CONCURRENCY)
@@ -141,8 +127,7 @@ if do_cold_boot:
         conf = FEED_CONFIG[key]
 
         if conf["type"] == "imd_current_orange_red":
-            fp_key = f"{key}_fp_by_region"
-            ts_key = f"{key}_ts_by_region"
+            fp_key, ts_key = f"{key}_fp_by_region", f"{key}_ts_by_region"
             prev_fp = dict(st.session_state.get(fp_key, {}) or {})
             prev_ts = dict(st.session_state.get(ts_key, {}) or {})
             entries, fp_by_region, ts_by_region = compute_imd_timestamps(
@@ -158,31 +143,27 @@ if do_cold_boot:
 
 
 # --------------------------------------------------------------------
-# Minute-group scheduler (fetch ONLY on the timer tick)
+# Scheduler (fetch on minute tick)
 # --------------------------------------------------------------------
 current_minute_index = int(time.time() // 60)
 prev_minute_index = st.session_state.get("_last_minute_index")
 is_timer_tick = (prev_minute_index != current_minute_index)
 st.session_state["_last_minute_index"] = current_minute_index
 
-minute_in_cycle_4 = (current_minute_index % 4) + 1  # 1..4
+minute_in_cycle_4 = (current_minute_index % 4) + 1
 
-def group_is_due(group_code: str, minute_1_to_4: int) -> bool:
+def group_is_due(group_code: str, m: int) -> bool:
     g = (group_code or "g1").lower()
-    if g == "g1":        return True
-    if g == "g2_even":   return minute_1_to_4 in (2, 4)
-    if g == "g2_odd":    return minute_1_to_4 in (1, 3)
-    if g == "g4_1":      return minute_1_to_4 == 1
-    if g == "g4_2":      return minute_1_to_4 == 2
-    if g == "g4_3":      return minute_1_to_4 == 3
-    if g == "g4_4":      return minute_1_to_4 == 4
+    if g == "g1": return True
+    if g == "g2_even": return m in (2, 4)
+    if g == "g2_odd":  return m in (1, 3)
+    if g == "g4_1":    return m == 1
+    if g == "g4_2":    return m == 2
+    if g == "g4_3":    return m == 3
+    if g == "g4_4":    return m == 4
     return True
 
-GROUP_MIN_SPACING = {
-    "g1": 60,
-    "g2_even": 120, "g2_odd": 120,
-    "g4_1": 240, "g4_2": 240, "g4_3": 240, "g4_4": 240,
-}
+GROUP_MIN_SPACING = {"g1": 60, "g2_even": 120, "g2_odd": 120, "g4_1": 240, "g4_2": 240, "g4_3": 240, "g4_4": 240}
 
 to_fetch = {}
 if is_timer_tick:
@@ -191,8 +172,7 @@ if is_timer_tick:
         grp = (conf.get("group") or "g1").lower()
         if group_is_due(grp, minute_in_cycle_4):
             last = float(st.session_state.get(f"{key}_last_fetch", 0))
-            min_gap = GROUP_MIN_SPACING.get(grp, 60)
-            if (now - last) >= (min_gap - 1):
+            if (now - last) >= (GROUP_MIN_SPACING.get(grp, 60) - 1):
                 to_fetch[key] = conf
 
 BATCH_SIZE = 10
@@ -210,17 +190,12 @@ if to_fetch:
         conf = FEED_CONFIG[key]
 
         if conf["type"] == "imd_current_orange_red":
-            fp_key = f"{key}_fp_by_region"
-            ts_key = f"{key}_ts_by_region"
+            fp_key, ts_key = f"{key}_fp_by_region", f"{key}_ts_by_region"
             prev_fp = dict(st.session_state.get(fp_key, {}) or {})
             prev_ts = dict(st.session_state.get(ts_key, {}) or {})
             now_ts  = time.time()
-
             entries, fp_by_region, ts_by_region = compute_imd_timestamps(
-                entries=entries,
-                prev_fp=prev_fp,
-                prev_ts=prev_ts,
-                now_ts=now_ts,
+                entries=entries, prev_fp=prev_fp, prev_ts=prev_ts, now_ts=now_ts
             )
             st.session_state[fp_key] = fp_by_region
             st.session_state[ts_key] = ts_by_region
@@ -229,7 +204,6 @@ if to_fetch:
         st.session_state[f"{key}_last_fetch"] = now
         st.session_state["last_refreshed"] = now
 
-        # Active feed bookkeeping (renderer-specific logic stays in renderers)
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
@@ -260,9 +234,7 @@ if rss_after > MEMORY_HIGH_WATER:
 # Header
 # --------------------------------------------------------------------
 st.title("Global Weather Monitor")
-st.caption(
-    f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
-)
+st.caption(f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
 st.markdown("---")
 
 
@@ -318,27 +290,19 @@ def _new_count_for_feed(key, conf, entries):
     return new_count
 
 seq_rows = (len(items) + MAX_BTNS_PER_ROW - 1) // MAX_BTNS_PER_ROW
-if FEED_POSITIONS:
-    pinned_rows = max(r for r, _ in FEED_POSITIONS.values()) + 1
-    num_rows = max(seq_rows, pinned_rows)
-else:
-    num_rows = seq_rows
-
+pinned_rows = max((r for r, _ in FEED_POSITIONS.values()), default=-1) + 1 if FEED_POSITIONS else 0
+num_rows = max(seq_rows, pinned_rows)
 seq_iter = iter(items)
 
 for row in range(num_rows):
-    col_widths = []
-    for _ in range(MAX_BTNS_PER_ROW):
-        col_widths.extend([1.5, 0.7])
+    col_widths = [v for _ in range(MAX_BTNS_PER_ROW) for v in (1.5, 0.7)]
     row_cols = st.columns(col_widths, gap="small")
 
     for col in range(MAX_BTNS_PER_ROW):
         feed_key = None
         for k, (r, c) in FEED_POSITIONS.items():
             if r == row and c == col:
-                feed_key = k
-                break
-
+                feed_key = k; break
         if not feed_key:
             try:
                 feed_key, conf = next(seq_iter)
@@ -366,9 +330,9 @@ for row in range(num_rows):
                 cnt = int(new_count or 0)
                 if cnt > 0:
                     badge_col.markdown(
-                        "<span style='display:inline-block;"
-                        "background:#FFEB99;color:#000;padding:2px 8px;border-radius:6px;"
-                        "font-weight:700;font-size:0.90em;white-space:nowrap;'>"
+                        "<span style='display:inline-block;background:#FFEB99;color:#000;"
+                        "padding:2px 8px;border-radius:6px;font-weight:700;font-size:0.90em;"
+                        "white-space:nowrap;'>"
                         f"❗&nbsp;{cnt}&nbsp;New</span>",
                         unsafe_allow_html=True,
                     )
@@ -376,45 +340,33 @@ for row in range(num_rows):
                     badge_col.markdown("&nbsp;", unsafe_allow_html=True)
 
             if clicked:
-                # TWO-CLICK CONTRACT:
-                # - Click 1 (open): open the feed.
-                # - Click 2 (close): commit 'seen' now.
                 is_open = (st.session_state.get("active_feed") == feed_key)
                 if is_open:
-                    # CLOSING: commit 'seen' for this feed
                     commit_seen_for_feed(feed_key)
                     st.session_state["active_feed"] = None
                 else:
-                    # OPENING A DIFFERENT FEED:
-                    # commit 'seen' for the previously open feed (auto-clear on switch)
                     prev_active = st.session_state.get("active_feed")
                     if prev_active and prev_active != feed_key:
                         commit_seen_for_feed(prev_active)
-
                     st.session_state["active_feed"] = feed_key
-
                 _toggled = True
 
             global_idx += 1
         else:
-            with btn_col:
-                st.write("")
-            with badge_col:
-                st.markdown("&nbsp;", unsafe_allow_html=True)
+            with btn_col: st.write("")
+            with badge_col: st.markdown("&nbsp;", unsafe_allow_html=True)
 
-# instant rerun if a toggle happened (keeps UI snappy)
 if _toggled:
     _immediate_rerun()
 
-# details panel (feed-agnostic dispatch — renderers own the UI)
+
+# --------------------------------------------------------------------
+# Details panel
+# --------------------------------------------------------------------
 active = st.session_state["active_feed"]
 if active:
     st.markdown("---")
     conf = FEED_CONFIG[active]
     entries = st.session_state[f"{active}_data"]
-    # Controller stays UI-only. Do NOT commit 'seen' here.
     renderer = RENDERERS.get(conf["type"])
-    if renderer:
-        renderer(entries, {**conf, "key": active})
-    else:
-        render_empty_state()
+    renderer(entries, {**conf, "key": active}) if renderer else render_empty_state()
