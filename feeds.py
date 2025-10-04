@@ -1,12 +1,20 @@
 # feeds.py
 
 def get_feed_definitions():
+    """
+    Groups:
+      - g1       : refresh every 1 minute
+      - g2_even  : refresh every 2 minutes (minutes 2 & 4 of each 4-min cycle)
+      - g2_odd   : refresh every 2 minutes (minutes 1 & 3)
+      - g4_1..4  : refresh every 4 minutes, on minute 1/2/3/4 respectively
+    """
     return {
         "ec": {
             "label": "EC (Canada)",
             "type": "ec_async",
             "source_file": "environment_canada_sources.json",
-            "ttl": 120,
+            # Heavier parsing across many provinces; medium cadence
+            "group": "g2_even",
         },
 
         "metoffice_uk": {
@@ -48,14 +56,16 @@ def get_feed_definitions():
                 "South West England",
                 "London & South East England",
             ],
-            "ttl": 600,
+            # Many region feeds; heavier & slower → spread to 4-minute slot
+            "group": "g4_2",
         },
 
         "meteoalarm": {
             "label": "Meteoalarm (Europe)",
             "type": "rss_meteoalarm",
             "url": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe",
-            "ttl": 60,
+            # Very “live” across EU → every minute
+            "group": "g1",
         },
 
         "imd_india_today": {
@@ -64,7 +74,8 @@ def get_feed_definitions():
             "conf": {
                 "ids": list(range(1, 35))
             },
-            "ttl": 600,
+            # Broad coverage; can be heavier → slower slot
+            "group": "g4_1",
         },
 
         "cma_china": {
@@ -74,7 +85,8 @@ def get_feed_definitions():
                 "translate_to_en": True,
                 "expiry_grace_minutes": 0,
             },
-            "ttl": 600,
+            # Typically slower moving → 4-minute slot
+            "group": "g4_4",
         },
 
         "jma": {
@@ -91,30 +103,29 @@ def get_feed_definitions():
                 "420000","430000","440000","450000","460100","460040","471000","472000",
                 "473000","474000"
             ],
-            "ttl": 300,
+            # Moderate load; keep at 2-minute cadence
+            "group": "g2_odd",
         },
 
         "pagasa": {
             "label": "PAGASA (Philippines)",
             "type": "rss_pagasa",
             "url": "https://publicalert.pagasa.dost.gov.ph/feeds/",
-            # Optional tuning:
-            # "per_feed_limit": 200,
-            # "max_caps": 400,
-            "ttl": 180,
+            # Medium frequency; pair opposite EC for balance
+            "group": "g2_even",
         },
 
         "bom_multi": {
             "label": "BOM (Australia)",
             "type": "rss_bom_multi",
             "urls": [
-                "https://www.bom.gov.au/fwo/IDZ00054.warnings_nsw.xml",     # NSW & ACT
-                "https://www.bom.gov.au/fwo/IDZ00059.warnings_vic.xml",     # Victoria
-                "https://www.bom.gov.au/fwo/IDZ00056.warnings_qld.xml",     # Queensland
-                "https://www.bom.gov.au/fwo/IDZ00060.warnings_wa.xml",      # Western Australia
-                "https://www.bom.gov.au/fwo/IDZ00057.warnings_sa.xml",      # South Australia
-                "https://www.bom.gov.au/fwo/IDZ00058.warnings_tas.xml",     # Tasmania
-                "https://www.bom.gov.au/fwo/IDZ00055.warnings_nt.xml",      # Northern Territory
+                "https://www.bom.gov.au/fwo/IDZ00054.warnings_nsw.xml",
+                "https://www.bom.gov.au/fwo/IDZ00059.warnings_vic.xml",
+                "https://www.bom.gov.au/fwo/IDZ00056.warnings_qld.xml",
+                "https://www.bom.gov.au/fwo/IDZ00060.warnings_wa.xml",
+                "https://www.bom.gov.au/fwo/IDZ00057.warnings_sa.xml",
+                "https://www.bom.gov.au/fwo/IDZ00058.warnings_tas.xml",
+                "https://www.bom.gov.au/fwo/IDZ00055.warnings_nt.xml",
             ],
             "states": [
                 "NSW & ACT",
@@ -125,13 +136,15 @@ def get_feed_definitions():
                 "Tasmania",
                 "Northern Territory",
             ],
-            "ttl": 180,
+            # Medium load; alternate with JMA on the other 2-min slot
+            "group": "g2_odd",
         },
 
         "nws": {
             "label": "NWS (US)",
             "type": "nws_grouped_compact",
             "url": "https://api.weather.gov/alerts/active",
-            "ttl": 60,
+            # High volume / highly live → every minute
+            "group": "g1",
         },
     }
