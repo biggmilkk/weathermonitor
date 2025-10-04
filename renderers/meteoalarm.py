@@ -1,42 +1,33 @@
 # renderers/meteoalarm.py
 import html
-from collections import OrderedDict
 from datetime import timezone as _tz
-from dateutil import parser as dateparser
 import streamlit as st
+from dateutil import parser as dateparser
 
-# Logic helpers from computation.py
+# Pure logic helpers
 from computation import (
-    attach_timestamp,
-    sort_newest,
-    meteoalarm_snapshot_ids,
-    meteoalarm_unseen_active_instances,
+    meteoalarm_mark_and_sort,
 )
 
-# --------------------------------------------------------------------
-# Utility helpers
-# --------------------------------------------------------------------
+# --------------------------
+# Local UI helpers
+# --------------------------
 
 def _norm(s: str | None) -> str:
     return (s or "").strip()
 
-def _to_utc_label(pub: str | None) -> str | None:
-    """Return UTC label for display."""
-    if not pub:
+def _to_utc_label(s: str | None) -> str | None:
+    if not s:
         return None
     try:
-        dt = dateparser.parse(pub)
+        dt = dateparser.parse(s)
         if dt:
             return dt.astimezone(_tz.utc).strftime("%a, %d %b %y %H:%M:%S UTC")
     except Exception:
         pass
-    return pub
-
-def _as_list(x):
-    return x if isinstance(x, list) else ([x] if x else [])
+    return s
 
 def _stripe_wrap(content: str, is_new: bool) -> str:
-    """Add red left border for new sections."""
     if not is_new:
         return content
     return (
@@ -45,28 +36,37 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
         f"{content}</div>"
     )
 
+def _alerts_for_day(alerts_map: dict, day: str):
+    """Case-insensitive access for 'today'/'tomorrow' keys."""
+    return (
+        (alerts_map or {}).get(day)
+        or (alerts_map or {}).get(day.capitalize())
+        or (alerts_map or {}).get(day.title())
+        or []
+    )
+
 def _any_new(alerts_map: dict) -> bool:
-    """True if any alert in the map is new."""
-    for alerts in (alerts_map or {}).values():
-        for a in alerts or []:
-            if a.get("_is_new") or a.get("is_new"):
+    for day in ("today", "tomorrow"):
+        for e in _alerts_for_day(alerts_map, day):
+            if (e or {}).get("_is_new") or (e or {}).get("is_new"):
                 return True
     return False
 
-def _alerts_for_day(alerts_map: dict, day: str):
-    """Return list of alerts for a given day key ('today', 'tomorrow')."""
-    return _as_list(alerts_map.get(day))
-
-def _day_level_type_count(by_day: dict, by_type: dict, day: str, level: str, typ: str):
-    """Optional counter extraction for '(x active)' suffix."""
-    try:
-        return by_day.get(day, {}).get(level, {}).get(typ)
-    except Exception:
-        return None
-
-# --------------------------------------------------------------------
-# Main render logic
-# --------------------------------------------------------------------
+def _day_level_type_count(by_day: dict, by_type: dict, day: str, level: str, typ: str) -> int | None:
+    """Prefer exact per-day count; fall back to per-type totals."""
+    if isinstance(by_day, dict):
+        d = by_day.get(day) or by_day.get(day.capitalize()) or by_day.get(day.title())
+        if isinstance(d, dict):
+            n = d.get(f"{level}|{typ}")
+            if isinstance(n, int) and n > 0:
+                return n
+    if isinstance(by_type, dict):
+        bucket = by_type.get(typ)
+        if isinstance(bucket, dict):
+            n = bucket.get(level) or bucket.get("total")
+            if isinstance(n, int) and n > 0:
+                return n
+    return None
 
 def _render_country(country: dict):
     """Render a single country section, with striped header if any alert is new."""
@@ -99,6 +99,7 @@ def _render_country(country: dict):
 
         st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>", unsafe_allow_html=True)
         for e in alerts:
+            # Time window
             try:
                 dt1 = dateparser.parse(e.get("from", "")).astimezone(_tz.utc).strftime("%b %d %H:%M UTC")
                 dt2 = dateparser.parse(e.get("until", "")).astimezone(_tz.utc).strftime("%b %d %H:%M UTC")
@@ -130,25 +131,33 @@ def _render_country(country: dict):
 
     st.markdown("---")
 
-# --------------------------------------------------------------------
-# Public entrypoint
-# --------------------------------------------------------------------
 
-def render(entries, conf):
+# --------------------------
+# Public renderer entrypoint
+# --------------------------
+
+def render(entries: list[dict], conf: dict) -> None:
     """
-    Meteoalarm feed renderer.
-    Groups alerts by country, shows per-day breakdown, and marks new entries.
+    Meteoalarm renderer (standalone).
+
+    Responsibilities:
+      - Derive 'new' flags and sort groups via computation.meteoalarm_mark_and_sort().
+      - Render each country block.
+      - DOES NOT auto-commit “seen” on open.
+      - DOES NOT provide a 'mark all as seen' button (clear-on-close is handled in controller).
     """
-    items = _as_list(entries)
-    if not items:
-        st.info("No Meteoalarm alerts at this time.")
+    feed_key = conf.get("key", "meteoalarm")
+    st.session_state.setdefault(f"{feed_key}_last_seen_alerts", tuple())
+
+    seen_ids = set(st.session_state[f"{feed_key}_last_seen_alerts"])
+    countries = [c for c in (entries or []) if (c.get("alerts") or {}).get("today") or (c.get("alerts") or {}).get("tomorrow")]
+
+    # Mark and sort (adds _is_new and sorts by severity/time per day)
+    countries = meteoalarm_mark_and_sort(countries, seen_ids)
+
+    if not countries:
+        st.info("No active warnings that meet thresholds at the moment.")
         return
 
-    # Normalize timestamps and sort
-    items = sort_newest(attach_timestamp(items))
-
-    # Sort by name
-    items.sort(key=lambda c: str(c.get("name") or c.get("title") or ""))
-
-    for c in items:
-        _render_country(c)
+    for country in countries:
+        _render_country(country)
