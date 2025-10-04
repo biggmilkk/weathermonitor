@@ -281,29 +281,126 @@ def _immediate_rerun():
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
 
-def _render_feed_details(active_key: str, conf: dict, entries: list):
-    """Thin controller: delegate all feed UI to renderer modules."""
-    renderer = RENDERERS.get(conf["type"])
-    if renderer:
-        renderer(entries, {**conf, "key": active_key})
+def _render_feed_details(active, conf, entries, badge_placeholders=None):
+    data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
+
+    if conf["type"] == "rss_bom_multi":
+        RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
+
+    elif conf["type"] == "ec_async":
+        if not entries:
+            st.info("No active warnings that meet thresholds at the moment.")
+            st.session_state[f"{active}_remaining_new_total"] = 0
+            return
+
+        cols = st.columns([0.25, 0.75])
+        with cols[0]:
+            if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
+                lastseen_key   = f"{active}_bucket_last_seen"
+                bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
+                now_ts = time.time()
+                for k in list(bucket_lastseen.keys()):
+                    bucket_lastseen[k] = now_ts
+                for e in entries:
+                    bucket = ec_bucket_from_title(e.get("title", "") or "")
+                    if not bucket:
+                        continue
+                    prov_name = (e.get("province_name") or str(e.get("province") or "")) or "Unknown"
+                    bkey = f"{prov_name}|{bucket}"
+                    bucket_lastseen[bkey] = now_ts
+                st.session_state[lastseen_key] = bucket_lastseen
+                st.session_state[f"{active}_remaining_new_total"] = 0
+                if badge_placeholders:
+                    ph = badge_placeholders.get(active)
+                    if ph:
+                        draw_badge(ph, 0)
+                _immediate_rerun()
+
+        RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
+        ec_total_now = ec_remaining_new_total(active, entries)
+        st.session_state[f"{active}_remaining_new_total"] = int(ec_total_now)
+        if badge_placeholders:
+            ph = badge_placeholders.get(active)
+            if ph:
+                draw_badge(ph, safe_int(ec_total_now))
+
+    elif conf["type"] == "nws_grouped_compact":
+        if not entries:
+            st.info("No active warnings that meet thresholds at the moment.")
+            st.session_state[f"{active}_remaining_new_total"] = 0
+            return
+
+        lastseen_key    = f"{active}_bucket_last_seen"
+        bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
+
+        cols = st.columns([0.25, 0.75])
+        with cols[0]:
+            if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
+                now_ts = time.time()
+                for a in entries:
+                    state  = (a.get("state") or a.get("state_name") or a.get("state_code") or "Unknown")
+                    bucket = (a.get("bucket") or a.get("event") or a.get("title") or "Alert")
+                    bkey = f"{state}|{bucket}"
+                    bucket_lastseen[bkey] = now_ts
+                st.session_state[lastseen_key] = bucket_lastseen
+                st.session_state[f"{active}_remaining_new_total"] = 0
+                if badge_placeholders:
+                    ph = badge_placeholders.get(active)
+                    if ph:
+                        draw_badge(ph, 0)
+                _immediate_rerun()
+
+        RENDERERS["nws_grouped_compact"](entries, {**conf, "key": active})
+        nws_total_now = nws_remaining_new_total(active, entries)
+        st.session_state[f"{active}_remaining_new_total"] = int(nws_total_now)
+        if badge_placeholders:
+            ph = badge_placeholders.get(active)
+            if ph:
+                draw_badge(ph, safe_int(nws_total_now))
+
+    elif conf["type"] == "uk_grouped_compact":
+        if not entries:
+            st.info("No active warnings that meet thresholds at the moment.")
+            return
+        RENDERERS["uk_grouped_compact"](entries, {**conf, "key": active})
+
+    elif conf["type"] == "rss_meteoalarm":
+        seen_ids = set(st.session_state[f"{active}_last_seen_alerts"])
+        countries = [c for c in data_list if meteoalarm_country_has_alerts(c)]
+        countries = meteoalarm_mark_and_sort(countries, seen_ids)
+        for country in countries:
+            RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
+        st.session_state[f"{active}_last_seen_alerts"] = meteoalarm_snapshot_ids(countries)
+
+    elif conf["type"] == "rss_jma":
+        RENDERERS["rss_jma"](entries, {**conf, "key": active})
+
     else:
-        # Minimal generic fallback so nothing crashes
-        data_list = sorted(entries or [], key=lambda x: x.get("published", ""), reverse=True)
+        seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
         if not data_list:
-            st.info("No active warnings at this time.")
+            render_empty_state()
+            pkey = f"{active}_pending_seen_time"
+            pending = st.session_state.get(pkey, None)
+            if pending is not None:
+                st.session_state[f"{active}_last_seen_time"] = float(pending)
+            st.session_state.pop(pkey, None)
         else:
             for item in data_list:
-                title = (item.get("title") or "(no title)").strip()
-                link  = (item.get("link") or "").strip()
-                if title and link:
-                    st.markdown(f"**[{title}]({link})**")
-                else:
-                    st.markdown(f"**{title}**")
-                if item.get("summary"):
-                    st.write(item["summary"])
-                if item.get("published"):
-                    st.caption(f"Published: {item['published']}")
-                st.markdown("---")
+                ts = item.get("timestamp")
+                if not isinstance(ts, (int, float)):
+                    pub = item.get("published")
+                    try:
+                        ts = dateparser.parse(pub).timestamp() if pub else 0.0
+                    except Exception:
+                        ts = 0.0
+                item["is_new"] = bool(ts > seen_ts)
+                RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
+            pkey = f"{active}_pending_seen_time"
+            pending = st.session_state.get(pkey, None)
+            if pending is not None:
+                st.session_state[f"{active}_last_seen_time"] = float(pending)
+            st.session_state.pop(pkey, None)
+
 
 # --------------------------------------------------------------------
 # Desktop (buttons row + details) — 6 feeds/row, fixed widths, no-wrap
@@ -454,4 +551,4 @@ if active:
     st.markdown("---")
     conf = FEED_CONFIG[active]
     entries = st.session_state[f"{active}_data"]
-    _render_feed_details(active, conf, entries)
+    _render_feed_details(active, conf, entries, badge_placeholders)
