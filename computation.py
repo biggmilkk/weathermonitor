@@ -440,6 +440,32 @@ def meteoalarm_snapshot_ids(
     return tuple(ids)
 
 
+def meteoalarm_total_active_instances(
+    entries: Sequence[Mapping[str, Any]],
+) -> int:
+    """
+    Return the total number of active Orange/Red alert *instances* across all countries.
+
+    Preferred source is per-country `counts.total` (if present); fallback to `total_alerts`.
+    Both fields are expected to include the "(n active)" multiplicity used in the UI.
+    """
+    total = 0
+    for country in entries or []:
+        counts = country.get("counts")
+        # Prefer counts.total if available
+        if isinstance(counts, dict) and ("total" in counts):
+            try:
+                total += int(counts.get("total") or 0)
+                continue
+            except Exception:
+                pass
+        # Fallback to total_alerts (kept for backward compatibility)
+        try:
+            total += int(country.get("total_alerts") or 0)
+        except Exception:
+            pass
+    return total
+
 # --------------------------------------------------------------------
 # IMD (India) helpers
 # --------------------------------------------------------------------
