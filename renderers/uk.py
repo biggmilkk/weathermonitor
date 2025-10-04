@@ -9,10 +9,16 @@ from datetime import timezone as _tz
 # Logic helpers (no UI)
 from computation import attach_timestamp, sort_newest
 
+# -------------------------------------------------
+# Local UI helpers
+# -------------------------------------------------
 
-# --------------------------
-# Local, UI-only helpers
-# --------------------------
+# Match IMD's look-and-feel for colored bullets
+_UK_DOT = {
+    "yellow": "#FFCC00",
+    "amber":  "#FF9900",
+    "red":    "#FF0000",
+}
 
 def _norm(s: str | None) -> str:
     return (s or "").strip()
@@ -24,7 +30,6 @@ def _to_utc_label(pub: str | None) -> str | None:
     try:
         dt = dateparser.parse(pub)
         if dt:
-            # Force UTC label for consistency across environments
             return dt.astimezone(_tz.utc).strftime("%a, %d %b %y %H:%M:%S UTC")
     except Exception:
         pass
@@ -36,10 +41,7 @@ def _as_list(entries):
     return entries if isinstance(entries, list) else [entries]
 
 def _stripe_wrap(content: str, is_new: bool) -> str:
-    """
-    Wrap content with a red left border if is_new is True.
-    Uses HTML so it can wrap any inline markdown.
-    """
+    """Red left border for 'new' blocks (same pattern as other feeds)."""
     if not is_new:
         return content
     return (
@@ -48,34 +50,67 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
         f"{content}</div>"
     )
 
+def _extract_severity(alert: dict) -> str | None:
+    """
+    Try to pull a UK severity label (Yellow/Amber/Red) from known fields,
+    falling back to a case-insensitive search in the text fields.
+    """
+    for key in ("severity", "level", "bucket"):
+        v = _norm(alert.get(key))
+        if v:
+            v_low = v.lower()
+            if any(x in v_low for x in ("yellow", "amber", "red")):
+                return v_low.title()
+
+    # Fallback: look inside title/summary text
+    text = " ".join(
+        t for t in [
+            _norm(alert.get("title")),
+            _norm(alert.get("summary")),
+        ] if t
+    ).lower()
+
+    if "amber" in text:
+        return "Amber"
+    if "red" in text:
+        return "Red"
+    if "yellow" in text:
+        return "Yellow"
+    return None
+
+def _severity_dot(sev: str | None) -> str:
+    """
+    Return a colored • span matching the severity (defaults to neutral gray).
+    """
+    hexcolor = _UK_DOT.get((sev or "").lower(), "#888")
+    return f"<span style='color:{hexcolor};font-size:16px;'>&#9679;</span>"
+
 def _render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
 
-# --------------------------
+# -------------------------------------------------
 # Public renderer entrypoint
-# --------------------------
+# -------------------------------------------------
 
 def render(entries, conf):
     """
-    Met Office (UK) — grouped by region, flat list of alerts.
+    Met Office (UK) — compact list by region.
 
-    Behavior:
-      - Uses a single feed-level last_seen_time stored in st.session_state (READ-ONLY here).
-      - Highlights region headers with a red stripe if any alert in that region is NEW.
-      - Each alert renders as ONE linked summary line (full sentence), no extra title line.
-      - [NEW] prefix remains (outside the link) if newer than last_seen_time.
-      - DOES NOT write/commit 'seen' state: clear-on-close is handled in the controller.
+    - Region header (striped if any alert is NEW).
+    - Each alert is ONE line: colored bullet + [optional NEW] + linked summary sentence.
+    - Published line underneath.
+    - Renderer is read-only; controller handles seen-state commits.
     """
-    feed_key = conf.get("key", "uk")
+    feed_key = conf.get("key", "metoffice_uk")
 
     items = _as_list(entries)
     if not items:
         _render_empty_state()
         return
 
-    # Normalize order: newest first, and ensure each item has 'timestamp'
-    items = sort_newest(attach_timestamp(items))  # uses helpers in computation.py :contentReference[oaicite:2]{index=2}
+    # Normalize & sort newest-first
+    items = sort_newest(attach_timestamp(items))  # parse/add 'timestamp' as needed
 
     # Single last-seen timestamp for the whole feed (READ-ONLY)
     last_seen_key = f"{feed_key}_last_seen_time"
@@ -93,28 +128,28 @@ def render(entries, conf):
             continue
         any_rendered = True
 
-        # Region header (striped if any NEW)
+        # Region header (striped if any NEW items)
         has_new = any(float(a.get("timestamp") or 0.0) > last_seen for a in alerts)
         region_header = _stripe_wrap(f"<h2>{html.escape(region)}</h2>", has_new)
         st.markdown(region_header, unsafe_allow_html=True)
 
-        # Region items
+        # Render alerts
         for a in alerts:
             is_new = float(a.get("timestamp") or 0.0) > last_seen
-            prefix = "[NEW] " if is_new else ""
+            prefix_new = "[NEW] " if is_new else ""
 
-            # Build the single-line summary to link.
-            # We prefer the feed-provided 'summary' (full sentence),
-            # falling back to 'bucket' or 'title' if summary is missing.
-            # (The scraper already populates 'summary' per entry.) :contentReference[oaicite:3]{index=3}
             summary_line = _norm(a.get("summary")) or _norm(a.get("bucket") or a.get("title") or "(no title)")
             link = _norm(a.get("link"))
 
+            # Colored bullet per severity (Yellow/Amber/Red)
+            sev = _extract_severity(a)
+            dot = _severity_dot(sev)
+
             if summary_line and link:
-                st.markdown(f"{prefix}[{summary_line}]({link})")
+                # dot + [NEW] + linked summary
+                st.markdown(f"{dot} {prefix_new}[{summary_line}]({link})", unsafe_allow_html=True)
             else:
-                # No link available — show bold text so it still stands out
-                st.markdown(f"{prefix}**{summary_line}**")
+                st.markdown(f"{dot} {prefix_new}**{summary_line}**", unsafe_allow_html=True)
 
             pub_label = _to_utc_label(a.get("published"))
             if pub_label:
