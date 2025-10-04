@@ -121,7 +121,7 @@ def _parse_region_block(rows: List, start_idx: int, source_id: int, source_url: 
         for k in ("today", "tomorrow"):
             if k in days and days[k].get("date"):
                 day_dates.append(days[k]["date"])
-        published_out = max(day_dates) if day_dates else issue
+        published_out = issue or (max(day_dates) if day_dates else None)
 
         return ({
             "title": f"IMD — {region}",
