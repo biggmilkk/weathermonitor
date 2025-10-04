@@ -127,6 +127,17 @@ def alphabetic_with_last(keys: Iterable[str], *, last_value: str | None = None) 
     return ks
 
 
+def entry_ts(e: Mapping[str, Any]) -> float:
+    """
+    Canonical accessor for an entry's timestamp:
+    uses numeric 'timestamp' if present, otherwise parses 'published'.
+    """
+    t = e.get("timestamp")
+    if isinstance(t, (int, float)) and float(t) > 0:
+        return float(t)
+    return parse_timestamp(e.get("published"))
+
+
 # --------------------------------------------------------------------
 # Feed-agnostic "remaining new" calculators
 # --------------------------------------------------------------------
@@ -217,6 +228,28 @@ def ec_compute_new_total(
     )
 
 
+def ec_remaining_new_total(
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    last_seen_bkey_map: Mapping[str, float],
+) -> int:
+    """
+    EC-specific 'remaining new' counter using composite keys 'province|bucket'
+    to match your renderer/controller state map.
+    """
+    total = 0
+    for e in entries or []:
+        bucket = ec_bucket_from_title((e.get("title") or "") or "")
+        if not bucket:
+            continue
+        prov_name = (e.get("province_name") or str(e.get("province") or "")).strip() or "Unknown"
+        bkey = f"{prov_name}|{bucket}"
+        last_seen = float(last_seen_bkey_map.get(bkey, 0.0))
+        if entry_ts(e) > last_seen:
+            total += 1
+    return total
+
+
 # --------------------------------------------------------------------
 # NWS (US National Weather Service) helpers
 # --------------------------------------------------------------------
@@ -234,6 +267,28 @@ def nws_compute_new_total(
     return compute_remaining_new_by_region(
         entries, region_field=region_field, last_seen_map=last_seen_map, ts_key=ts_key
     )
+
+
+def nws_remaining_new_total(
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    last_seen_bkey_map: Mapping[str, float],
+) -> int:
+    """
+    NWS-specific 'remaining new' counter using composite keys 'state|bucket'
+    to match your renderer/controller state map.
+    """
+    total = 0
+    for e in entries or []:
+        state = (e.get("state") or e.get("state_name") or e.get("state_code") or "Unknown")
+        bucket = (e.get("bucket") or e.get("event") or e.get("title") or "Alert")
+        if not state or not bucket:
+            continue
+        bkey = f"{state}|{bucket}"
+        last_seen = float(last_seen_bkey_map.get(bkey, 0.0))
+        if entry_ts(e) > last_seen:
+            total += 1
+    return total
 
 
 # --------------------------------------------------------------------
