@@ -1,10 +1,10 @@
 # renderers/uk.py
 import html
-import time
 from collections import OrderedDict
 
 import streamlit as st
 from dateutil import parser as dateparser
+from datetime import timezone as _tz
 
 # Logic helpers (no UI)
 from computation import attach_timestamp, sort_newest
@@ -24,8 +24,8 @@ def _to_utc_label(pub: str | None) -> str | None:
     try:
         dt = dateparser.parse(pub)
         if dt:
-            # Force UTC label
-            return dt.astimezone().strftime("%a, %d %b %y %H:%M:%S UTC")
+            # Force UTC label for consistency across environments
+            return dt.astimezone(_tz.utc).strftime("%a, %d %b %y %H:%M:%S UTC")
     except Exception:
         pass
     return pub
@@ -48,7 +48,7 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
         f"{content}</div>"
     )
 
-def render_empty_state():
+def _render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
 
@@ -61,21 +61,22 @@ def render(entries, conf):
     Met Office (UK) — grouped by region, flat list of alerts.
 
     Behavior:
-      - Maintains a single feed-level last_seen_time in st.session_state.
+      - Uses a single feed-level last_seen_time stored in st.session_state (READ-ONLY here).
       - Highlights region headers with a red stripe if any alert in that region is NEW.
       - Marks individual items with a [NEW] prefix when newer than last_seen_time.
+      - DOES NOT write/commit 'seen' state: clear-on-close is handled in the controller.
     """
     feed_key = conf.get("key", "uk")
 
     items = _as_list(entries)
     if not items:
-        render_empty_state()
+        _render_empty_state()
         return
 
     # Normalize order: newest first, and ensure each item has 'timestamp'
     items = sort_newest(attach_timestamp(items))
 
-    # Single last-seen timestamp for the whole feed
+    # Single last-seen timestamp for the whole feed (READ-ONLY)
     last_seen_key = f"{feed_key}_last_seen_time"
     last_seen = float(st.session_state.get(last_seen_key) or 0.0)
 
@@ -118,7 +119,4 @@ def render(entries, conf):
         st.markdown("---")
 
     if not any_rendered:
-        render_empty_state()
-
-    # Commit last_seen at end of render
-    st.session_state[last_seen_key] = time.time()
+        _render_empty_state()
