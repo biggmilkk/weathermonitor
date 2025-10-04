@@ -77,17 +77,18 @@ st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss_before // (1024*1024)} MB
 # --------------------------------------------------------------------
 # State & Config
 # --------------------------------------------------------------------
-FETCH_TTL = 60
+FETCH_TTL = 60  # one scheduler tick = 60 seconds
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
+tick_counter = st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 
 @st.cache_data(ttl=3600)
 def load_feeds():
     return get_feed_definitions()
 
+# Pass concurrency knob through the cached wrapper (dedupes duplicate reruns in same minute)
 @st.cache_data(ttl=FETCH_TTL, show_spinner=False)
-def cached_fetch_round(to_fetch: dict):
-    return run_fetch_round(to_fetch)
+def cached_fetch_round(to_fetch: dict, max_conc: int):
+    return run_fetch_round(to_fetch, max_concurrency=max_conc)
 
 FEED_CONFIG = load_feeds()
 now = time.time()
@@ -148,69 +149,112 @@ def nws_remaining_new_total(feed_key: str, entries: list) -> int:
         if _entry_ts(e) > last_seen:
             total += 1
     return total
-    
 
 
 # --------------------------------------------------------------------
-# Refresh (uses centralized fetcher)
+# Minute-group scheduler (fetch ONLY on the timer tick)
 # --------------------------------------------------------------------
-now = time.time()
-to_fetch = {
-    k: v for k, v in FEED_CONFIG.items()
-    if now - st.session_state[f"{k}_last_fetch"] > FETCH_TTL
+# Detect real minute ticks so click reruns don't trigger network calls
+current_minute_index = int(time.time() // 60)              # monotonically increasing minute number
+prev_minute_index = st.session_state.get("_last_minute_index")
+is_timer_tick = (prev_minute_index != current_minute_index)
+st.session_state["_last_minute_index"] = current_minute_index
+
+# 1..4 within a rolling 4-minute window (for "minute 1/2/3/4" semantics)
+minute_in_cycle_4 = (current_minute_index % 4) + 1  # => 1,2,3,4 repeating
+
+def group_is_due(group_code: str, minute_1_to_4: int) -> bool:
+    g = (group_code or "g1").lower()
+    if g == "g1":        return True
+    if g == "g2_even":   return minute_1_to_4 in (2, 4)
+    if g == "g2_odd":    return minute_1_to_4 in (1, 3)
+    if g == "g4_1":      return minute_1_to_4 == 1
+    if g == "g4_2":      return minute_1_to_4 == 2
+    if g == "g4_3":      return minute_1_to_4 == 3
+    if g == "g4_4":      return minute_1_to_4 == 4
+    return True  # default safe
+
+# Minimum spacing (seconds) per group — ensures we never refetch too early
+GROUP_MIN_SPACING = {
+    "g1": 60,
+    "g2_even": 120, "g2_odd": 120,
+    "g4_1": 240, "g4_2": 240, "g4_3": 240, "g4_4": 240,
 }
 
+# Build the fetch set ONLY on timer ticks
+to_fetch = {}
+if is_timer_tick:
+    now = time.time()
+    for key, conf in FEED_CONFIG.items():
+        grp = (conf.get("group") or "g1").lower()
+        if group_is_due(grp, minute_in_cycle_4):
+            last = float(st.session_state.get(f"{key}_last_fetch", 0))
+            min_gap = GROUP_MIN_SPACING.get(grp, 60)
+            if (now - last) >= (min_gap - 1):  # small tolerance
+                to_fetch[key] = conf
+
+# Optional safety valve if one minute gets heavy
+BATCH_SIZE = 10
+if len(to_fetch) > BATCH_SIZE:
+    # Fetch the stalest first
+    to_fetch = dict(sorted(
+        to_fetch.items(),
+        key=lambda kv: float(st.session_state.get(f"{kv[0]}_last_fetch", 0))
+    )[:BATCH_SIZE])
+
+# Run the (bounded-concurrency) fetch round and store results
 if to_fetch:
-    results = cached_fetch_round(to_fetch)
+    with st.spinner("Updating feeds…"):
+        results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)
+        now = time.time()
+        for key, raw in results:
+            entries = raw.get("entries", [])
+            conf = FEED_CONFIG[key]
 
-    for key, raw in results:
-        entries = raw.get("entries", [])
-        conf = FEED_CONFIG[key]
+            if conf["type"] == "imd_current_orange_red":
+                fp_key = f"{key}_fp_by_region"
+                ts_key = f"{key}_ts_by_region"
+                prev_fp = dict(st.session_state.get(fp_key, {}) or {})
+                prev_ts = dict(st.session_state.get(ts_key, {}) or {})
+                now_ts  = time.time()
 
-        if conf["type"] == "imd_current_orange_red":
-            fp_key = f"{key}_fp_by_region"
-            ts_key = f"{key}_ts_by_region"
-            prev_fp = dict(st.session_state.get(fp_key, {}) or {})
-            prev_ts = dict(st.session_state.get(ts_key, {}) or {})
-            now_ts  = time.time()
+                entries, fp_by_region, ts_by_region = compute_imd_timestamps(
+                    entries=entries,
+                    prev_fp=prev_fp,
+                    prev_ts=prev_ts,
+                    now_ts=now_ts,
+                )
 
-            entries, fp_by_region, ts_by_region = compute_imd_timestamps(
-                entries=entries,
-                prev_fp=prev_fp,
-                prev_ts=prev_ts,
-                now_ts=now_ts,
-            )
+                st.session_state[fp_key] = fp_by_region
+                st.session_state[ts_key] = ts_by_region
 
-            st.session_state[fp_key] = fp_by_region
-            st.session_state[ts_key] = ts_by_region
+            st.session_state[f"{key}_data"] = entries
+            st.session_state[f"{key}_last_fetch"] = now
+            st.session_state["last_refreshed"] = now
 
-        st.session_state[f"{key}_data"] = entries
-        st.session_state[f"{key}_last_fetch"] = now
-        st.session_state["last_refreshed"] = now
+            if st.session_state.get("active_feed") == key:
+                if conf["type"] == "rss_meteoalarm":
+                    last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
+                    new_count = meteoalarm_unseen_active_instances(entries, last_seen_ids)
+                    if new_count == 0:
+                        st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
+                elif conf["type"] in ("ec_async", "nws_grouped_compact"):
+                    pass
+                elif conf["type"] == "uk_grouped_compact":
+                    last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
+                    _, new_count = compute_counts(entries, conf, last_seen_ts)
+                    if new_count == 0:
+                        st.session_state[f"{key}_last_seen_time"] = now
+                else:
+                    last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
+                    _, new_count = compute_counts(entries, conf, last_seen_ts)
+                    if new_count == 0:
+                        st.session_state[f"{key}_last_seen_time"] = now
 
-        if st.session_state.get("active_feed") == key:
-            if conf["type"] == "rss_meteoalarm":
-                last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-                new_count = meteoalarm_unseen_active_instances(entries, last_seen_ids)
-                if new_count == 0:
-                    st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-            elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                pass
-            elif conf["type"] == "uk_grouped_compact":
-                last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
-                _, new_count = compute_counts(entries, conf, last_seen_ts)
-                if new_count == 0:
-                    st.session_state[f"{key}_last_seen_time"] = now
-            else:
-                last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
-                _, new_count = compute_counts(entries, conf, last_seen_ts)
-                if new_count == 0:
-                    st.session_state[f"{key}_last_seen_time"] = now
-
-        if conf["type"] == "ec_async":
-            st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
-        elif conf["type"] == "nws_grouped_compact":
-            st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
+            if conf["type"] == "ec_async":
+                st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
+            elif conf["type"] == "nws_grouped_compact":
+                st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
 
         gc.collect()
 
