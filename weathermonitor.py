@@ -1,4 +1,4 @@
-import os, sys, time, gc, logging, psutil
+import os, sys, time, gc, logging, psutil, random
 import streamlit as st
 from dateutil import parser as dateparser
 from streamlit_autorefresh import st_autorefresh
@@ -77,7 +77,8 @@ st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss_before // (1024*1024)} MB
 # --------------------------------------------------------------------
 # State & Config
 # --------------------------------------------------------------------
-FETCH_TTL = 60
+# Shorter UI tick so batches progress and clicks feel real-time.
+FETCH_TTL = 8  # seconds (previously 60)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 
@@ -85,9 +86,10 @@ st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 def load_feeds():
     return get_feed_definitions()
 
-@st.cache_data(ttl=FETCH_TTL, show_spinner=False)
-def cached_fetch_round(to_fetch: dict):
-    return run_fetch_round(to_fetch)
+# Pass concurrency knob through to the fetcher; keep a tiny cache to avoid duplicate rounds in ultra-fast reruns.
+@st.cache_data(ttl=2, show_spinner=False)
+def cached_fetch_round(to_fetch: dict, max_conc: int):
+    return run_fetch_round(to_fetch, max_concurrency=max_conc)
 
 FEED_CONFIG = load_feeds()
 now = time.time()
@@ -96,10 +98,22 @@ for key, conf in FEED_CONFIG.items():
     st.session_state.setdefault(f"{key}_last_fetch", 0)
     st.session_state.setdefault(f"{key}_last_seen_time", 0.0)
     st.session_state.setdefault(f"{key}_pending_seen_time", None)
+    # initialize per-feed next_due based on each feed's TTL with startup jitter
+    ttl_init = int(conf.get("ttl", 120))
+    st.session_state.setdefault(f"{key}_next_due", time.time() + random.uniform(0, 0.5 * ttl_init))
     if conf["type"] == "rss_meteoalarm":
         st.session_state.setdefault(f"{key}_last_seen_alerts", tuple())
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
+
+# one-shot flags for click-optimized UX
+st.session_state.setdefault("_suppress_fetch_once", False)
+st.session_state.setdefault("_schedule_quick_refresh", False)
+
+# After a click we schedule a single quick rerun in ~1.5s to perform the fetch without blocking the click-render.
+if st.session_state.get("_schedule_quick_refresh"):
+    st_autorefresh(interval=1500, key=f"after_click_{int(time.time()*1000)}")
+    st.session_state["_schedule_quick_refresh"] = False
 
 
 # --------------------------------------------------------------------
@@ -148,20 +162,21 @@ def nws_remaining_new_total(feed_key: str, entries: list) -> int:
         if _entry_ts(e) > last_seen:
             total += 1
     return total
-    
 
 
 # --------------------------------------------------------------------
-# Refresh (uses centralized fetcher)
+# Refresh (staggered + small batches using per-feed ttl + jitter)
 # --------------------------------------------------------------------
 now = time.time()
-to_fetch = {
-    k: v for k, v in FEED_CONFIG.items()
-    if now - st.session_state[f"{k}_last_fetch"] > FETCH_TTL
-}
 
-if to_fetch:
-    results = cached_fetch_round(to_fetch)
+# Build the set of feeds that are due now, then take a small batch to avoid UI freezes.
+DUE = [k for k in FEED_CONFIG.keys() if now >= st.session_state.get(f"{k}_next_due", 0)]
+BATCH_SIZE = 8
+batch = sorted(DUE, key=lambda k: st.session_state.get(f"{k}_next_due", 0))[:BATCH_SIZE]
+to_fetch = {k: FEED_CONFIG[k] for k in batch}
+
+if to_fetch and not st.session_state.get("_suppress_fetch_once", False):
+    results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)
 
     for key, raw in results:
         entries = raw.get("entries", [])
@@ -188,6 +203,11 @@ if to_fetch:
         st.session_state[f"{key}_last_fetch"] = now
         st.session_state["last_refreshed"] = now
 
+        # schedule next_due using feed ttl + jitter so sources don't re-sync
+        ttl = int(FEED_CONFIG[key].get("ttl", 120))
+        jitter = random.uniform(0, 0.25 * ttl)
+        st.session_state[f"{key}_next_due"] = time.time() + ttl + jitter
+
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
@@ -212,7 +232,11 @@ if to_fetch:
         elif conf["type"] == "nws_grouped_compact":
             st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
 
-        gc.collect()
+    # run GC once after the batch
+    gc.collect()
+
+# clear one-shot suppression so subsequent reruns can fetch again
+st.session_state["_suppress_fetch_once"] = False
 
 rss_after = _rss_bytes()
 if rss_after > MEMORY_HIGH_WATER:
@@ -491,6 +515,12 @@ for row in range(num_rows):
                         st.session_state[f"{feed_key}_pending_seen_time"] = time.time()
                     else:
                         st.session_state[f"{feed_key}_pending_seen_time"] = time.time()
+
+                    # --- Click-optimized UX: render now, fetch right after without blocking ---
+                    st.session_state["_suppress_fetch_once"] = True            # skip network on this immediate rerun
+                    st.session_state[f"{feed_key}_next_due"] = time.time()     # prioritize this feed next round
+                    st.session_state["_schedule_quick_refresh"] = True         # schedule one quick refresh in ~1.5s
+
                 _toggled = True
 
             global_idx += 1
