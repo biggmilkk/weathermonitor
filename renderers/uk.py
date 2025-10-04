@@ -63,7 +63,8 @@ def render(entries, conf):
     Behavior:
       - Uses a single feed-level last_seen_time stored in st.session_state (READ-ONLY here).
       - Highlights region headers with a red stripe if any alert in that region is NEW.
-      - Marks individual items with a [NEW] prefix when newer than last_seen_time.
+      - Each alert renders as ONE linked summary line (full sentence), no extra title line.
+      - [NEW] prefix remains (outside the link) if newer than last_seen_time.
       - DOES NOT write/commit 'seen' state: clear-on-close is handled in the controller.
     """
     feed_key = conf.get("key", "uk")
@@ -74,7 +75,7 @@ def render(entries, conf):
         return
 
     # Normalize order: newest first, and ensure each item has 'timestamp'
-    items = sort_newest(attach_timestamp(items))
+    items = sort_newest(attach_timestamp(items))  # uses helpers in computation.py :contentReference[oaicite:2]{index=2}
 
     # Single last-seen timestamp for the whole feed (READ-ONLY)
     last_seen_key = f"{feed_key}_last_seen_time"
@@ -101,16 +102,19 @@ def render(entries, conf):
         for a in alerts:
             is_new = float(a.get("timestamp") or 0.0) > last_seen
             prefix = "[NEW] " if is_new else ""
-            title  = a.get("bucket") or _norm(a.get("title", "")) or "(no title)"
-            link   = _norm(a.get("link"))
 
-            if title and link:
-                st.markdown(f"{prefix}**[{title}]({link})**")
+            # Build the single-line summary to link.
+            # We prefer the feed-provided 'summary' (full sentence),
+            # falling back to 'bucket' or 'title' if summary is missing.
+            # (The scraper already populates 'summary' per entry.) :contentReference[oaicite:3]{index=3}
+            summary_line = _norm(a.get("summary")) or _norm(a.get("bucket") or a.get("title") or "(no title)")
+            link = _norm(a.get("link"))
+
+            if summary_line and link:
+                st.markdown(f"{prefix}[{summary_line}]({link})")
             else:
-                st.markdown(f"{prefix}**{title}**")
-
-            if a.get("summary"):
-                st.write(a["summary"])
+                # No link available — show bold text so it still stands out
+                st.markdown(f"{prefix}**{summary_line}**")
 
             pub_label = _to_utc_label(a.get("published"))
             if pub_label:
