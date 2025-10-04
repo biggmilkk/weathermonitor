@@ -35,6 +35,7 @@ DEFAULT_URL = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"
 NORMALIZE_COUNTRY_NAMES = {
     "Macedonia (the former Yugoslav Republic of)": "North Macedonia",
     "MeteoAlarm Macedonia (the former Yugoslav Republic of)": "North Macedonia",
+    "United Kingdom of Great Britain and Northern Ireland": "United Kingdom",
     # add more edge cases here if encountered
 }
 
@@ -53,7 +54,7 @@ COUNTRY_TO_CODE = {
     "Norway": "NO","Poland": "PL","Portugal": "PT",
     "Romania": "RO","Serbia": "RS","Slovakia": "SK","Slovenia": "SI","Spain": "ES",
     "Sweden": "SE","Switzerland": "CH","Ukraine": "UA",
-    "United Kingdom": "GB", "United Kingdom of Great Britain and Northern Ireland": "GB",
+    "United Kingdom": "UK", "United Kingdom of Great Britain and Northern Ireland": "UK",
 }
 
 # Known slugs for country RSS endpoints
