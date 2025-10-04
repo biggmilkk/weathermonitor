@@ -17,36 +17,28 @@ from computation import (
     compute_imd_timestamps,
 )
 
-# Renderers (per-feed render functions live in renderers/)
+# Renderers map (from your renderers/__init__.py)
 from renderers import RENDERERS
 
 
 # --------------------------------------------------------------------
-# Helpers moved here (draw_badge + empty state)
+# Helpers
 # --------------------------------------------------------------------
 def draw_badge(placeholder, count: int):
     if not placeholder:
         return
     if count > 0:
         placeholder.markdown(
-            f"<span style='display:inline-block;"
-            f"background:#FFEB99;"
-            f"color:#000;"
-            f"padding:2px 8px;"
-            f"border-radius:6px;"
-            f"font-weight:700;"
-            f"font-size:0.90em;"
-            f"white-space:nowrap;'>"
-            f"❗ {count} New</span>",
+            "<span style='display:inline-block;background:#FFEB99;color:#000;"
+            "padding:2px 8px;border-radius:6px;font-weight:700;font-size:0.90em;"
+            "white-space:nowrap;'>❗ {} New</span>".format(count),
             unsafe_allow_html=True,
         )
     else:
         placeholder.markdown("&nbsp;", unsafe_allow_html=True)
 
-
 def render_empty_state():
     st.info("No active warnings at this time.")
-
 
 # --------------------------------------------------------------------
 # Setup
@@ -73,7 +65,6 @@ elif rss_before < MEMORY_LOW_WATER:
 MAX_CONCURRENCY = st.session_state["concurrency"]
 st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss_before // (1024*1024)} MB")
 
-
 # --------------------------------------------------------------------
 # State & Config
 # --------------------------------------------------------------------
@@ -85,7 +76,6 @@ tick_counter = st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main"
 def load_feeds():
     return get_feed_definitions()
 
-# Pass concurrency knob through the cached wrapper (dedupes duplicate reruns in same minute)
 @st.cache_data(ttl=FETCH_TTL, show_spinner=False)
 def cached_fetch_round(to_fetch: dict, max_conc: int):
     return run_fetch_round(to_fetch, max_concurrency=max_conc)
@@ -102,20 +92,9 @@ for key, conf in FEED_CONFIG.items():
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
 
-
 # --------------------------------------------------------------------
-# Small controller-local helpers
+# Controller-local helpers
 # --------------------------------------------------------------------
-def safe_int(x) -> int:
-    try:
-        return max(0, int(x))
-    except Exception:
-        return 0
-
-def meteoalarm_country_has_alerts(country: dict) -> bool:
-    a = (country.get("alerts") or {})
-    return bool(a.get("today")) or bool(a.get("tomorrow"))
-
 def _entry_ts(e: dict) -> float:
     ts = e.get("timestamp")
     if isinstance(ts, (int, float)):
@@ -154,13 +133,10 @@ def nws_remaining_new_total(feed_key: str, entries: list) -> int:
 # Cold boot: fetch ALL feeds once, ignoring groups
 # --------------------------------------------------------------------
 do_cold_boot = not st.session_state.get("_cold_boot_done", False)
-
-# also treat "empty data everywhere" as a (re)boot
 if not do_cold_boot:
     do_cold_boot = all(len(st.session_state.get(f"{k}_data", [])) == 0 for k in FEED_CONFIG)
 
 if do_cold_boot:
-    # fetch everything at once (no BATCH_SIZE cap, no group filter)
     all_results = cached_fetch_round(FEED_CONFIG, MAX_CONCURRENCY)
     now_ts = time.time()
     for key, raw in all_results:
@@ -186,14 +162,12 @@ if do_cold_boot:
 # --------------------------------------------------------------------
 # Minute-group scheduler (fetch ONLY on the timer tick)
 # --------------------------------------------------------------------
-# Detect real minute ticks so click reruns don't trigger network calls
-current_minute_index = int(time.time() // 60)              # monotonically increasing minute number
+current_minute_index = int(time.time() // 60)
 prev_minute_index = st.session_state.get("_last_minute_index")
 is_timer_tick = (prev_minute_index != current_minute_index)
 st.session_state["_last_minute_index"] = current_minute_index
 
-# 1..4 within a rolling 4-minute window (for "minute 1/2/3/4" semantics)
-minute_in_cycle_4 = (current_minute_index % 4) + 1  # => 1,2,3,4 repeating
+minute_in_cycle_4 = (current_minute_index % 4) + 1  # 1..4
 
 def group_is_due(group_code: str, minute_1_to_4: int) -> bool:
     g = (group_code or "g1").lower()
@@ -204,16 +178,14 @@ def group_is_due(group_code: str, minute_1_to_4: int) -> bool:
     if g == "g4_2":      return minute_1_to_4 == 2
     if g == "g4_3":      return minute_1_to_4 == 3
     if g == "g4_4":      return minute_1_to_4 == 4
-    return True  # default safe
+    return True
 
-# Minimum spacing (seconds) per group — ensures we never refetch too early
 GROUP_MIN_SPACING = {
     "g1": 60,
     "g2_even": 120, "g2_odd": 120,
     "g4_1": 240, "g4_2": 240, "g4_3": 240, "g4_4": 240,
 }
 
-# Build the fetch set ONLY on timer ticks
 to_fetch = {}
 if is_timer_tick:
     now = time.time()
@@ -222,28 +194,18 @@ if is_timer_tick:
         if group_is_due(grp, minute_in_cycle_4):
             last = float(st.session_state.get(f"{key}_last_fetch", 0))
             min_gap = GROUP_MIN_SPACING.get(grp, 60)
-            if (now - last) >= (min_gap - 1):  # small tolerance
+            if (now - last) >= (min_gap - 1):
                 to_fetch[key] = conf
 
-# Optional safety valve if one minute gets heavy
 BATCH_SIZE = 10
 if len(to_fetch) > BATCH_SIZE:
-    # Fetch the stalest first
-    to_fetch = dict(sorted(
-        to_fetch.items(),
-        key=lambda kv: float(st.session_state.get(f"{kv[0]}__last_fetch", 0))  # <-- (typo fix below)
-    )[:BATCH_SIZE])
-
-# FIX: correct key name (was '__last_fetch' typo)
-if isinstance(to_fetch, dict) and to_fetch:
     to_fetch = dict(sorted(
         to_fetch.items(),
         key=lambda kv: float(st.session_state.get(f"{kv[0]}_last_fetch", 0))
-    ))
+    )[:BATCH_SIZE])
 
-# Run the (bounded-concurrency) fetch round and store results
 if to_fetch:
-    results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)  # no spinner to avoid layout shift
+    results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)  # no spinner
     now = time.time()
     for key, raw in results:
         entries = raw.get("entries", [])
@@ -255,14 +217,9 @@ if to_fetch:
             prev_fp = dict(st.session_state.get(fp_key, {}) or {})
             prev_ts = dict(st.session_state.get(ts_key, {}) or {})
             now_ts  = time.time()
-
             entries, fp_by_region, ts_by_region = compute_imd_timestamps(
-                entries=entries,
-                prev_fp=prev_fp,
-                prev_ts=prev_ts,
-                now_ts=now_ts,
+                entries=entries, prev_fp=prev_fp, prev_ts=prev_ts, now_ts=now_ts,
             )
-
             st.session_state[fp_key] = fp_by_region
             st.session_state[ts_key] = ts_by_region
 
@@ -270,6 +227,7 @@ if to_fetch:
         st.session_state[f"{key}_last_fetch"] = now
         st.session_state["last_refreshed"] = now
 
+        # Active feed bookkeeping (renderer-specific logic stays in renderers)
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
@@ -289,17 +247,16 @@ if to_fetch:
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_time"] = now
 
+        # Button badge counts (pre-panel)
         if conf["type"] == "ec_async":
             st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
         elif conf["type"] == "nws_grouped_compact":
             st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
 
-    gc.collect()
-
+gc.collect()
 rss_after = _rss_bytes()
 if rss_after > MEMORY_HIGH_WATER:
     st.session_state["concurrency"] = max(MIN_CONC, st.session_state["concurrency"] - STEP)
-
 
 # --------------------------------------------------------------------
 # Header
@@ -310,114 +267,81 @@ st.caption(
 )
 st.markdown("---")
 
-
 # --------------------------------------------------------------------
-# Details renderer (per feed panel)
+# Details panel — keep Meteoalarm/UK/JMA logic; EC/NWS delegated
 # --------------------------------------------------------------------
-def _immediate_rerun():
-    if hasattr(st, "rerun"):
-        st.rerun()
-    elif hasattr(st, "experimental_rerun"):
-        st.experimental_rerun()
-
-def _render_feed_details(active, conf, entries, badge_placeholders=None):
+def _render_feed_details(active, conf, entries):
     data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
 
     if conf["type"] == "rss_bom_multi":
         RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
+        return
 
-    elif conf["type"] == "ec_async":
-        # EC is now fully renderer-owned (no controller-side buttons/state)
+    if conf["type"] == "ec_async":
+        # EC fully lives in its renderer now
         RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
         return
 
-    elif conf["type"] == "nws_grouped_compact":
-        if not entries:
-            st.info("No active warnings that meet thresholds at the moment.")
-            st.session_state[f"{active}_remaining_new_total"] = 0
-            return
-
-        lastseen_key    = f"{active}_bucket_last_seen"
-        bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
-
-        cols = st.columns([0.25, 0.75])
-        with cols[0]:
-            if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
-                now_ts = time.time()
-                for a in entries:
-                    state  = (a.get("state") or a.get("state_name") or a.get("state_code") or "Unknown")
-                    bucket = (a.get("bucket") or a.get("event") or a.get("title") or "Alert")
-                    bkey = f"{state}|{bucket}"
-                    bucket_lastseen[bkey] = now_ts
-                st.session_state[lastseen_key] = bucket_lastseen
-                st.session_state[f"{active}_remaining_new_total"] = 0
-                if badge_placeholders:
-                    ph = badge_placeholders.get(active)
-                    if ph:
-                        draw_badge(ph, 0)
-                _immediate_rerun()
-
+    if conf["type"] == "nws_grouped_compact":
+        # NWS fully lives in its renderer now
         RENDERERS["nws_grouped_compact"](entries, {**conf, "key": active})
-        nws_total_now = nws_remaining_new_total(active, entries)
-        st.session_state[f"{active}_remaining_new_total"] = int(nws_total_now)
-        if badge_placeholders:
-            ph = badge_placeholders.get(active)
-            if ph:
-                draw_badge(ph, safe_int(nws_total_now))
+        return
 
-    elif conf["type"] == "uk_grouped_compact":
+    if conf["type"] == "uk_grouped_compact":
         if not entries:
             st.info("No active warnings that meet thresholds at the moment.")
             return
         RENDERERS["uk_grouped_compact"](entries, {**conf, "key": active})
+        return
 
-    elif conf["type"] == "rss_meteoalarm":
+    if conf["type"] == "rss_meteoalarm":
+        # Keep legacy controller logic until we move it into the renderer
         seen_ids = set(st.session_state[f"{active}_last_seen_alerts"])
-        countries = [c for c in data_list if meteoalarm_country_has_alerts(c)]
+        countries = [c for c in data_list if (c.get("alerts") or {}).get("today") or (c.get("alerts") or {}).get("tomorrow")]
         countries = meteoalarm_mark_and_sort(countries, seen_ids)
         for country in countries:
             RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
         st.session_state[f"{active}_last_seen_alerts"] = meteoalarm_snapshot_ids(countries)
+        return
 
-    elif conf["type"] == "rss_jma":
+    if conf["type"] == "rss_jma":
         RENDERERS["rss_jma"](entries, {**conf, "key": active})
+        return
 
+    # Generic fallback
+    seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
+    if not data_list:
+        render_empty_state()
+        pkey = f"{active}_pending_seen_time"
+        pending = st.session_state.get(pkey, None)
+        if pending is not None:
+            st.session_state[f"{active}_last_seen_time"] = float(pending)
+        st.session_state.pop(pkey, None)
     else:
-        seen_ts = st.session_state.get(f"{active}_last_seen_time") or 0.0
-        if not data_list:
-            render_empty_state()
-            pkey = f"{active}_pending_seen_time"
-            pending = st.session_state.get(pkey, None)
-            if pending is not None:
-                st.session_state[f"{active}_last_seen_time"] = float(pending)
-            st.session_state.pop(pkey, None)
-        else:
-            for item in data_list:
-                ts = item.get("timestamp")
-                if not isinstance(ts, (int, float)):
-                    pub = item.get("published")
-                    try:
-                        ts = dateparser.parse(pub).timestamp() if pub else 0.0
-                    except Exception:
-                        ts = 0.0
-                item["is_new"] = bool(ts > seen_ts)
-                RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
-            pkey = f"{active}_pending_seen_time"
-            pending = st.session_state.get(pkey, None)
-            if pending is not None:
-                st.session_state[f"{active}_last_seen_time"] = float(pending)
-            st.session_state.pop(pkey, None)
-
+        for item in data_list:
+            ts = item.get("timestamp")
+            if not isinstance(ts, (int, float)):
+                pub = item.get("published")
+                try:
+                    ts = dateparser.parse(pub).timestamp() if pub else 0.0
+                except Exception:
+                    ts = 0.0
+            item["is_new"] = bool(ts > seen_ts)
+            RENDERERS.get(conf["type"], lambda i, c: None)(item, conf)
+        pkey = f"{active}_pending_seen_time"
+        pending = st.session_state.get(pkey, None)
+        if pending is not None:
+            st.session_state[f"{active}_last_seen_time"] = float(pending)
+        st.session_state.pop(pkey, None)
 
 # --------------------------------------------------------------------
-# Desktop (buttons row + details) — 6 feeds/row, fixed widths, no-wrap
+# Buttons row + details
 # --------------------------------------------------------------------
 if not FEED_CONFIG:
     st.info("No feeds configured.")
     st.stop()
 
 MAX_BTNS_PER_ROW = 6
-
 FEED_POSITIONS = {
     "ec":               (0, 0),
     "metoffice_uk":     (0, 1),
@@ -429,11 +353,9 @@ FEED_POSITIONS = {
     "pagasa":           (1, 4),
     "bom_multi":        (1, 5),
 }
-
 pinned_keys = set(FEED_POSITIONS.keys())
 items = [(k, v) for k, v in FEED_CONFIG.items() if k not in pinned_keys]
 
-badge_placeholders = {}
 _toggled = False
 global_idx = 0
 
@@ -456,14 +378,10 @@ def _new_count_for_feed(key, conf, entries):
     return new_count
 
 seq_rows = (len(items) + MAX_BTNS_PER_ROW - 1) // MAX_BTNS_PER_ROW
-if FEED_POSITIONS:
-    pinned_rows = max(r for r, _ in FEED_POSITIONS.values()) + 1
-    num_rows = max(seq_rows, pinned_rows)
-else:
-    num_rows = seq_rows
+pinned_rows = max(r for r, _ in FEED_POSITIONS.values()) + 1 if FEED_POSITIONS else 0
+num_rows = max(seq_rows, pinned_rows)
 
 seq_iter = iter(items)
-
 for row in range(num_rows):
     col_widths = []
     for _ in range(MAX_BTNS_PER_ROW):
@@ -507,16 +425,9 @@ for row in range(num_rows):
                     cnt = 0
                 if cnt > 0:
                     badge_col.markdown(
-                        "<span style='display:inline-block;"
-                        "background:#FFEB99;"
-                        "color:#000;"
-                        "padding:2px 8px;"
-                        "border-radius:6px;"
-                        "font-weight:700;"
-                        "font-size:0.90em;"
-                        "white-space:nowrap;'>"
-                        f"❗&nbsp;{cnt}&nbsp;New"
-                        "</span>",
+                        "<span style='display:inline-block;background:#FFEB99;color:#000;"
+                        "padding:2px 8px;border-radius:6px;font-weight:700;font-size:0.90em;"
+                        "white-space:nowrap;'>❗&nbsp;{}&nbsp;New</span>".format(cnt),
                         unsafe_allow_html=True,
                     )
                 else:
@@ -551,11 +462,14 @@ for row in range(num_rows):
                 st.markdown("&nbsp;", unsafe_allow_html=True)
 
 if _toggled:
-    _immediate_rerun()
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
 
 active = st.session_state["active_feed"]
 if active:
     st.markdown("---")
     conf = FEED_CONFIG[active]
     entries = st.session_state[f"{active}_data"]
-    _render_feed_details(active, conf, entries, badge_placeholders)
+    _render_feed_details(active, conf, entries)
