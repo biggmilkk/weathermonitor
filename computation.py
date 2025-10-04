@@ -202,13 +202,42 @@ _EC_BUCKET_PATTERNS = {
 def ec_bucket_from_title(title: str, *, patterns: Mapping[str, re.Pattern] = _EC_BUCKET_PATTERNS) -> str | None:
     """
     Return the canonical EC bucket by matching known warning names as whole words in the title.
-    If nothing matches, return None.
+
+    Behavior (restored to previous app semantics):
+      1) Try strict match against the canonical set above (word-boundary, case-insensitive).
+      2) If no strict match:
+           - If the title contains the word "warning" (anywhere), treat it as a valid bucket.
+             We try to extract the '<Something> Warning' phrase; otherwise return 'Warning'.
+           - If the title contains 'severe thunderstorm watch', return that bucket.
+      3) Else return None.
+
+    This keeps button badges and renderer logic in sync with the scraper,
+    which already filters EC entries down to Warnings (and Severe Thunderstorm Watch).
     """
     if not title:
         return None
+
+    # 1) strict exact bucket match
     for canon, pat in patterns.items():
         if pat.search(title):
             return canon
+
+    # normalize once for fallbacks
+    t_low = title.lower()
+
+    # 2a) any title containing "warning" should be treated as a warning
+    if "warning" in t_low:
+        # Try to capture a phrase ending with "warning" for a nicer bucket label
+        m = re.search(r'([A-Za-z \-/]+warning)\b', title, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip().title()
+        return "Warning"
+
+    # 2b) explicit fallback for 'Severe Thunderstorm Watch'
+    if "severe thunderstorm watch" in t_low:
+        return "Severe Thunderstorm Watch"
+
+    # 3) nothing recognized
     return None
 
 
