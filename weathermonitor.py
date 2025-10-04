@@ -295,7 +295,10 @@ global_idx = 0
 
 def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
-        return meteoalarm_total_active_instances(entries)
+        seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
+        total_active = meteoalarm_total_active_instances(entries)
+        unseen_count = meteoalarm_unseen_active_instances(entries, seen_ids)
+        return total_active if unseen_count > 0 else 0
 
     if conf["type"] in ("ec_async", "ec_grouped_compact"):
         last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
