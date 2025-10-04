@@ -53,7 +53,7 @@ COUNTRY_TO_CODE = {
     "Norway": "NO","Poland": "PL","Portugal": "PT",
     "Romania": "RO","Serbia": "RS","Slovakia": "SK","Slovenia": "SI","Spain": "ES",
     "Sweden": "SE","Switzerland": "CH","Ukraine": "UA",
-    "United Kingdom": "UK", "United Kingdom of Great Britain and Northern Ireland": "UK",
+    "United Kingdom": "GB", "United Kingdom of Great Britain and Northern Ireland": "GB",
 }
 
 # Known slugs for country RSS endpoints
