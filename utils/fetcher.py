@@ -25,7 +25,7 @@ DEFAULT_HEADERS: Dict[str, str] = {
     "User-Agent": "WeatherMonitor/1.0 (httpx)",
     "Accept": "application/json, text/xml, application/xml, text/html, */*",
 }
-DEFAULT_TIMEOUT_SECONDS: float = 30.0
+DEFAULT_TIMEOUT_SECONDS: float = 15.0  # tightened from 30s for snappier rounds
 DEFAULT_MAX_CONCURRENCY: int = 20
 DEFAULT_RETRIES: int = 2
 DEFAULT_RETRY_BACKOFF: float = 0.75  # seconds
