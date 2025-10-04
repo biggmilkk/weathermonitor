@@ -11,6 +11,7 @@ from .imd import render as render_imd_compact
 RENDERERS = {
     "nws_grouped_compact": render_nws_grouped_compact,
     "ec_grouped_compact": render_ec_grouped_compact,
+    "ec_async": render_ec_grouped_compact,
     "uk_grouped_compact": render_uk_grouped,
     "rss_cma": render_cma,
     "rss_meteoalarm": render_meteoalarm,
