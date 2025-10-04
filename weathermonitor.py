@@ -207,8 +207,7 @@ if to_fetch:
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
                 new_count = meteoalarm_unseen_active_instances(entries, last_seen_ids)
                 if new_count == 0:
-                    # nothing new; keep last_seen_alerts as-is
-                    pass
+                    pass  # keep last_seen_alerts as-is
             elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact"):
                 # EC/NWS 'seen' logic is handled inside their renderers (per-bucket / per-event).
                 pass
@@ -223,17 +222,19 @@ if to_fetch:
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_time"] = now
 
-        # Badge counts that the buttons need (pre-panel)
-        if conf["type"] in ("ec_async", "ec_grouped_compact"):
-            last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
-            st.session_state[f"{key}_remaining_new_total"] = ec_new_total(
-                entries, last_seen_bkey_map=last_map
-            )
-        elif conf["type"] == "nws_grouped_compact":
-            last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
-            st.session_state[f"{key}_remaining_new_total"] = nws_new_total(
-                entries, last_seen_bkey_map=last_map
-            )
+        # NOTE: We no longer rely on a cached "{key}_remaining_new_total".
+        # Leaving the old writes here commented-out as a reminder:
+        #
+        # if conf["type"] in ("ec_async", "ec_grouped_compact"):
+        #     last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
+        #     st.session_state[f"{key}_remaining_new_total"] = ec_new_total(
+        #         entries, last_seen_bkey_map=last_map
+        #     )
+        # elif conf["type"] == "nws_grouped_compact":
+        #     last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
+        #     st.session_state[f"{key}_remaining_new_total"] = nws_new_total(
+        #         entries, last_seen_bkey_map=last_map
+        #     )
 
     gc.collect()
 
@@ -280,25 +281,24 @@ _toggled = False
 global_idx = 0
 
 def _new_count_for_feed(key, conf, entries):
+    # Compute EC/NWS badges FRESH each rerun from entries + current bucket map
     if conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
         return meteoalarm_unseen_active_instances(entries, seen_ids)
+
     if conf["type"] in ("ec_async", "ec_grouped_compact"):
-        val = st.session_state.get(f"{key}_remaining_new_total")
-        if isinstance(val, int):
-            return int(val)
         last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
         return int(ec_new_total(entries, last_seen_bkey_map=last_map))
+
     if conf["type"] == "nws_grouped_compact":
-        val = st.session_state.get(f"{key}_remaining_new_total")
-        if isinstance(val, int):
-            return int(val)
         last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
         return int(nws_new_total(entries, last_seen_bkey_map=last_map))
+
     if conf["type"] == "uk_grouped_compact":
         seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
         _, new_count = compute_counts(entries, conf, seen_ts)
         return new_count
+
     seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
     _, new_count = compute_counts(entries, conf, seen_ts)
     return new_count
