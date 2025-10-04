@@ -1,220 +1,180 @@
-import asyncio
+# imd_india.py
+from __future__ import annotations
+
 import re
-import logging
-from typing import Any, Dict, List, Optional
+import requests
 from bs4 import BeautifulSoup
+from typing import Any, Mapping, Sequence
+from dateutil import parser as dateparser
 
-IMD_MC = "https://mausam.imd.gov.in/imd_latest/contents/subdivisionwise-warning_mc.php?id={id}"
+# --------------------------------------------------------------------
+# Config
+# --------------------------------------------------------------------
 
-# Exclude duplicates
-EXCLUDED_IDS = {32, 33}
-DEFAULT_ID_RANGE = [i for i in range(1, 35) if i not in EXCLUDED_IDS]
+DEFAULT_SOURCE_URL = "https://mausam.imd.gov.in/imd_latest/contents/warnings.php"
+TIMEOUT = 25
 
-# Severity policy
-ORANGE_HEX = "#ffa500"
-RED_HEX    = "#ff0000"
+# --------------------------------------------------------------------
+# Small helpers
+# --------------------------------------------------------------------
 
-# Regex helpers
-HEX_ANY_RE = re.compile(r"#([0-9A-Fa-f]{6})")
-DAY_LABEL_RE = re.compile(r"^Day\s*(\d+)\s*:\s*(.+)$", re.I)
+def _norm(s: Any) -> str:
+    return (s or "").strip()
 
-def _extract_hex_set(s: Optional[str]) -> set[str]:
-    if not s:
-        return set()
-    return {("#" + h.lower()) for h in HEX_ANY_RE.findall(s)}
+def _text(el) -> str:
+    return _norm(el.get_text(" ", strip=True)) if el else ""
 
-def _bgcolor_attr_hex(node) -> Optional[str]:
-    val = node.get("bgcolor")
-    if not val:
-        return None
-    s = str(val).strip()
-    m = HEX_ANY_RE.search(s)
-    return f"#{m.group(1).lower()}" if m else None
-
-def _severity_from_row(tr) -> Optional[str]:
-    # tr.style
-    tr_hex = _extract_hex_set(tr.get("style"))
-    if ORANGE_HEX in tr_hex: return "Orange"
-    if RED_HEX in tr_hex:    return "Red"
-    # td.styles
-    tds = tr.find_all("td")
-    for td in tds[:2]:
-        td_hex = _extract_hex_set(td.get("style"))
-        if ORANGE_HEX in td_hex: return "Orange"
-        if RED_HEX in td_hex:    return "Red"
-    # bgcolor attrs
-    bg_tr = _bgcolor_attr_hex(tr)
-    if bg_tr == ORANGE_HEX: return "Orange"
-    if bg_tr == RED_HEX:    return "Red"
-    for td in tds[:2]:
-        bg_td = _bgcolor_attr_hex(td)
-        if bg_td == ORANGE_HEX: return "Orange"
-        if bg_td == RED_HEX:    return "Red"
-    return None
-
-def _clean_text(el) -> str:
-    for br in el.find_all("br"):
-        br.replace_with(", ")
-    import re as _re
-    txt = el.get_text(" ", strip=True)
-    txt = _re.sub(r"\s+", " ", txt).strip(" ,")
-    txt = _re.sub(r"(,\s*){2,}", ", ", txt)
-    return txt
-
-def _split_hazards(text: str) -> List[str]:
-    parts = [p.strip(" ,;") for p in text.split(",") if p.strip(" ,;")]
-    seen, out = set(), []
+def _split_hazards(cell_text: str) -> list[str]:
+    t = _norm(cell_text)
+    if not t:
+        return []
+    # IMD uses <br> to join hazards; in plain text they’re comma/space separated
+    parts = re.split(r"\s*[,|/]\s*|\s*br\s*", t, flags=re.I)
+    # keep original order, drop empties, re-normalize
+    out = []
     for p in parts:
-        low = p.lower()
-        if low not in seen:
-            seen.add(low)
+        p = _norm(p)
+        if p and p.lower() not in {"day 1", "day 2", "day 3", "no warning"}:
             out.append(p)
+    # If “No warning” is the only thing, return []
+    if not out and re.search(r"\bno warning\b", t, flags=re.I):
+        return []
     return out
 
-def _parse_region_block(rows: List, start_idx: int, source_id: int, source_url: str) -> (Optional[Dict[str, Any]], int):
-    """Parse one 'Warnings for <Region>' section; return (entry_or_None, next_index)."""
-    n = len(rows)
-    # Region line
-    th_text = _clean_text(rows[start_idx].find("th"))
-    region = th_text.replace("Warnings for", "", 1).strip()
+def _severity_from_style(style: str | None) -> str | None:
+    s = (style or "").lower()
+    # IMD uses background colors for severity; match by common rgb values.
+    if "rgb(255, 0, 0)" in s or "background:#ff0000" in s:
+        return "Red"
+    if "rgb(255, 165, 0)" in s or "background:#ffa500" in s:
+        return "Orange"
+    if "rgb(255, 255, 0)" in s or "background:#ffff00" in s:
+        return "Yellow"
+    if "rgb(124, 252, 0)" in s or "background:#7cfc00" in s or "rgb(230, 255, 238)" in s:
+        return "Green"
+    return None
 
-    # Date of Issue (next th row if present)
-    issue = None
-    i = start_idx + 1
-    if i < n and rows[i].find("th"):
-        t2 = _clean_text(rows[i].find("th"))
-        m_issue = re.search(r"Date of Issue\s*:\s*(.+)$", t2, re.I)
-        if m_issue:
-            issue = m_issue.group(1).strip()
-        i += 1
+def _parse_issue_date(text: str | None) -> str | None:
+    """
+    Extract the 'Date of Issue: Month D, YYYY' to an ISO-ish string.
+    We keep original formatting if parseable for downstream display.
+    """
+    t = _norm(text)
+    if not t:
+        return None
+    # accept both "Date of Issue: October 5, 2025" and just "October 5, 2025"
+    m = re.search(r"date of issue:\s*(.+)$", t, flags=re.I)
+    candidate = _norm(m.group(1) if m else t)
+    try:
+        return dateparser.parse(candidate).isoformat()
+    except Exception:
+        return candidate  # fall back to raw string; renderer can still display it
 
-    # Walk day rows until next section or break
-    days: Dict[str, Dict[str, Any]] = {}
-    while i < n:
-        tr = rows[i]
-        th = tr.find("th")
-        if th:
-            # new section starts
-            break
-        tds = tr.find_all("td")
-        if len(tds) >= 2:
-            label = _clean_text(tds[0])
-            m_day = DAY_LABEL_RE.match(label)
-            if m_day:
-                day_num = int(m_day.group(1))
-                day_date = m_day.group(2).strip()
-                if day_num in (1, 2):
-                    sev = _severity_from_row(tr)
-                    if sev in ("Orange", "Red"):
-                        hazards = _split_hazards(_clean_text(tds[1]))
-                        key = "today" if day_num == 1 else "tomorrow"
-                        days[key] = {
-                            "severity": sev,
-                            "hazards": hazards,
-                            "date": day_date,
-                        }
-        i += 1
+def _parse_day_date(text: str | None) -> str | None:
+    """
+    Extract the 'Day N: Month D, YYYY' to ISO-ish string; fallback to raw.
+    """
+    t = _norm(text)
+    if not t:
+        return None
+    m = re.search(r"day\s*\d+\s*:\s*(.+)$", t, flags=re.I)
+    candidate = _norm(m.group(1) if m else t)
+    try:
+        return dateparser.parse(candidate).isoformat()
+    except Exception:
+        return candidate
 
-    if days:
-        # Choose a better 'published' for downstream: newest of today/tomorrow dates, else Date of Issue
-        day_dates: List[str] = []
+# --------------------------------------------------------------------
+# Core HTML parsing
+# --------------------------------------------------------------------
+
+def _parse_region_blocks(html_text: str, page_url: str) -> list[dict]:
+    soup = BeautifulSoup(html_text, "html.parser")
+    entries: list[dict] = []
+
+    # Strategy:
+    # - Find all TR headers like <th colspan="3">Warnings for <Region></th>
+    # - The next <tr> is usually "Date of Issue: ...".
+    # - Following rows contain "Day 1:", "Day 2:", ... with colored backgrounds.
+    for th in soup.select("th[colspan='3']"):
+        title = _text(th)
+        m = re.search(r"warnings\s+for\s+(.+)$", title, flags=re.I)
+        if not m:
+            continue
+        region = _norm(m.group(1))
+
+        # Next row: issue date
+        issue_row = th.find_next("tr")
+        issue_iso: str | None = None
+        if issue_row and issue_row.name == "tr":
+            issue_iso = _parse_issue_date(_text(issue_row))
+
+        # Collect day rows until next region header
+        days: dict[str, dict] = {}
+        cur = issue_row.find_next("tr") if issue_row else th.find_next("tr")
+        while cur:
+            # Stop at the next region header
+            if cur.find("th", colspan=True) and re.search(r"warnings\s+for\s+", _text(cur), flags=re.I):
+                break
+
+            tds = cur.find_all("td")
+            if len(tds) >= 2:
+                day_label = _text(tds[0])     # e.g. "Day 2: October 6, 2025"
+                hazards_cell = tds[1]
+                sev = _severity_from_style(cur.get("style") or hazards_cell.get("style") or "")
+                hazards = _split_hazards(hazards_cell.get_text("\n", strip=True).replace("\n", ", "))
+                day_date_iso = _parse_day_date(day_label)
+
+                if re.search(r"\bday\s*1\b", day_label, flags=re.I):
+                    days["today"] = {
+                        "severity": sev,
+                        "hazards": hazards,
+                        "date": day_date_iso,
+                        "is_new": False,
+                    }
+                elif re.search(r"\bday\s*2\b", day_label, flags=re.I):
+                    days["tomorrow"] = {
+                        "severity": sev,
+                        "hazards": hazards,
+                        "date": day_date_iso,
+                        "is_new": False,
+                    }
+            cur = cur.find_next("tr")
+
+        # Build 'published' (FIX: prefer Date of Issue)
+        day_dates: list[str] = []
         for k in ("today", "tomorrow"):
             if k in days and days[k].get("date"):
-                day_dates.append(days[k]["date"])
-        published_out = max(day_dates) if day_dates else issue
+                day_dates.append(days[k]["date"])  # already ISO-ish or raw
 
-        return ({
-            "title": f"IMD — {region}",
+        published_out = issue_iso or (max(day_dates) if day_dates else None)
+
+        entry = {
             "region": region,
             "days": days,
             "published": published_out,
-            "source_url": source_url,
-            "source_id": source_id,
-            "is_new": False,
-        }, i)
+            "link": page_url,
+        }
+        entries.append(entry)
 
-    return (None, i)
+    return entries
 
-def _parse_tbody(tb, source_id: int, source_url: str) -> List[Dict[str, Any]]:
-    rows = tb.find_all("tr", recursive=False) or tb.find_all("tr")
-    out: List[Dict[str, Any]] = []
-    i, n = 0, len(rows)
-    while i < n:
-        th = rows[i].find("th")
-        if th:
-            text = _clean_text(th)
-            if text.startswith("Warnings for"):
-                entry, next_i = _parse_region_block(rows, i, source_id, source_url)
-                if entry:
-                    out.append(entry)
-                i = next_i
-                continue
-        i += 1
-    return out
+# --------------------------------------------------------------------
+# Public entrypoint
+# --------------------------------------------------------------------
 
-def _parse_mc_html(html: str, source_id: int, source_url: str) -> List[Dict[str, Any]]:
-    soup = BeautifulSoup(html, "html.parser")
-    out: List[Dict[str, Any]] = []
-    tbodys = soup.find_all("tbody")
-    if tbodys:
-        for tb in tbodys:
-            out.extend(_parse_tbody(tb, source_id, source_url))
-    else:
-        for tbl in soup.find_all("table"):
-            if "Warnings for" in tbl.get_text(" ", strip=True):
-                out.extend(_parse_tbody(tbl, source_id, source_url))
-    return out
-
-async def _fetch_one(client, idx: int) -> List[Dict[str, Any]]:
-    url = IMD_MC.format(id=idx)
-    r = await client.get(url, timeout=20.0)
-    if r.status_code != 200 or not r.text:
-        return []
-    try:
-        return _parse_mc_html(r.text, idx, url)
-    except Exception:
-        return []
-
-async def _crawl_ids(client, ids: List[int]) -> List[Dict[str, Any]]:
-    import asyncio as _asyncio
-    sem = _asyncio.Semaphore(12)
-    async def one(i: int):
-        async with sem:
-            try:
-                return await _fetch_one(client, i)
-            except Exception:
-                return []
-    results: List[Dict[str, Any]] = []
-    chunks = await _asyncio.gather(*[one(i) for i in ids])
-    for ch in chunks:
-        results.extend(ch)
-    return results
-
-async def scrape_imd_current_orange_red_async(conf: dict, client) -> dict:
+def fetch(conf: Mapping[str, Any]) -> dict:
     """
-    Crawl sub-division pages (ids 1..34, excluding 32 & 33).
-    Emit ONE entry per region with days={"today":{...}, "tomorrow":{...}} (subset),
-    keeping only Orange (#FFA500) and Red (#FF0000).
-    Also de-duplicate by region, preferring the lowest source_id (31 over 32/33).
+    Returns {"entries": [...]} where each entry:
+      - region: str
+      - days: { "today": {...}, "tomorrow": {...} }
+      - published: Date-of-Issue (preferred) or newest day-date
+      - link: source URL
     """
-    ids = conf.get("ids") or DEFAULT_ID_RANGE
-    ids = [i for i in ids if i not in EXCLUDED_IDS]
-    entries = await _crawl_ids(client, ids)
-
-    # De-duplicate by region (keep lowest source id)
-    dedup: Dict[str, Dict[str, Any]] = {}
-    for e in entries:
-        region = (e.get("region") or "").strip()
-        if not region:
-            continue
-        sid = int(e.get("source_id") or 10**9)
-        if region not in dedup or sid < int(dedup[region].get("source_id") or 10**9):
-            dedup[region] = e
-
-    final_entries = list(dedup.values())
-    final_entries.sort(key=lambda e: (e.get("published") or "", e.get("region") or ""), reverse=True)
-
-    # DEBUG log
-    logging.warning(f"[IMD DEBUG] Parsed {len(final_entries)}")
-
-    return {"entries": final_entries, "source": {"type": "imd_mc_pages", "excluded_ids": sorted(EXCLUDED_IDS)}}
+    url = _norm(conf.get("url") or DEFAULT_SOURCE_URL)
+    r = requests.get(url, timeout=TIMEOUT)
+    r.raise_for_status()
+    entries = _parse_region_blocks(r.text, url)
+    # Keep only regions with at least today or tomorrow hazards (empty 'No warning' rows are filtered)
+    entries = [e for e in entries if e.get("days")]
+    return {"entries": entries}
