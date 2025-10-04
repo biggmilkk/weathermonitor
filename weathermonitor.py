@@ -83,7 +83,7 @@ for key, conf in FEED_CONFIG.items():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
     st.session_state.setdefault(f"{key}_last_seen_time", 0.0)
-    # NOTE: clear-on-close flow does not use *_pending_seen_time anymore, but we keep the key harmlessly
+    # NOTE: clear-on-close flow does not use *_pending_seen_time; keep harmlessly for compatibility
     st.session_state.setdefault(f"{key}_pending_seen_time", None)
     if conf["type"] == "rss_meteoalarm":
         st.session_state.setdefault(f"{key}_last_seen_alerts", tuple())
@@ -208,7 +208,8 @@ if to_fetch:
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
                 new_count = meteoalarm_unseen_active_instances(entries, last_seen_ids)
                 if new_count == 0:
-                    st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
+                    # nothing new; keep last_seen_alerts as-is
+                    pass
             elif conf["type"] in ("ec_async", "nws_grouped_compact"):
                 # EC/NWS 'seen' logic is handled inside their renderers
                 pass
@@ -253,7 +254,7 @@ st.markdown("---")
 
 
 # --------------------------------------------------------------------
-# Details panel — EC/NWS delegated; Meteoalarm/UK/JMA kept for now
+# Details panel — EC/NWS/Meteoalarm delegated; UK/JMA kept for now
 # --------------------------------------------------------------------
 def _render_feed_details(active, conf, entries):
     data_list = sorted(entries, key=lambda x: x.get("published", ""), reverse=True)
@@ -270,20 +271,17 @@ def _render_feed_details(active, conf, entries):
         RENDERERS["nws_grouped_compact"](entries, {**conf, "key": active})
         return
 
+    if conf["type"] == "rss_meteoalarm":
+        # Delegated to renderer. DO NOT commit 'seen' here.
+        # (Two-click contract: open shows; close commits. See button handler below.)
+        RENDERERS["rss_meteoalarm"](entries, {**conf, "key": active})
+        return
+
     if conf["type"] == "uk_grouped_compact":
         if not entries:
             st.info("No active warnings that meet thresholds at the moment.")
             return
         RENDERERS["uk_grouped_compact"](entries, {**conf, "key": active})
-        return
-
-    if conf["type"] == "rss_meteoalarm":
-        # Keep legacy controller logic for rendering; do NOT auto-commit seen here
-        seen_ids = set(st.session_state[f"{active}_last_seen_alerts"])
-        countries = [c for c in data_list if (c.get("alerts") or {}).get("today") or (c.get("alerts") or {}).get("tomorrow")]
-        countries = meteoalarm_mark_and_sort(countries, seen_ids)
-        for country in countries:
-            RENDERERS["rss_meteoalarm"](country, {**conf, "key": active})
         return
 
     if conf["type"] == "rss_jma":
@@ -418,13 +416,18 @@ for row in range(num_rows):
                     badge_col.markdown("&nbsp;", unsafe_allow_html=True)
 
             if clicked:
+                # ⚠️ TWO-CLICK CONTRACT (DO NOT CHANGE):
+                #   - Click 1 (open): NO 'pending seen' state, NO auto-commit anywhere.
+                #   - Click 2 (close): commit 'seen' NOW; badges clear on the subsequent rerun.
+                # If you add any 'pending' commits or commit inside detail rendering,
+                # you will break the two-click behavior and reintroduce "triple click".
                 is_open = (st.session_state.get("active_feed") == feed_key)
                 if is_open:
                     # CLOSING: commit "seen" now (clear-on-close behavior)
                     if conf["type"] == "rss_meteoalarm":
                         st.session_state[f"{feed_key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
                     elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                        # EC/NWS commit inside their renderers (per-bucket / mark-all)
+                        # EC/NWS commit inside their renderers (per-bucket / mark-all). Do nothing here.
                         pass
                     else:
                         # Timestamp-based (UK, JMA, generic)
@@ -432,7 +435,7 @@ for row in range(num_rows):
 
                     st.session_state["active_feed"] = None
                 else:
-                    # OPENING: do NOT set any pending seen markers
+                    # OPENING: do NOT set any pending seen markers. Just open.
                     st.session_state["active_feed"] = feed_key
 
                 _toggled = True
