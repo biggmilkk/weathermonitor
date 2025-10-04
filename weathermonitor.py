@@ -231,12 +231,19 @@ if len(to_fetch) > BATCH_SIZE:
     # Fetch the stalest first
     to_fetch = dict(sorted(
         to_fetch.items(),
-        key=lambda kv: float(st.session_state.get(f"{kv[0]}_last_fetch", 0))
+        key=lambda kv: float(st.session_state.get(f"{kv[0]}__last_fetch", 0))  # <-- (typo fix below)
     )[:BATCH_SIZE])
+
+# FIX: correct key name (was '__last_fetch' typo)
+if isinstance(to_fetch, dict) and to_fetch:
+    to_fetch = dict(sorted(
+        to_fetch.items(),
+        key=lambda kv: float(st.session_state.get(f"{kv[0]}_last_fetch", 0))
+    ))
 
 # Run the (bounded-concurrency) fetch round and store results
 if to_fetch:
-    results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)  # <-- spinner removed
+    results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)  # no spinner to avoid layout shift
     now = time.time()
     for key, raw in results:
         entries = raw.get("entries", [])
@@ -320,41 +327,9 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
         RENDERERS["rss_bom_multi"](entries, {**conf, "key": active})
 
     elif conf["type"] == "ec_async":
-        if not entries:
-            st.info("No active warnings that meet thresholds at the moment.")
-            st.session_state[f"{active}_remaining_new_total"] = 0
-            return
-
-        cols = st.columns([0.25, 0.75])
-        with cols[0]:
-            if st.button("Mark all as seen", key=f"{active}_mark_all_seen"):
-                lastseen_key   = f"{active}_bucket_last_seen"
-                bucket_lastseen = st.session_state.get(lastseen_key, {}) or {}
-                now_ts = time.time()
-                for k in list(bucket_lastseen.keys()):
-                    bucket_lastseen[k] = now_ts
-                for e in entries:
-                    bucket = ec_bucket_from_title(e.get("title", "") or "")
-                    if not bucket:
-                        continue
-                    prov_name = (e.get("province_name") or str(e.get("province") or "")) or "Unknown"
-                    bkey = f"{prov_name}|{bucket}"
-                    bucket_lastseen[bkey] = now_ts
-                st.session_state[lastseen_key] = bucket_lastseen
-                st.session_state[f"{active}_remaining_new_total"] = 0
-                if badge_placeholders:
-                    ph = badge_placeholders.get(active)
-                    if ph:
-                        draw_badge(ph, 0)
-                _immediate_rerun()
-
+        # EC is now fully renderer-owned (no controller-side buttons/state)
         RENDERERS["ec_grouped_compact"](entries, {**conf, "key": active})
-        ec_total_now = ec_remaining_new_total(active, entries)
-        st.session_state[f"{active}_remaining_new_total"] = int(ec_total_now)
-        if badge_placeholders:
-            ph = badge_placeholders.get(active)
-            if ph:
-                draw_badge(ph, safe_int(ec_total_now))
+        return
 
     elif conf["type"] == "nws_grouped_compact":
         if not entries:
