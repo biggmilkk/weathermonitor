@@ -1,4 +1,4 @@
-# meteoalarm.py
+# renderers/meteoalarm.py
 import html
 from collections import OrderedDict
 from datetime import timezone as _tz
@@ -71,10 +71,6 @@ def _day_level_type_count(by_day: dict, by_type: dict, day: str, level: str, typ
 def _render_country(country: dict):
     """Render a single country section, with striped header if any alert is new."""
     title = _norm(country.get("title") or country.get("name") or "")
-    # --- Special case: shorten overly long names ---
-    if title.strip().lower() == "united kingdom of great britain and northern ireland":
-        title = "United Kingdom"
-
     total_severe = 0
     counts = country.get("counts") or {}
     if isinstance(counts, dict):
@@ -124,11 +120,7 @@ def _render_country(country: dict):
                 unsafe_allow_html=True,
             )
 
-    # --- Fix region link handling for UK ---
     link = _norm(country.get("link"))
-    if title == "United Kingdom" and link.endswith("/GB"):
-        link = link[:-2] + "UK"
-
     if link and title:
         st.markdown(f"[Read more]({link})")
 
