@@ -22,7 +22,7 @@ from renderers import RENDERERS
 
 
 # --------------------------------------------------------------------
-# Helpers moved here (draw_badge + empty state)
+# Helpers (badges + empty state)
 # --------------------------------------------------------------------
 def draw_badge(placeholder, count: int):
     if not placeholder:
@@ -78,7 +78,7 @@ st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss_before // (1024*1024)} MB
 # State & Config
 # --------------------------------------------------------------------
 # Shorter UI tick so batches progress and clicks feel real-time.
-FETCH_TTL = 8  # seconds (previously 60)
+FETCH_TTL = 8  # seconds
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 
@@ -86,7 +86,7 @@ st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 def load_feeds():
     return get_feed_definitions()
 
-# Pass concurrency knob through to the fetcher; keep a tiny cache to avoid duplicate rounds in ultra-fast reruns.
+# Small cache to avoid duplicate rounds in very fast reruns; also passes concurrency knob through.
 @st.cache_data(ttl=2, show_spinner=False)
 def cached_fetch_round(to_fetch: dict, max_conc: int):
     return run_fetch_round(to_fetch, max_concurrency=max_conc)
@@ -103,12 +103,16 @@ for key, conf in FEED_CONFIG.items():
     st.session_state.setdefault(f"{key}_next_due", time.time() + random.uniform(0, 0.5 * ttl_init))
     if conf["type"] == "rss_meteoalarm":
         st.session_state.setdefault(f"{key}_last_seen_alerts", tuple())
+
 st.session_state.setdefault("last_refreshed", now)
 st.session_state.setdefault("active_feed", None)
 
 # one-shot flags for click-optimized UX
 st.session_state.setdefault("_suppress_fetch_once", False)
 st.session_state.setdefault("_schedule_quick_refresh", False)
+
+# NEW: cold-boot flag — first run must load ALL feeds up front
+st.session_state.setdefault("_cold_boot_completed", False)
 
 # After a click we schedule a single quick rerun in ~1.5s to perform the fetch without blocking the click-render.
 if st.session_state.get("_schedule_quick_refresh"):
@@ -165,23 +169,21 @@ def nws_remaining_new_total(feed_key: str, entries: list) -> int:
 
 
 # --------------------------------------------------------------------
-# Refresh (staggered + small batches using per-feed ttl + jitter)
+# Refresh (cold boot all-feeds, then staggered + small batches)
 # --------------------------------------------------------------------
 now = time.time()
 
-# Build the set of feeds that are due now, then take a small batch to avoid UI freezes.
-DUE = [k for k in FEED_CONFIG.keys() if now >= st.session_state.get(f"{k}_next_due", 0)]
-BATCH_SIZE = 8
-batch = sorted(DUE, key=lambda k: st.session_state.get(f"{k}_next_due", 0))[:BATCH_SIZE]
-to_fetch = {k: FEED_CONFIG[k] for k in batch}
-
-if to_fetch and not st.session_state.get("_suppress_fetch_once", False):
-    results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)
+# 0) Cold boot: FIRST load must fetch *all* feeds upfront
+if not st.session_state.get("_cold_boot_completed", False):
+    to_fetch = dict(FEED_CONFIG)  # all feeds
+    with st.spinner("Loading all feeds…"):
+        results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)
 
     for key, raw in results:
         entries = raw.get("entries", [])
         conf = FEED_CONFIG[key]
 
+        # feed-specific post-processing you already have
         if conf["type"] == "imd_current_orange_red":
             fp_key = f"{key}_fp_by_region"
             ts_key = f"{key}_ts_by_region"
@@ -195,19 +197,20 @@ if to_fetch and not st.session_state.get("_suppress_fetch_once", False):
                 prev_ts=prev_ts,
                 now_ts=now_ts,
             )
-
             st.session_state[fp_key] = fp_by_region
             st.session_state[ts_key] = ts_by_region
 
+        # store data
         st.session_state[f"{key}_data"] = entries
         st.session_state[f"{key}_last_fetch"] = now
         st.session_state["last_refreshed"] = now
 
-        # schedule next_due using feed ttl + jitter so sources don't re-sync
+        # schedule next_due using feed ttl + jitter so sources don't re-sync later
         ttl = int(FEED_CONFIG[key].get("ttl", 120))
         jitter = random.uniform(0, 0.25 * ttl)
         st.session_state[f"{key}_next_due"] = time.time() + ttl + jitter
 
+        # unseen counts and "seen" bookkeeping while active
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
@@ -227,13 +230,81 @@ if to_fetch and not st.session_state.get("_suppress_fetch_once", False):
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_time"] = now
 
+        # badge counts for grouped sources
         if conf["type"] == "ec_async":
             st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
         elif conf["type"] == "nws_grouped_compact":
             st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
 
-    # run GC once after the batch
+    st.session_state["_cold_boot_completed"] = True
     gc.collect()
+
+else:
+    # 1) Normal path: staggered + small batches using per-feed ttl + jitter
+    DUE = [k for k in FEED_CONFIG.keys() if now >= st.session_state.get(f"{k}_next_due", 0)]
+    BATCH_SIZE = 8
+    batch = sorted(DUE, key=lambda k: st.session_state.get(f"{k}_next_due", 0))[:BATCH_SIZE]
+    to_fetch = {k: FEED_CONFIG[k] for k in batch}
+
+    if to_fetch and not st.session_state.get("_suppress_fetch_once", False):
+        results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)
+
+        for key, raw in results:
+            entries = raw.get("entries", [])
+            conf = FEED_CONFIG[key]
+
+            if conf["type"] == "imd_current_orange_red":
+                fp_key = f"{key}_fp_by_region"
+                ts_key = f"{key}_ts_by_region"
+                prev_fp = dict(st.session_state.get(fp_key, {}) or {})
+                prev_ts = dict(st.session_state.get(ts_key, {}) or {})
+                now_ts  = time.time()
+
+                entries, fp_by_region, ts_by_region = compute_imd_timestamps(
+                    entries=entries,
+                    prev_fp=prev_fp,
+                    prev_ts=prev_ts,
+                    now_ts=now_ts,
+                )
+
+                st.session_state[fp_key] = fp_by_region
+                st.session_state[ts_key] = ts_by_region
+
+            st.session_state[f"{key}_data"] = entries
+            st.session_state[f"{key}_last_fetch"] = now
+            st.session_state["last_refreshed"] = now
+
+            # schedule next due (ttl + jitter)
+            ttl = int(FEED_CONFIG[key].get("ttl", 120))
+            jitter = random.uniform(0, 0.25 * ttl)
+            st.session_state[f"{key}_next_due"] = time.time() + ttl + jitter
+
+            if st.session_state.get("active_feed") == key:
+                if conf["type"] == "rss_meteoalarm":
+                    last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
+                    new_count = meteoalarm_unseen_active_instances(entries, last_seen_ids)
+                    if new_count == 0:
+                        st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
+                elif conf["type"] in ("ec_async", "nws_grouped_compact"):
+                    pass
+                elif conf["type"] == "uk_grouped_compact":
+                    last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
+                    _, new_count = compute_counts(entries, conf, last_seen_ts)
+                    if new_count == 0:
+                        st.session_state[f"{key}_last_seen_time"] = now
+                else:
+                    last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
+                    _, new_count = compute_counts(entries, conf, last_seen_ts)
+                    if new_count == 0:
+                        st.session_state[f"{key}_last_seen_time"] = now
+
+            if conf["type"] == "ec_async":
+                st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
+            elif conf["type"] == "nws_grouped_compact":
+                st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
+
+        # run GC once after the batch
+        gc.collect()
 
 # clear one-shot suppression so subsequent reruns can fetch again
 st.session_state["_suppress_fetch_once"] = False
@@ -384,7 +455,7 @@ def _render_feed_details(active, conf, entries, badge_placeholders=None):
 
 
 # --------------------------------------------------------------------
-# Desktop (buttons row + details) — 6 feeds/row, fixed widths, no-wrap
+# Desktop (buttons row + details)
 # --------------------------------------------------------------------
 if not FEED_CONFIG:
     st.info("No feeds configured.")
@@ -437,6 +508,12 @@ else:
     num_rows = seq_rows
 
 seq_iter = iter(items)
+
+def _immediate_rerun():
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
 
 for row in range(num_rows):
     col_widths = []
@@ -516,7 +593,7 @@ for row in range(num_rows):
                     else:
                         st.session_state[f"{feed_key}_pending_seen_time"] = time.time()
 
-                    # --- Click-optimized UX: render now, fetch right after without blocking ---
+                    # Click-optimized UX: render now, fetch right after without blocking
                     st.session_state["_suppress_fetch_once"] = True            # skip network on this immediate rerun
                     st.session_state[f"{feed_key}_next_due"] = time.time()     # prioritize this feed next round
                     st.session_state["_schedule_quick_refresh"] = True         # schedule one quick refresh in ~1.5s
