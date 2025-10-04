@@ -15,8 +15,8 @@ from computation import (
     compute_imd_timestamps,
     ec_remaining_new_total as ec_new_total,
     nws_remaining_new_total as nws_new_total,
-    # IMD clear-on-close helper (pure)
     snapshot_imd_seen,
+    meteoalarm_total_active_instances,
 )
 
 # Renderers registry (each feed owns its UI)
@@ -295,8 +295,7 @@ global_idx = 0
 
 def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
-        seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-        return meteoalarm_unseen_active_instances(entries, seen_ids)
+        return meteoalarm_total_active_instances(entries)
 
     if conf["type"] in ("ec_async", "ec_grouped_compact"):
         last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
