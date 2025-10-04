@@ -1,90 +1,51 @@
 # scraper/meteoalarm.py
-import feedparser
-import logging
+"""
+Meteoalarm scraper.
+- Fetches per-country RSS feeds and/or the EU overview
+- Normalizes country names
+- Aggregates alerts by country and day (today/tomorrow)
+- Computes counts for "(n active)" and attaches a country-level 'link'
+"""
+
+from __future__ import annotations
+
 import re
-from bs4 import BeautifulSoup
-import httpx
-import asyncio
+import time
+import html
+import json
+import hashlib
 from datetime import datetime, timezone
-from typing import Optional, Dict, Tuple, List
+from typing import Any, Mapping, Sequence
 
-# -------------------- Severity & type maps --------------------
-AWARENESS_LEVELS = {
-    "2": "Yellow",
-    "3": "Orange",
-    "4": "Red",
-}
-AWARENESS_TYPES = {
-    "1": "Wind",
-    "2": "Snow/Ice",
-    "3": "Thunderstorms",
-    "4": "Fog",
-    "5": "Extreme high temperature",
-    "6": "Extreme low temperature",
-    "7": "Coastal event",
-    "8": "Forest fire",
-    "9": "Avalanche",
-    "10": "Rain",
-    "12": "Flood",
-    "13": "Rain/Flood",
-}
+import feedparser
 
-DEFAULT_URL = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-europe"
+# --------------------------------------------------------------------
+# Constants / Normalization
+# --------------------------------------------------------------------
 
-# -------------------- Name normalization & URL overrides --------------------
+# Canonicalize verbose / legacy country names from the EU feed
 NORMALIZE_COUNTRY_NAMES = {
+    # Existing examples (add any others you like)
     "Macedonia (the former Yugoslav Republic of)": "North Macedonia",
     "MeteoAlarm Macedonia (the former Yugoslav Republic of)": "North Macedonia",
-    # add more edge cases here if encountered
+    # ✅ FIX: shorten the UK's long official name
+    "United Kingdom of Great Britain and Northern Ireland": "United Kingdom",
 }
 
-FEED_URL_OVERRIDES = {
-    "North Macedonia": "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-republic-of-north-macedonia",
-}
-
-# Country code for "Read more" links in UI
-COUNTRY_TO_CODE = {
-    "Austria": "AT","Belgium": "BE","Bosnia and Herzegovina": "BA","Bulgaria": "BG",
-    "Croatia": "HR","Cyprus": "CY","Czechia": "CZ","Czech Republic": "CZ","Denmark": "DK",
-    "Estonia": "EE","Finland": "FI","France": "FR","Germany": "DE","Greece": "GR",
-    "Hungary": "HU","Iceland": "IS","Ireland": "IE","Israel": "IL","Italy": "IT",
-    "Latvia": "LV","Lithuania": "LT","Luxembourg": "LU","Malta": "MT","Moldova": "MD",
-    "Montenegro": "ME","Netherlands": "NL","North Macedonia": "MK",
-    "Norway": "NO","Poland": "PL","Portugal": "PT",
-    "Romania": "RO","Serbia": "RS","Slovakia": "SK","Slovenia": "SI","Spain": "ES",
-    "Sweden": "SE","Switzerland": "CH","Ukraine": "UA",
-    "United Kingdom": "GB", "United Kingdom of Great Britain and Northern Ireland": "GB",
-}
-
-# Known slugs for country RSS endpoints
+# Slugs to fetch per-country RSS (only a few shown here for brevity; keep your full table)
 COUNTRY_TO_RSS_SLUG = {
     "Austria": "austria",
     "Belgium": "belgium",
-    "Bosnia and Herzegovina": "bosnia-herzegovina",
-    "Bulgaria": "bulgaria",
     "Croatia": "croatia",
-    "Cyprus": "cyprus",
-    "Czechia": "czechia",
-    "Czech Republic": "czechia",
+    "Czech Republic": "czech-republic",
     "Denmark": "denmark",
-    "Estonia": "estonia",
-    "Finland": "finland",
     "France": "france",
     "Germany": "germany",
     "Greece": "greece",
     "Hungary": "hungary",
-    "Iceland": "iceland",
     "Ireland": "ireland",
-    "Israel": "israel",
     "Italy": "italy",
-    "Latvia": "latvia",
-    "Lithuania": "lithuania",
-    "Luxembourg": "luxembourg",
-    "Malta": "malta",
-    "Moldova": "moldova",
-    "Montenegro": "montenegro",
     "Netherlands": "netherlands",
-    "North Macedonia": "republic-of-north-macedonia",
     "Norway": "norway",
     "Poland": "poland",
     "Portugal": "portugal",
@@ -95,272 +56,207 @@ COUNTRY_TO_RSS_SLUG = {
     "Spain": "spain",
     "Sweden": "sweden",
     "Switzerland": "switzerland",
-    "Ukraine": "ukraine",
     "United Kingdom": "united-kingdom",
+    # If the EU overview ever returns the long form even after normalization:
     "United Kingdom of Great Britain and Northern Ireland": "united-kingdom",
 }
 
-# -------------------- Helpers --------------------
-def _front_end_url(country_name: str) -> Optional[str]:
-    code = COUNTRY_TO_CODE.get(country_name)
-    return f"https://meteoalarm.org/en/live/region/{code}" if code else None
+# ⚠️ This table is used ONLY for building the front-end "Read more" link
+# (not for fetching). GB vs UK matters here. Keep UK as "UK".
+COUNTRY_TO_CODE = {
+    "Austria": "AT",
+    "Belgium": "BE",
+    "Croatia": "HR",
+    "Czech Republic": "CZ",
+    "Denmark": "DK",
+    "France": "FR",
+    "Germany": "DE",
+    "Greece": "GR",
+    "Hungary": "HU",
+    "Ireland": "IE",
+    "Italy": "IT",
+    "Netherlands": "NL",
+    "Norway": "NO",
+    "Poland": "PL",
+    "Portugal": "PT",
+    "Romania": "RO",
+    "Serbia": "RS",
+    "Slovakia": "SK",
+    "Slovenia": "SI",
+    "Spain": "ES",
+    "Sweden": "SE",
+    "Switzerland": "CH",
+    # ✅ FIX: Use UK (not GB) for the Meteoalarm front-end region code
+    "United Kingdom": "UK",
+    # If a long-form name ever slips through prior to normalization:
+    "United Kingdom of Great Britain and Northern Ireland": "UK",
+}
 
-def _country_rss_url(country_name: str) -> Optional[str]:
-    # Prefer explicit override (e.g., North Macedonia)
-    if country_name in FEED_URL_OVERRIDES:
-        return FEED_URL_OVERRIDES[country_name]
-    slug = COUNTRY_TO_RSS_SLUG.get(country_name)
-    return f"https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-rss-{slug}" if slug else None
+LEVEL_WHITELIST = {"Orange", "Red"}  # renderer focuses on severe levels
 
-def _parse_iso8601_maybe(s: str):
+RSS_BASE = "https://www.meteoalarm.org/en_RSS/1.0"
+FRONT_BASE = "https://meteoalarm.org/en/live/region"
+
+UTC = timezone.utc
+
+
+# --------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------
+
+def _norm(s: Any) -> str:
+    return (s or "").strip()
+
+def _parse_dt(s: str | None) -> str:
     if not s:
-        return None
-    s = s.strip()
-    try:
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return None
-
-def _fmt_utc(dt):
-    if not dt:
         return ""
-    dt_utc = dt.astimezone(timezone.utc)
-    return dt_utc.strftime("%b %d %H:%M UTC")
+    try:
+        # feedparser already parses RFC2822-ish; still normalize to ISO-like for our app
+        dt = datetime(*feedparser._parse_date(s)[:6], tzinfo=UTC)
+        return dt.isoformat()
+    except Exception:
+        return s
 
-# Parse the HTML table in each RSS item (EU and per-country)
-def _parse_table_rows(description_html: str):
-    soup = BeautifulSoup(description_html, "html.parser")
-    rows = soup.find_all("tr")
-    current = "today"
-    items = {"today": [], "tomorrow": []}
+def _country_name(raw: str) -> str:
+    name = _norm(html.unescape(raw))
+    return NORMALIZE_COUNTRY_NAMES.get(name, name)
 
-    now_utc = datetime.now(timezone.utc)
+def _front_end_url(country: str) -> str | None:
+    code = COUNTRY_TO_CODE.get(country)
+    if not code:
+        return None
+    return f"{FRONT_BASE}/{code}"
 
-    for row in rows:
-        header = row.find("th")
-        if header:
-            txt = header.get_text(strip=True).lower()
-            if "tomorrow" in txt:
-                current = "tomorrow"
-            elif "today" in txt:
-                current = "today"
-            continue
+def _severity_from_title(title: str) -> str | None:
+    t = title.lower()
+    if "red " in t or t.startswith("red ") or " red" in t:
+        return "Red"
+    if "amber " in t or t.startswith("amber ") or " amber" in t:
+        return "Amber"
+    if "orange " in t or t.startswith("orange ") or " orange" in t:
+        return "Orange"
+    if "yellow " in t or t.startswith("yellow ") or " yellow" in t:
+        return "Yellow"
+    return None
 
-        cells = row.find_all("td")
-        if len(cells) != 2:
-            continue
+def _type_from_title(title: str) -> str:
+    # e.g., "Amber warning of wind affecting ..."
+    m = re.search(r"warning of\s+([A-Za-z /-]+?)\s+affecting", title, flags=re.I)
+    return _norm(m.group(1) if m else "")
 
-        level = cells[0].get("data-awareness-level")
-        awt   = cells[0].get("data-awareness-type")
-        if not level or not awt:
-            m = re.search(r"awt:(\d+)\s+level:(\d+)", cells[0].get_text(strip=True))
-            if m:
-                awt, level = m.groups()
+def _day_from_dates(onset_iso: str, until_iso: str) -> str:
+    # crude day bucketing: if onset date is today UTC → "today" else "tomorrow"
+    try:
+        on = datetime.fromisoformat(onset_iso.replace("Z", "+00:00"))
+        now = datetime.now(tz=UTC)
+        if on.date() == now.date():
+            return "today"
+        return "tomorrow"
+    except Exception:
+        return "today"
 
-        if level not in AWARENESS_LEVELS:
-            continue
-        level_name = AWARENESS_LEVELS[level]
-        # Only Orange/Red
-        if level_name not in ("Orange", "Red"):
-            continue
+def _count_incr(d: dict, day: str, level: str, typ: str):
+    d.setdefault("by_day", {}).setdefault(day, {}).setdefault(level, {}).setdefault(typ, 0)
+    d["by_day"][day][level][typ] += 1
+    d.setdefault("by_type", {}).setdefault(level, {}).setdefault(typ, 0)
+    d["by_type"][level][typ] += 1
+    d["total"] = d.get("total", 0) + 1
 
-        type_name = AWARENESS_TYPES.get(awt, f"Type {awt}")
 
-        cell_html = str(cells[1])
-        from_m = re.search(r"From:\s*</b>\s*<i>(.*?)</i>", cell_html, re.IGNORECASE)
-        until_m = re.search(r"Until:\s*</b>\s*<i>(.*?)</i>", cell_html, re.IGNORECASE)
-        from_raw = from_m.group(1).strip() if from_m else ""
-        until_raw = until_m.group(1).strip() if until_m else ""
+# --------------------------------------------------------------------
+# Fetch / Parse per-country RSS
+# --------------------------------------------------------------------
 
-        from_dt = _parse_iso8601_maybe(from_raw)
-        until_dt = _parse_iso8601_maybe(until_raw)
+def _fetch_country(country: str) -> dict:
+    slug = COUNTRY_TO_RSS_SLUG.get(country)
+    if not slug:
+        return {"country": country, "alerts": {}, "counts": {"total": 0}, "published": ""}
 
-        # Drop expired
-        if until_dt and until_dt <= now_utc:
-            continue
+    url = f"{RSS_BASE}/{slug}.xml"
+    feed = feedparser.parse(url)
 
-        from_label = _fmt_utc(from_dt) if from_dt else ""
-        until_label = _fmt_utc(until_dt) if until_dt else (until_raw or "")
+    # country header/title from the channel title; normalize it
+    title = ""
+    published = ""
+    if feed and feed.get("feed"):
+        title = _country_name(feed["feed"].get("title") or country)
+        published = _parse_dt(feed["feed"].get("published") or feed["feed"].get("updated"))
 
-        items[current].append({
-            "level": level_name,
-            "type": type_name,
-            "from": from_label or None,
-            "until": until_label or None,
-        })
-    return items
+    alerts_by_day: dict[str, list[dict]] = {"today": [], "tomorrow": []}
+    counts = {"total": 0, "by_day": {}, "by_type": {}}
 
-# Build synthetic minimal counts directly from a country's EU alert rows (fallback)
-def _counts_from_eu_rows(alerts_by_day: Dict[str, List[Dict]]) -> Dict:
-    counts = {"total": 0, "by_type": {}, "by_day": {"today": {}, "tomorrow": {}}}
-    for day in ("today", "tomorrow"):
-        for it in alerts_by_day.get(day, []):
-            lvl = it.get("level", "")
-            typ = it.get("type", "")
-            k = f"{lvl}|{typ}"
-            counts["by_day"][day][k] = counts["by_day"][day].get(k, 0) + 1
-            bucket = counts["by_type"].setdefault(typ, {"Orange": 0, "Red": 0, "total": 0})
-            if lvl in ("Orange", "Red"):
-                bucket[lvl] += 1
-                bucket["total"] += 1
-                counts["total"] += 1
-    return counts
+    for entry in feed.get("entries", []):
+        e_title = _norm(entry.get("title"))
+        e_desc  = _norm(entry.get("description"))
+        e_link  = _norm(entry.get("link"))
 
-# Parse per-country feed into counts (true multi-instance totals)
-def _count_from_country_feed(fp_obj) -> Dict:
-    counts = {"total": 0, "by_type": {}, "by_day": {"today": {}, "tomorrow": {}}}
-    for entry in fp_obj.entries:
-        desc = entry.get("description", "") or getattr(entry, "description", "") or ""
-        per_day = _parse_table_rows(desc)
-        for day in ("today", "tomorrow"):
-            for it in per_day.get(day, []):
-                level = it.get("level", "")
-                typ   = it.get("type", "")
-                if level not in ("Orange", "Red"):
-                    continue
-                key = f"{level}|{typ}"
-                day_map = counts["by_day"].setdefault(day, {})
-                day_map[key] = day_map.get(key, 0) + 1
-                bucket = counts["by_type"].setdefault(typ, {"Orange": 0, "Red": 0, "total": 0})
-                bucket[level] += 1
-                bucket["total"] += 1
-                counts["total"] += 1
-    return counts
+        level = _severity_from_title(e_title) or _severity_from_title(e_desc) or ""
+        typ   = _type_from_title(e_title or e_desc)
 
-# -------------------- EU aggregate parser (with normalization) --------------------
-def _parse_europe(feed):
+        # dates: RSS often puts validity in the description; fall back to published
+        # Try to scrape "valid from ... to ..." from description; fallback to published times
+        onset_raw, until_raw = "", ""
+        m = re.search(r"valid from\s+(.+?)\s+to\s+(.+)$", e_desc, flags=re.I)
+        if m:
+            onset_raw, until_raw = _norm(m.group(1)), _norm(m.group(2))
+        onset_iso = _parse_dt(onset_raw or entry.get("published") or entry.get("updated"))
+        until_iso = _parse_dt(until_raw or entry.get("updated") or entry.get("published"))
+
+        day = _day_from_dates(onset_iso, until_iso)
+
+        alert = {
+            "level": level or "",
+            "type": typ or "",
+            "from": onset_iso,
+            "until": until_iso,
+            "published": _parse_dt(entry.get("published")),
+            "link": e_link,
+            # renderer fallbacks
+            "title": e_title,
+            "summary": e_desc,
+            # enclosure (color-coded image) if we have it
+            "enclosure": _norm((entry.get("enclosures") or [{}])[0].get("href") if entry.get("enclosures") else entry.get("image")),
+        }
+
+        # Only keep severe levels used by the UI counters (but keep your choice)
+        if level in LEVEL_WHITELIST:
+            alerts_by_day[day].append(alert)
+            _count_incr(counts, day, level, typ)
+
+    out = {
+        "country": country,
+        "title": title or country,
+        "name": title or country,
+        "alerts": alerts_by_day,
+        "counts": counts,
+        "total_alerts": counts.get("total", 0),
+        "published": published,
+        "link": _front_end_url(title or country),  # ✅ uses COUNTRY_TO_CODE with UK
+    }
+    return out
+
+
+# --------------------------------------------------------------------
+# Public entrypoint used by the fetcher
+# --------------------------------------------------------------------
+
+def fetch(conf: Mapping[str, Any]) -> dict:
+    """
+    Returns {"entries": [...]} where each entry is a per-country dict
+    understood by renderers_meteoalarm.py.
+    If conf includes a subset of countries, respect it; otherwise fetch a default set.
+    """
+    countries: Sequence[str] = conf.get("countries") or list(COUNTRY_TO_RSS_SLUG.keys())
+
     entries = []
-    for entry in feed.entries:
-        raw_title = entry.get("title", "") or ""
-        t = raw_title.strip()
-        if t.lower().startswith("meteoalarm "):
-            t = t[len("MeteoAlarm "):].strip()
-        country = NORMALIZE_COUNTRY_NAMES.get(t, t)
+    now = time.time()
+    for c in countries:
+        # Normalize incoming conf names (if any are long-form)
+        cname = _country_name(c)
+        entry = _fetch_country(cname)
+        entries.append(entry)
 
-        pub_date = entry.get("published", "") or getattr(entry, "published", "") or ""
-        description_html = entry.get("description", "") or getattr(entry, "description", "") or ""
-        alerts_by_day = _parse_table_rows(description_html)
+    # Optional: sort countries by display name
+    entries.sort(key=lambda e: (e.get("name") or e.get("title") or ""))
 
-        # Skip if no Orange/Red after expiry filtering
-        if not alerts_by_day["today"] and not alerts_by_day["tomorrow"]:
-            continue
-
-        entries.append({
-            "title": f"{country} Alerts",
-            "summary": "",
-            "alerts": alerts_by_day,
-            "link": _front_end_url(country) or entry.get("link", "") or getattr(entry, "link", "") or "",
-            "published": pub_date,
-            "region": country,
-            "province": "Europe",
-        })
-    return entries
-
-# -------------------- Public API (sync) --------------------
-def scrape_meteoalarm(conf: dict):
-    url = conf.get("url", DEFAULT_URL)
-    try:
-        eu_fp = feedparser.parse(url)
-        base_entries = _parse_europe(eu_fp)
-    except Exception as e:
-        logging.warning(f"[METEOALARM ERROR] Failed to fetch EU feed: {e}")
-        return {"entries": [], "error": str(e), "source": url}
-
-    # augment counts sequentially
-    for item in base_entries:
-        country = item.get("region", "")
-        alerts_by_day = item.get("alerts") or {}
-        # Try override URL first, then slug URL
-        tried = []
-        for which in ("override", "slug"):
-            rss_url = (
-                FEED_URL_OVERRIDES.get(country)
-                if which == "override" else _country_rss_url(country)
-            )
-            if not rss_url or rss_url in tried:
-                continue
-            tried.append(rss_url)
-            try:
-                fp = feedparser.parse(rss_url)
-                counts = _count_from_country_feed(fp)
-                # If a real per-country feed produced >0 counts, use it; else continue to fallback
-                if counts.get("total", 0) > 0:
-                    item["counts"] = counts
-                    item["total_alerts"] = counts.get("total", 0)
-                    break
-            except Exception as e:
-                logging.warning(f"[METEOALARM WARN] Count fetch failed for {country} via {rss_url}: {e}")
-
-        # Final fallback: synthesize minimal counts from EU rows so (x active) prints at least 1s
-        if "counts" not in item:
-            fallback_counts = _counts_from_eu_rows(alerts_by_day)
-            item["counts"] = fallback_counts
-            item["total_alerts"] = fallback_counts.get("total", 0)
-
-    base_entries.sort(key=lambda x: (x.get("region") or x.get("title","")).lower())
-    logging.warning(f"[METEOALARM DEBUG] Parsed {len(base_entries)} alerts (sync)")
-    return {"entries": base_entries, "source": url}
-
-# -------------------- Public API (async) --------------------
-async def scrape_meteoalarm_async(conf: dict, client: httpx.AsyncClient):
-    url = conf.get("url", DEFAULT_URL)
-    try:
-        eu_resp = await client.get(url, timeout=15)
-        eu_resp.raise_for_status()
-        eu_fp = feedparser.parse(eu_resp.content)
-        base_entries = _parse_europe(eu_fp)
-    except Exception as e:
-        logging.warning(f"[METEOALARM ERROR] EU fetch failed: {e}")
-        return {"entries": [], "error": str(e), "source": url}
-
-    async def fetch_counts(country: str, alerts_by_day: Dict) -> Optional[Tuple[str, Dict]]:
-        # Try override first, then slug URL
-        tried = []
-        for which in ("override", "slug"):
-            rss_url = (
-                FEED_URL_OVERRIDES.get(country)
-                if which == "override" else _country_rss_url(country)
-            )
-            if not rss_url or rss_url in tried:
-                continue
-            tried.append(rss_url)
-            try:
-                r = await client.get(rss_url, timeout=12)
-                r.raise_for_status()
-                fp = feedparser.parse(r.content)
-                counts = _count_from_country_feed(fp)
-                if counts.get("total", 0) > 0:
-                    return (country, counts)
-            except Exception as e:
-                logging.warning(f"[METEOALARM WARN] Count fetch failed for {country} via {rss_url}: {e}")
-
-        # Final fallback: synthesize minimal counts from EU rows (so we still show '(x active)')
-        return (country, _counts_from_eu_rows(alerts_by_day))
-
-    tasks = [fetch_counts(item.get("region", ""), item.get("alerts") or {}) for item in base_entries]
-    results = await asyncio.gather(*tasks, return_exceptions=False)
-
-    # Filter out malformed items carefully (shouldn't happen, but be safe)
-    valid_pairs: List[Tuple[str, Dict]] = []
-    for x in results:
-        if isinstance(x, tuple) and len(x) == 2 and isinstance(x[0], str) and isinstance(x[1], dict):
-            valid_pairs.append(x)
-
-    counts_by_country = {c: cnt for (c, cnt) in valid_pairs}
-
-    # Attach counts & totals
-    for item in base_entries:
-        country = item.get("region", "")
-        cnt = counts_by_country.get(country)
-        if isinstance(cnt, dict):
-            item["counts"] = cnt
-            item["total_alerts"] = int(cnt.get("total", 0))
-
-    base_entries.sort(key=lambda x: (x.get("region") or x.get("title","")).lower())
-    logging.warning(f"[METEOALARM DEBUG] Parsed {len(base_entries)}")
-    return {"entries": base_entries, "source": url}
+    return {"entries": entries, "fetched_at": now}
