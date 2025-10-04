@@ -15,7 +15,7 @@ from computation import (
     compute_imd_timestamps,
     ec_remaining_new_total as ec_new_total,
     nws_remaining_new_total as nws_new_total,
-    # ▼ ADDED: clear-on-close helper for IMD
+    # IMD clear-on-close helper (pure)
     snapshot_imd_seen,
 )
 
@@ -34,6 +34,41 @@ def _immediate_rerun():
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
+
+def commit_seen_for_feed(prev_key: str):
+    """
+    Treat 'switching away' from a feed as a close for the previous feed.
+    This mirrors the explicit close branch, so badges clear when you open another feed.
+    """
+    if not prev_key:
+        return
+    conf = FEED_CONFIG.get(prev_key)
+    if not conf:
+        return
+
+    entries = st.session_state.get(f"{prev_key}_data", [])
+
+    if conf["type"] == "rss_meteoalarm":
+        # Snapshot IDs so unseen count drops to 0 on next rerun
+        st.session_state[f"{prev_key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
+
+    elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact"):
+        # EC/NWS commit inside their renderers (per-bucket / per-event). Do nothing here.
+        pass
+
+    elif conf["type"] == "imd_current_orange_red":
+        # Snapshot fingerprints AND clear flags immediately
+        fp_key = f"{prev_key}_fp_by_region"
+        ts_key = f"{prev_key}_ts_by_region"
+        fp_by_region, ts_by_region, cleared = snapshot_imd_seen(entries, now_ts=time.time())
+        st.session_state[fp_key] = fp_by_region
+        st.session_state[ts_key] = ts_by_region
+        st.session_state[f"{prev_key}_data"] = cleared
+        st.session_state[f"{prev_key}_last_seen_time"] = time.time()
+
+    else:
+        # Timestamp-based feeds (UK, CMA, JMA, PAGASA, etc.)
+        st.session_state[f"{prev_key}_last_seen_time"] = time.time()
 
 
 # --------------------------------------------------------------------
@@ -84,7 +119,6 @@ for key, conf in FEED_CONFIG.items():
     st.session_state.setdefault(f"{key}_data", [])
     st.session_state.setdefault(f"{key}_last_fetch", 0)
     st.session_state.setdefault(f"{key}_last_seen_time", 0.0)
-    # NOTE: clear-on-close flow does not use *_pending_seen_time; key retained harmlessly
     st.session_state.setdefault(f"{key}_pending_seen_time", None)
     if conf["type"] == "rss_meteoalarm":
         st.session_state.setdefault(f"{key}_last_seen_alerts", tuple())
@@ -100,7 +134,6 @@ if not do_cold_boot:
     do_cold_boot = all(len(st.session_state.get(f"{k}_data", [])) == 0 for k in FEED_CONFIG)
 
 if do_cold_boot:
-    # fetch everything at once (no BATCH_SIZE cap, no group filter)
     all_results = cached_fetch_round(FEED_CONFIG, MAX_CONCURRENCY)
     now_ts = time.time()
     for key, raw in all_results:
@@ -127,14 +160,12 @@ if do_cold_boot:
 # --------------------------------------------------------------------
 # Minute-group scheduler (fetch ONLY on the timer tick)
 # --------------------------------------------------------------------
-# Detect real minute ticks so click reruns don't trigger network calls
-current_minute_index = int(time.time() // 60)              # monotonically increasing minute number
+current_minute_index = int(time.time() // 60)
 prev_minute_index = st.session_state.get("_last_minute_index")
 is_timer_tick = (prev_minute_index != current_minute_index)
 st.session_state["_last_minute_index"] = current_minute_index
 
-# 1..4 within a rolling 4-minute window (for "minute 1/2/3/4" semantics)
-minute_in_cycle_4 = (current_minute_index % 4) + 1  # => 1,2,3,4 repeating
+minute_in_cycle_4 = (current_minute_index % 4) + 1  # 1..4
 
 def group_is_due(group_code: str, minute_1_to_4: int) -> bool:
     g = (group_code or "g1").lower()
@@ -145,16 +176,14 @@ def group_is_due(group_code: str, minute_1_to_4: int) -> bool:
     if g == "g4_2":      return minute_1_to_4 == 2
     if g == "g4_3":      return minute_1_to_4 == 3
     if g == "g4_4":      return minute_1_to_4 == 4
-    return True  # default safe
+    return True
 
-# Minimum spacing (seconds) per group — ensures we never refetch too early
 GROUP_MIN_SPACING = {
     "g1": 60,
     "g2_even": 120, "g2_odd": 120,
     "g4_1": 240, "g4_2": 240, "g4_3": 240, "g4_4": 240,
 }
 
-# Build the fetch set ONLY on timer ticks
 to_fetch = {}
 if is_timer_tick:
     now = time.time()
@@ -163,21 +192,18 @@ if is_timer_tick:
         if group_is_due(grp, minute_in_cycle_4):
             last = float(st.session_state.get(f"{key}_last_fetch", 0))
             min_gap = GROUP_MIN_SPACING.get(grp, 60)
-            if (now - last) >= (min_gap - 1):  # small tolerance
+            if (now - last) >= (min_gap - 1):
                 to_fetch[key] = conf
 
-# Optional safety valve if one minute gets heavy
 BATCH_SIZE = 10
 if len(to_fetch) > BATCH_SIZE:
-    # Fetch the stalest first
     to_fetch = dict(sorted(
         to_fetch.items(),
         key=lambda kv: float(st.session_state.get(f"{kv[0]}_last_fetch", 0))
     )[:BATCH_SIZE])
 
-# Run the (bounded-concurrency) fetch round and store results
 if to_fetch:
-    results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)  # no spinner to avoid layout shift
+    results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)
     now = time.time()
     for key, raw in results:
         entries = raw.get("entries", [])
@@ -209,9 +235,8 @@ if to_fetch:
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
                 new_count = meteoalarm_unseen_active_instances(entries, last_seen_ids)
                 if new_count == 0:
-                    pass  # keep last_seen_alerts as-is
+                    pass
             elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact"):
-                # EC/NWS 'seen' logic is handled inside their renderers (per-bucket / per-event).
                 pass
             elif conf["type"] == "uk_grouped_compact":
                 last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
@@ -223,20 +248,6 @@ if to_fetch:
                 _, new_count = compute_counts(entries, conf, last_seen_ts)
                 if new_count == 0:
                     st.session_state[f"{key}_last_seen_time"] = now
-
-        # NOTE: We no longer rely on a cached "{key}_remaining_new_total".
-        # Leaving the old writes here commented-out as a reminder:
-        #
-        # if conf["type"] in ("ec_async", "ec_grouped_compact"):
-        #     last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
-        #     st.session_state[f"{key}_remaining_new_total"] = ec_new_total(
-        #         entries, last_seen_bkey_map=last_map
-        #     )
-        # elif conf["type"] == "nws_grouped_compact":
-        #     last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
-        #     st.session_state[f"{key}_remaining_new_total"] = nws_new_total(
-        #         entries, last_seen_bkey_map=last_map
-        #     )
 
     gc.collect()
 
@@ -283,7 +294,6 @@ _toggled = False
 global_idx = 0
 
 def _new_count_for_feed(key, conf, entries):
-    # Compute EC/NWS badges FRESH each rerun from entries + current bucket map
     if conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
         return meteoalarm_unseen_active_instances(entries, seen_ids)
@@ -305,7 +315,6 @@ def _new_count_for_feed(key, conf, entries):
     _, new_count = compute_counts(entries, conf, seen_ts)
     return new_count
 
-# compute number of rows (pinned layout + sequential fill)
 seq_rows = (len(items) + MAX_BTNS_PER_ROW - 1) // MAX_BTNS_PER_ROW
 if FEED_POSITIONS:
     pinned_rows = max(r for r, _ in FEED_POSITIONS.values()) + 1
@@ -365,36 +374,21 @@ for row in range(num_rows):
                     badge_col.markdown("&nbsp;", unsafe_allow_html=True)
 
             if clicked:
-                # ⚠️ TWO-CLICK CONTRACT (DO NOT CHANGE):
-                #   - Click 1 (open): NO 'pending seen' state, NO auto-commit anywhere.
-                #   - Click 2 (close): commit 'seen' NOW; badges clear on the subsequent rerun.
-                # If you add any 'pending' commits or commit inside detail rendering,
-                # you will break the two-click behavior and reintroduce "triple click".
+                # TWO-CLICK CONTRACT:
+                # - Click 1 (open): open the feed.
+                # - Click 2 (close): commit 'seen' now.
                 is_open = (st.session_state.get("active_feed") == feed_key)
                 if is_open:
-                    # CLOSING: commit "seen" now (clear-on-close behavior)
-                    if conf["type"] == "rss_meteoalarm":
-                        st.session_state[f"{feed_key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                    elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact"):
-                        # EC/NWS commit inside their renderers (per-bucket / per-event). Do nothing here.
-                        pass
-                    elif conf["type"] == "imd_current_orange_red":
-                        # ▼ ADDED: IMD special-case — snapshot fingerprints and clear flags immediately
-                        fp_key = f"{feed_key}_fp_by_region"
-                        ts_key = f"{feed_key}_ts_by_region"
-                        fp_by_region, ts_by_region, cleared = snapshot_imd_seen(entries, now_ts=time.time())
-                        st.session_state[fp_key] = fp_by_region
-                        st.session_state[ts_key] = ts_by_region
-                        st.session_state[f"{feed_key}_data"] = cleared
-                        # keep top-level badge semantics aligned
-                        st.session_state[f"{feed_key}_last_seen_time"] = time.time()
-                    else:
-                        # Timestamp-based (UK, JMA, generic)
-                        st.session_state[f"{feed_key}_last_seen_time"] = time.time()
-
+                    # CLOSING: commit 'seen' for this feed
+                    commit_seen_for_feed(feed_key)
                     st.session_state["active_feed"] = None
                 else:
-                    # OPENING: do NOT set any pending seen markers. Just open.
+                    # OPENING A DIFFERENT FEED:
+                    # commit 'seen' for the previously open feed (auto-clear on switch)
+                    prev_active = st.session_state.get("active_feed")
+                    if prev_active and prev_active != feed_key:
+                        commit_seen_for_feed(prev_active)
+
                     st.session_state["active_feed"] = feed_key
 
                 _toggled = True
@@ -416,7 +410,7 @@ if active:
     st.markdown("---")
     conf = FEED_CONFIG[active]
     entries = st.session_state[f"{active}_data"]
-    # ⚠️ Controller stays UI-only. Two-click contract: do NOT commit "seen" here.
+    # Controller stays UI-only. Do NOT commit 'seen' here.
     renderer = RENDERERS.get(conf["type"])
     if renderer:
         renderer(entries, {**conf, "key": active})
