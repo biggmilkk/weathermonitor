@@ -1,4 +1,4 @@
-# renderers_meteoalarm.py
+# meteoalarm.py
 import html
 from collections import OrderedDict
 from datetime import timezone as _tz
