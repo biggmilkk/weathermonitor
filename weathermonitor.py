@@ -15,6 +15,8 @@ from computation import (
     compute_imd_timestamps,
     ec_remaining_new_total as ec_new_total,
     nws_remaining_new_total as nws_new_total,
+    # ▼ ADDED: clear-on-close helper for IMD
+    snapshot_imd_seen,
 )
 
 # Renderers registry (each feed owns its UI)
@@ -376,6 +378,16 @@ for row in range(num_rows):
                     elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact"):
                         # EC/NWS commit inside their renderers (per-bucket / per-event). Do nothing here.
                         pass
+                    elif conf["type"] == "imd_current_orange_red":
+                        # ▼ ADDED: IMD special-case — snapshot fingerprints and clear flags immediately
+                        fp_key = f"{feed_key}_fp_by_region"
+                        ts_key = f"{feed_key}_ts_by_region"
+                        fp_by_region, ts_by_region, cleared = snapshot_imd_seen(entries, now_ts=time.time())
+                        st.session_state[fp_key] = fp_by_region
+                        st.session_state[ts_key] = ts_by_region
+                        st.session_state[f"{feed_key}_data"] = cleared
+                        # keep top-level badge semantics aligned
+                        st.session_state[f"{feed_key}_last_seen_time"] = time.time()
                     else:
                         # Timestamp-based (UK, JMA, generic)
                         st.session_state[f"{feed_key}_last_seen_time"] = time.time()
