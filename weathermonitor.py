@@ -204,59 +204,58 @@ if len(to_fetch) > BATCH_SIZE:
 
 # Run the (bounded-concurrency) fetch round and store results
 if to_fetch:
-    with st.spinner("Updating feeds…"):
-        results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)
-        now = time.time()
-        for key, raw in results:
-            entries = raw.get("entries", [])
-            conf = FEED_CONFIG[key]
+    results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)  # <-- spinner removed
+    now = time.time()
+    for key, raw in results:
+        entries = raw.get("entries", [])
+        conf = FEED_CONFIG[key]
 
-            if conf["type"] == "imd_current_orange_red":
-                fp_key = f"{key}_fp_by_region"
-                ts_key = f"{key}_ts_by_region"
-                prev_fp = dict(st.session_state.get(fp_key, {}) or {})
-                prev_ts = dict(st.session_state.get(ts_key, {}) or {})
-                now_ts  = time.time()
+        if conf["type"] == "imd_current_orange_red":
+            fp_key = f"{key}_fp_by_region"
+            ts_key = f"{key}_ts_by_region"
+            prev_fp = dict(st.session_state.get(fp_key, {}) or {})
+            prev_ts = dict(st.session_state.get(ts_key, {}) or {})
+            now_ts  = time.time()
 
-                entries, fp_by_region, ts_by_region = compute_imd_timestamps(
-                    entries=entries,
-                    prev_fp=prev_fp,
-                    prev_ts=prev_ts,
-                    now_ts=now_ts,
-                )
+            entries, fp_by_region, ts_by_region = compute_imd_timestamps(
+                entries=entries,
+                prev_fp=prev_fp,
+                prev_ts=prev_ts,
+                now_ts=now_ts,
+            )
 
-                st.session_state[fp_key] = fp_by_region
-                st.session_state[ts_key] = ts_by_region
+            st.session_state[fp_key] = fp_by_region
+            st.session_state[ts_key] = ts_by_region
 
-            st.session_state[f"{key}_data"] = entries
-            st.session_state[f"{key}_last_fetch"] = now
-            st.session_state["last_refreshed"] = now
+        st.session_state[f"{key}_data"] = entries
+        st.session_state[f"{key}_last_fetch"] = now
+        st.session_state["last_refreshed"] = now
 
-            if st.session_state.get("active_feed") == key:
-                if conf["type"] == "rss_meteoalarm":
-                    last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-                    new_count = meteoalarm_unseen_active_instances(entries, last_seen_ids)
-                    if new_count == 0:
-                        st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
-                elif conf["type"] in ("ec_async", "nws_grouped_compact"):
-                    pass
-                elif conf["type"] == "uk_grouped_compact":
-                    last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
-                    _, new_count = compute_counts(entries, conf, last_seen_ts)
-                    if new_count == 0:
-                        st.session_state[f"{key}_last_seen_time"] = now
-                else:
-                    last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
-                    _, new_count = compute_counts(entries, conf, last_seen_ts)
-                    if new_count == 0:
-                        st.session_state[f"{key}_last_seen_time"] = now
+        if st.session_state.get("active_feed") == key:
+            if conf["type"] == "rss_meteoalarm":
+                last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
+                new_count = meteoalarm_unseen_active_instances(entries, last_seen_ids)
+                if new_count == 0:
+                    st.session_state[f"{key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
+            elif conf["type"] in ("ec_async", "nws_grouped_compact"):
+                pass
+            elif conf["type"] == "uk_grouped_compact":
+                last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
+                _, new_count = compute_counts(entries, conf, last_seen_ts)
+                if new_count == 0:
+                    st.session_state[f"{key}_last_seen_time"] = now
+            else:
+                last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
+                _, new_count = compute_counts(entries, conf, last_seen_ts)
+                if new_count == 0:
+                    st.session_state[f"{key}_last_seen_time"] = now
 
-            if conf["type"] == "ec_async":
-                st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
-            elif conf["type"] == "nws_grouped_compact":
-                st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
+        if conf["type"] == "ec_async":
+            st.session_state[f"{key}_remaining_new_total"] = ec_remaining_new_total(key, entries)
+        elif conf["type"] == "nws_grouped_compact":
+            st.session_state[f"{key}_remaining_new_total"] = nws_remaining_new_total(key, entries)
 
-        gc.collect()
+    gc.collect()
 
 rss_after = _rss_bytes()
 if rss_after > MEMORY_HIGH_WATER:
