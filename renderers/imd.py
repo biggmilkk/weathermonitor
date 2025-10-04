@@ -2,6 +2,7 @@
 import html
 import streamlit as st
 from dateutil import parser as dateparser
+from datetime import timezone as _tz
 
 # --------------------------
 # Local helpers
@@ -38,20 +39,15 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
         f"{content}</div>"
     )
 
-def render_empty_state():
+def _render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
-# --------------------------
-# IMD Renderer
-# --------------------------
-
-def render(item: dict, conf: dict) -> None:
+def _render_region_block(item: dict) -> None:
     """
-    IMD (India) – Compact rendering:
-    - Region header
-    - Today + Tomorrow hazards
-    - Severity colored dots (Orange/Red)
-    - "NEW" highlight if applicable
+    Render a single IMD region block:
+      - Region header (striped if any 'new')
+      - Today + Tomorrow bullets (if present)
+      - Fallback single-day bullet if 'days' missing
     """
     region = (item.get("region") or "IMD Sub-division").strip()
     days   = item.get("days") or {}
@@ -77,17 +73,18 @@ def render(item: dict, conf: dict) -> None:
             unsafe_allow_html=True
         )
 
+    # Multi-day form
     _render_day("Today",    days.get("today"))
     _render_day("Tomorrow", days.get("tomorrow"))
 
+    # Fallback: flat (no 'days' dict)
     if not days:
         st.markdown("<h4 style='margin-top:16px'>Today</h4>", unsafe_allow_html=True)
         sev = (item.get("severity") or "").title()
         haz = item.get("hazards") or []
-        st.markdown(
-            _bullet_line(sev, haz if isinstance(haz, list) else [str(haz)], is_new_item),
-            unsafe_allow_html=True
-        )
+        if not isinstance(haz, list):
+            haz = [str(haz)]
+        st.markdown(_bullet_line(sev, haz, is_new_item), unsafe_allow_html=True)
 
     if link:
         st.markdown(f"[Read more]({link})")
@@ -95,3 +92,36 @@ def render(item: dict, conf: dict) -> None:
         st.caption(f"Published: {pub}")
 
     st.markdown("---")
+
+
+# --------------------------
+# Public renderer entrypoint (list-aware, read-only)
+# --------------------------
+
+def render(entries: list[dict], conf: dict) -> None:
+    """
+    IMD (India) – Compact renderer (LIST-AWARE).
+    - Accepts the full entries list from the controller.
+    - Entries already have 'timestamp' and 'is_new' computed upstream (compute_imd_timestamps).
+    - Sort newest-first using 'timestamp' if available; falls back to 'published'.
+    - DOES NOT commit 'seen' state; controller handles clear-on-close.
+    """
+    items = entries or []
+    if not items:
+        _render_empty_state()
+        return
+
+    def _ts(e: dict) -> float:
+        t = e.get("timestamp")
+        if isinstance(t, (int, float)):
+            return float(t)
+        try:
+            return dateparser.parse(e.get("published") or "").timestamp()
+        except Exception:
+            return 0.0
+
+    # Newest first
+    items = sorted(items, key=_ts, reverse=True)
+
+    for item in items:
+        _render_region_block(item)
