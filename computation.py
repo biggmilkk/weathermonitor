@@ -1,23 +1,9 @@
 # computation.py
-"""
-Pure data/logic helpers used by the app's renderers and controllers.
-Keep this file framework-agnostic (no Streamlit imports, no session_state).
-
-What this module provides:
-- Robust timestamp parsing and helpers (attach/sort/mark-new).
-- Generic grouping utilities.
-- Feed-specific calculators for "remaining new" counts (EC/NWS-style).
-- Meteoalarm utilities (ID building, mark/sort, snapshot, unseen counters).
-- IMD (India) utility to compute per-region timestamps/new flags.
-- Backwards-compatible compute_counts/advance_seen used by the controller/UI.
-
-All functions are pure (no side effects) and easy to unit-test.
-"""
-
 from __future__ import annotations
 
 import json
 import re
+import time
 from collections import OrderedDict, defaultdict
 from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
@@ -30,17 +16,7 @@ from dateutil import parser as dateparser
 # --------------------------------------------------------------------
 
 def parse_timestamp(ts: Any) -> float:
-    """
-    Parse a timestamp-like value into UNIX epoch seconds.
-
-    Accepts:
-      - float/int epoch seconds
-      - datetime (naive or aware)
-      - ISO8601-like strings
-      - None / invalid -> returns 0.0
-
-    NOTE: This is the canonical parser; use it everywhere.
-    """
+    """Parse many timestamp shapes to epoch seconds (invalid -> 0.0)."""
     if ts is None:
         return 0.0
     if isinstance(ts, (int, float)):
@@ -62,24 +38,18 @@ def parse_timestamp(ts: Any) -> float:
 
 
 def attach_timestamp(items: Sequence[Mapping[str, Any]], *, published_key: str = "published") -> list[dict]:
-    """
-    Return a new list where every item has a numeric 'timestamp' field.
-    If an item already has a valid timestamp, it is reused.
-    """
+    """Return items with a numeric 'timestamp' (reusing if present)."""
     out: list[dict] = []
     for e in items:
         t = e.get("timestamp")
         ts = parse_timestamp(t if t is not None else e.get(published_key))
-        d = dict(e)
-        d["timestamp"] = ts
+        d = dict(e); d["timestamp"] = ts
         out.append(d)
     return out
 
 
 def sort_newest(items: Sequence[Mapping[str, Any]], *, ts_key: str = "timestamp") -> list[dict]:
-    """
-    Return a new list sorted by timestamp (desc). Items lacking ts are treated as 0.
-    """
+    """Sort items by timestamp desc (missing treated as 0)."""
     return sorted((dict(e) for e in items), key=lambda x: float(x.get(ts_key) or 0.0), reverse=True)
 
 
@@ -90,24 +60,18 @@ def mark_is_new_ts(
     ts_key: str = "timestamp",
     flag_key: str = "_is_new",
 ) -> list[dict]:
-    """
-    Return a new list with a boolean 'flag_key' indicating whether item is newer than last_seen_ts.
-    """
+    """Add boolean 'flag_key' if item ts > last_seen_ts."""
     safe = float(last_seen_ts or 0.0)
     out: list[dict] = []
     for e in items:
         ts = float(e.get(ts_key) or 0.0)
-        d = dict(e)
-        d[flag_key] = ts > safe
+        d = dict(e); d[flag_key] = ts > safe
         out.append(d)
     return out
 
 
 def group_by(items: Sequence[Mapping[str, Any]], *, key: str) -> "OrderedDict[str, list[dict]]":
-    """
-    Group items by a string key into an OrderedDict with alphabetical key order.
-    Missing/None keys are grouped under "Unknown".
-    """
+    """Group items by key into an alphabetized OrderedDict."""
     buckets: dict[str, list[dict]] = defaultdict(list)
     for e in items:
         k = e.get(key)
@@ -117,21 +81,15 @@ def group_by(items: Sequence[Mapping[str, Any]], *, key: str) -> "OrderedDict[st
 
 
 def alphabetic_with_last(keys: Iterable[str], *, last_value: str | None = None) -> list[str]:
-    """
-    Sort keys alphabetically, optionally moving `last_value` (if present) to the end.
-    """
+    """Alphabetize keys, optionally moving `last_value` to the end."""
     ks = sorted(set(keys))
     if last_value and last_value in ks:
-        ks.remove(last_value)
-        ks.append(last_value)
+        ks.remove(last_value); ks.append(last_value)
     return ks
 
 
 def entry_ts(e: Mapping[str, Any]) -> float:
-    """
-    Canonical accessor for an entry's timestamp:
-    uses numeric 'timestamp' if present, otherwise parses 'published'.
-    """
+    """Canonical timestamp accessor: numeric 'timestamp' else parsed 'published'."""
     t = e.get("timestamp")
     if isinstance(t, (int, float)) and float(t) > 0:
         return float(t)
@@ -149,11 +107,7 @@ def compute_remaining_new_by_region(
     last_seen_map: Mapping[str, float],
     ts_key: str = "timestamp",
 ) -> int:
-    """
-    Generic helper: given entries that each belong to a 'region' (e.g., province/state/bucket),
-    count how many entries are strictly newer than the per-region last_seen_map[region].
-    Regions missing in `last_seen_map` default to 0.
-    """
+    """Count entries with ts newer than per-region last_seen_map[region]."""
     total_new = 0
     for e in entries:
         region = str(e.get(region_field) or "Unknown")
@@ -168,7 +122,6 @@ def compute_remaining_new_by_region(
 # Environment Canada (EC) helpers
 # --------------------------------------------------------------------
 
-# Canonical EC warning buckets (strict, word-boundary matching)
 EC_WARNING_TYPES: tuple[str, ...] = (
     "Arctic Outflow Warning",
     "Blizzard Warning",
@@ -195,49 +148,21 @@ EC_WARNING_TYPES: tuple[str, ...] = (
     "Wind Warning",
     "Winter Storm Warning",
 )
-_EC_BUCKET_PATTERNS = {
-    w: re.compile(rf"\b{re.escape(w)}\b", flags=re.IGNORECASE) for w in EC_WARNING_TYPES
-}
+_EC_BUCKET_PATTERNS = {w: re.compile(rf"\b{re.escape(w)}\b", flags=re.IGNORECASE) for w in EC_WARNING_TYPES}
 
 def ec_bucket_from_title(title: str, *, patterns: Mapping[str, re.Pattern] = _EC_BUCKET_PATTERNS) -> str | None:
-    """
-    Return the canonical EC bucket by matching known warning names as whole words in the title.
-
-    Behavior (restored to previous app semantics):
-      1) Try strict match against the canonical set above (word-boundary, case-insensitive).
-      2) If no strict match:
-           - If the title contains the word "warning" (anywhere), treat it as a valid bucket.
-             We try to extract the '<Something> Warning' phrase; otherwise return 'Warning'.
-           - If the title contains 'severe thunderstorm watch', return that bucket.
-      3) Else return None.
-
-    This keeps button badges and renderer logic in sync with the scraper,
-    which already filters EC entries down to Warnings (and Severe Thunderstorm Watch).
-    """
+    """Return canonical EC bucket from title; strict match first, then '... Warning' fallback + 'Severe Thunderstorm Watch'."""
     if not title:
         return None
-
-    # 1) strict exact bucket match
     for canon, pat in patterns.items():
         if pat.search(title):
             return canon
-
-    # normalize once for fallbacks
     t_low = title.lower()
-
-    # 2a) any title containing "warning" should be treated as a warning
     if "warning" in t_low:
-        # Try to capture a phrase ending with "warning" for a nicer bucket label
         m = re.search(r'([A-Za-z \-/]+warning)\b', title, flags=re.IGNORECASE)
-        if m:
-            return m.group(1).strip().title()
-        return "Warning"
-
-    # 2b) explicit fallback for 'Severe Thunderstorm Watch'
+        return (m.group(1).strip().title() if m else "Warning")
     if "severe thunderstorm watch" in t_low:
         return "Severe Thunderstorm Watch"
-
-    # 3) nothing recognized
     return None
 
 
@@ -248,13 +173,8 @@ def ec_compute_new_total(
     last_seen_map: Mapping[str, float],
     ts_key: str = "timestamp",
 ) -> int:
-    """
-    EC-style 'remaining new' counter by province (or any provided region_field).
-    This is a thin wrapper over the generic region calculator.
-    """
-    return compute_remaining_new_by_region(
-        entries, region_field=region_field, last_seen_map=last_seen_map, ts_key=ts_key
-    )
+    """EC-style remaining-new counter by region_field."""
+    return compute_remaining_new_by_region(entries, region_field=region_field, last_seen_map=last_seen_map, ts_key=ts_key)
 
 
 def ec_remaining_new_total(
@@ -262,10 +182,7 @@ def ec_remaining_new_total(
     *,
     last_seen_bkey_map: Mapping[str, float],
 ) -> int:
-    """
-    EC-specific 'remaining new' counter using composite keys 'province|bucket'
-    to match your renderer/controller state map.
-    """
+    """EC-specific remaining-new counter using 'province|bucket' keys."""
     total = 0
     for e in entries or []:
         bucket = ec_bucket_from_title((e.get("title") or "") or "")
@@ -290,12 +207,8 @@ def nws_compute_new_total(
     last_seen_map: Mapping[str, float],
     ts_key: str = "timestamp",
 ) -> int:
-    """
-    NWS-style 'remaining new' counter by state (or any provided region_field).
-    """
-    return compute_remaining_new_by_region(
-        entries, region_field=region_field, last_seen_map=last_seen_map, ts_key=ts_key
-    )
+    """NWS-style remaining-new counter by region_field."""
+    return compute_remaining_new_by_region(entries, region_field=region_field, last_seen_map=last_seen_map, ts_key=ts_key)
 
 
 def nws_remaining_new_total(
@@ -303,10 +216,7 @@ def nws_remaining_new_total(
     *,
     last_seen_bkey_map: Mapping[str, float],
 ) -> int:
-    """
-    NWS-specific 'remaining new' counter using composite keys 'state|bucket'
-    to match your renderer/controller state map.
-    """
+    """NWS-specific remaining-new counter using 'state|bucket' keys."""
     total = 0
     for e in entries or []:
         state = (e.get("state") or e.get("state_name") or e.get("state_code") or "Unknown")
@@ -325,10 +235,7 @@ def nws_remaining_new_total(
 # --------------------------------------------------------------------
 
 def alert_id(entry: Mapping[str, Any]) -> str:
-    """
-    Build a stable ID string for a Meteoalarm alert entry.
-    Combines a few commonly-available fields; tolerate missing values.
-    """
+    """Build a stable ID for a Meteoalarm alert entry."""
     return "|".join([
         str(entry.get("id") or ""),
         str(entry.get("type") or ""),
@@ -344,11 +251,7 @@ def meteoalarm_unseen_active_instances(
     *,
     levels_considered: Sequence[str] = ("Orange", "Red"),
 ) -> int:
-    """
-    Count unseen active Meteoalarm instances among entries' alerts for specified levels.
-
-    entries: list of country dicts each having an 'alerts' mapping (e.g., {"Today":[...], "Tomorrow":[...]}).
-    """
+    """Count unseen active Meteoalarm instances among entries' alerts for specified levels."""
     unseen = 0
     for country in entries:
         alerts_map = country.get("alerts", {}) or {}
@@ -367,19 +270,12 @@ def meteoalarm_mark_and_sort(
     *,
     levels_considered: Sequence[str] = ("Orange", "Red"),
 ) -> list[dict]:
-    """
-    For each country, mark alerts with '_is_new' (if id not in seen_ids), keep only considered levels,
-    and sort alerts by (level severity desc, onset desc).
-    Returns a new list of countries with transformed 'alerts'.
-    """
-    # Severity order: Red > Orange > Yellow > Green -> map unseen to smaller number for easy sort
+    """Mark alerts with '_is_new', filter by level, sort by (severity desc, onset desc), keep countries alpha."""
     severity_rank = {"Red": 3, "Orange": 2, "Yellow": 1, "Green": 0}
-
     out: list[dict] = []
     for country in countries:
         name = country.get("name") or country.get("country") or country.get("title") or ""
         alerts_map = country.get("alerts", {}) or {}
-
         new_map: dict[str, list[dict]] = {}
         for day, alerts in alerts_map.items():
             filtered: list[dict] = []
@@ -389,23 +285,15 @@ def meteoalarm_mark_and_sort(
                     continue
                 d = dict(a)
                 d["_is_new"] = alert_id(a) not in seen_ids
-                # Attach timestamps for sorting if not present; tolerate either onset/from
                 d["timestamp"] = parse_timestamp(d.get("onset") or d.get("from") or d.get("published"))
                 filtered.append(d)
-
-            filtered.sort(
-                key=lambda x: (severity_rank.get(x.get("level"), 0), float(x.get("timestamp") or 0.0)),
-                reverse=True,
-            )
+            filtered.sort(key=lambda x: (severity_rank.get(x.get("level"), 0), float(x.get("timestamp") or 0.0)), reverse=True)
             new_map[day] = filtered
-
         c = dict(country)
         c["name"] = name
-        c["title"] = c.get("title") or name  # ensure renderer can show a heading
+        c["title"] = c.get("title") or name
         c["alerts"] = new_map
         out.append(c)
-
-    # Keep countries alphabetical by name for stable UI
     out.sort(key=lambda c: (str(c.get("name") or "")))
     return out
 
@@ -415,13 +303,8 @@ def meteoalarm_snapshot_ids(
     *,
     include_levels: Sequence[str] | None = None,
 ) -> tuple[str, ...]:
-    """
-    Snapshot all alert IDs (optionally filtering by levels) into a tuple for set-like comparisons.
-    Works with either a list of countries (with 'alerts' maps) or a flat list of alert dicts.
-    """
+    """Snapshot alert IDs (optionally filtered by levels) from countries-with-alerts or a flat list."""
     ids: list[str] = []
-
-    # Case 1: countries with 'alerts'
     if countries_or_entries and isinstance(countries_or_entries[0], Mapping) and "alerts" in countries_or_entries[0]:
         for country in countries_or_entries:  # type: ignore[index]
             alerts_map = country.get("alerts", {}) or {}
@@ -431,40 +314,30 @@ def meteoalarm_snapshot_ids(
                         continue
                     ids.append(alert_id(a))
     else:
-        # Case 2: flat entries
         for a in countries_or_entries:
             if include_levels and a.get("level") not in include_levels:
                 continue
             ids.append(alert_id(a))
-
     return tuple(ids)
 
 
-def meteoalarm_total_active_instances(
-    entries: Sequence[Mapping[str, Any]],
-) -> int:
-    """
-    Return the total number of active Orange/Red alert *instances* across all countries.
-
-    Preferred source is per-country `counts.total` (if present); fallback to `total_alerts`.
-    Both fields are expected to include the "(n active)" multiplicity used in the UI.
-    """
+def meteoalarm_total_active_instances(entries: Sequence[Mapping[str, Any]]) -> int:
+    """Sum per-country active instance totals: prefer counts.total, fallback total_alerts."""
     total = 0
     for country in entries or []:
         counts = country.get("counts")
-        # Prefer counts.total if available
         if isinstance(counts, dict) and ("total" in counts):
             try:
                 total += int(counts.get("total") or 0)
                 continue
             except Exception:
                 pass
-        # Fallback to total_alerts (kept for backward compatibility)
         try:
             total += int(country.get("total_alerts") or 0)
         except Exception:
             pass
     return total
+
 
 # --------------------------------------------------------------------
 # IMD (India) helpers
@@ -477,14 +350,9 @@ def compute_imd_timestamps(
     prev_ts: Mapping[str, float] | None,
     now_ts: float,
 ) -> tuple[list[dict], dict[str, str], dict[str, float]]:
-    """
-    Given IMD entries (each with `region` and optional `days` containing `today`/`tomorrow`),
-    compute per-region fingerprints to detect changes, assign `timestamp` and `is_new` at the
-    item level, and propagate `is_new` to the day dicts.
-    """
+    """Fingerprint each region's content; if changed, bump timestamp + mark is_new on region and per-day."""
     prev_fp = dict(prev_fp or {})
     prev_ts = dict(prev_ts or {})
-
     updated: list[dict] = []
     fp_by_region: dict[str, str] = {}
     ts_by_region: dict[str, float] = {}
@@ -492,7 +360,6 @@ def compute_imd_timestamps(
     for e in entries:
         region = (e.get("region") or "").strip()
         days = e.get("days") or {}
-
         norm = {
             "region": region,
             "today": {
@@ -506,30 +373,18 @@ def compute_imd_timestamps(
                 "date":     (days.get("tomorrow") or {}).get("date"),
             },
         }
-
-        # Fingerprint content
         fp = json.dumps(norm, sort_keys=True, separators=(",", ":"))
         changed = (prev_fp.get(region) != fp)
-
-        # Timestamp: bump to now if changed; else keep old
         ts = now_ts if changed else float(prev_ts.get(region) or 0.0)
         if ts <= 0:
             ts = now_ts
 
-        d = dict(e)
-        d["timestamp"] = ts
-        d["is_new"] = bool(changed)
-
-        # propagate per-day is_new flags
+        d = dict(e); d["timestamp"] = ts; d["is_new"] = bool(changed)
         dd = dict(days)
         if "today" in dd and isinstance(dd["today"], dict):
-            dd_today = dict(dd["today"])
-            dd_today["is_new"] = bool(changed)
-            dd["today"] = dd_today
+            tdy = dict(dd["today"]); tdy["is_new"] = bool(changed); dd["today"] = tdy
         if "tomorrow" in dd and isinstance(dd["tomorrow"], dict):
-            dd_tom = dict(dd["tomorrow"])
-            dd_tom["is_new"] = bool(changed)
-            dd["tomorrow"] = dd_tom
+            tom = dict(dd["tomorrow"]); tom["is_new"] = bool(changed); dd["tomorrow"] = tom
         d["days"] = dd
 
         updated.append(d)
@@ -544,7 +399,7 @@ def compute_imd_timestamps(
 # --------------------------------------------------------------------
 
 def _imd_build_fingerprint(entry: Mapping[str, Any]) -> tuple[str, str]:
-    """Return (region, fingerprint_json) for an IMD entry, using the same normalization as compute_imd_timestamps."""
+    """(region, fingerprint_json) using same normalization as compute_imd_timestamps."""
     region = (entry.get("region") or "").strip()
     days = entry.get("days") or {}
     norm = {
@@ -569,14 +424,7 @@ def snapshot_imd_seen(
     *,
     now_ts: float | None = None,
 ) -> tuple[dict[str, str], dict[str, float], list[dict]]:
-    """
-    Build per-region fingerprints from the current entries and return:
-      (fp_by_region, ts_by_region, cleared_entries)
-
-    - fp_by_region / ts_by_region: persisted so the next fetch round won't
-      re-mark unchanged regions as new.
-    - cleared_entries: entries with is_new and per-day is_new flags cleared.
-    """
+    """Return (fp_by_region, ts_by_region, cleared_entries) and clear is_new flags immediately."""
     ts = float(now_ts or time.time())
     fp_by_region: dict[str, str] = {}
     ts_by_region: dict[str, float] = {}
@@ -590,8 +438,7 @@ def snapshot_imd_seen(
         existing_ts = e.get("timestamp")
         ts_by_region[region] = float(existing_ts) if isinstance(existing_ts, (int, float)) and float(existing_ts) > 0 else ts
 
-        d = dict(e)
-        d["is_new"] = False
+        d = dict(e); d["is_new"] = False
         days = d.get("days") or {}
         if isinstance(days, dict):
             dd = dict(days)
@@ -604,6 +451,7 @@ def snapshot_imd_seen(
 
     return fp_by_region, ts_by_region, cleared
 
+
 # --------------------------------------------------------------------
 # Backwards-compatible counters for top-level badges
 # --------------------------------------------------------------------
@@ -614,18 +462,8 @@ def compute_counts(
     last_seen: Any,
     alert_id_fn: Callable[[Mapping[str, Any]], str] | None = None,
 ) -> tuple[int, int]:
-    """
-    Compute total and new counts for a feed.
-
-    - For 'rss_meteoalarm':
-        Flatten all Orange/Red alerts and count via `alert_id_fn` against a set `last_seen`.
-    - For others:
-        Count entries and those with timestamp/published > last_seen timestamp.
-
-    Returns: (total, new_count)
-    """
+    """Return (total, new_count) for a feed. Meteoalarm flattens Orange/Red and uses ID-based 'new'."""
     if conf.get("type") == "rss_meteoalarm":
-        # Flatten all alerts of relevant levels
         flat = [
             e
             for country in entries
@@ -637,7 +475,6 @@ def compute_counts(
         new_count = sum(1 for e in flat if alert_id_fn and alert_id_fn(e) not in (last_seen or set()))
         return total, new_count
 
-    # Non-meteoalarm path
     total = len(entries)
     safe_last = float(last_seen or 0.0)
 
@@ -656,19 +493,7 @@ def advance_seen(
     now: float,
     alert_id_fn: Callable[[Mapping[str, Any]], str] | None = None,
 ):
-    """
-    Suggest a new 'seen' marker for a feed when the user opens it.
-
-    - For 'rss_meteoalarm':
-        If all current alerts are already seen, return a snapshot set of their IDs.
-    - For others:
-        If no entries newer than last_seen, return `now` (epoch seconds).
-
-    Returns:
-        - set(str) for meteoalarm,
-        - float for timestamp-based feeds,
-        - or None if it should not advance.
-    """
+    """Suggest a new 'seen' marker: Meteoalarm returns a set of IDs when all are already seen; others return timestamp."""
     if conf.get("type") == "rss_meteoalarm":
         flat = [
             e
@@ -681,7 +506,6 @@ def advance_seen(
             return set(alert_id_fn(e) for e in flat)
         return None
 
-    # Timestamp-based feeds
     safe_last = float(last_seen or 0.0)
 
     def _ts(e: Mapping[str, Any]) -> float:
