@@ -454,4 +454,4 @@ if active:
     st.markdown("---")
     conf = FEED_CONFIG[active]
     entries = st.session_state[f"{active}_data"]
-    _render_feed_details(active, conf, entries, badge_placeholders)
+    _render_feed_details(active, conf, entries)
