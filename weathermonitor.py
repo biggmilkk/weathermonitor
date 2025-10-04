@@ -150,6 +150,38 @@ def nws_remaining_new_total(feed_key: str, entries: list) -> int:
             total += 1
     return total
 
+# --------------------------------------------------------------------
+# Cold boot: fetch ALL feeds once, ignoring groups
+# --------------------------------------------------------------------
+do_cold_boot = not st.session_state.get("_cold_boot_done", False)
+
+# also treat "empty data everywhere" as a (re)boot
+if not do_cold_boot:
+    do_cold_boot = all(len(st.session_state.get(f"{k}_data", [])) == 0 for k in FEED_CONFIG)
+
+if do_cold_boot:
+    # fetch everything at once (no BATCH_SIZE cap, no group filter)
+    all_results = cached_fetch_round(FEED_CONFIG, MAX_CONCURRENCY)
+    now_ts = time.time()
+    for key, raw in all_results:
+        entries = raw.get("entries", [])
+        conf = FEED_CONFIG[key]
+
+        if conf["type"] == "imd_current_orange_red":
+            fp_key = f"{key}_fp_by_region"
+            ts_key = f"{key}_ts_by_region"
+            prev_fp = dict(st.session_state.get(fp_key, {}) or {})
+            prev_ts = dict(st.session_state.get(ts_key, {}) or {})
+            entries, fp_by_region, ts_by_region = compute_imd_timestamps(
+                entries=entries, prev_fp=prev_fp, prev_ts=prev_ts, now_ts=now_ts
+            )
+            st.session_state[fp_key] = fp_by_region
+            st.session_state[ts_key] = ts_by_region
+
+        st.session_state[f"{key}_data"] = entries
+        st.session_state[f"{key}_last_fetch"] = now_ts
+    st.session_state["last_refreshed"] = now_ts
+    st.session_state["_cold_boot_done"] = True
 
 # --------------------------------------------------------------------
 # Minute-group scheduler (fetch ONLY on the timer tick)
