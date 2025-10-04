@@ -452,12 +452,9 @@ def compute_imd_timestamps(
     now_ts: float,
 ) -> tuple[list[dict], dict[str, str], dict[str, float]]:
     """
-    Given IMD entries (each with `region` and an optional `days` mapping containing `today`/`tomorrow`),
-    compute per-region fingerprints to detect changes, assign `timestamp` and `is_new` at the item level,
-    and propagate `is_new` to the day dicts.
-
-    Returns:
-        (updated_entries, fp_by_region, ts_by_region)
+    Given IMD entries (each with `region` and optional `days` containing `today`/`tomorrow`),
+    compute per-region fingerprints to detect changes, assign `timestamp` and `is_new` at the
+    item level, and propagate `is_new` to the day dicts.
     """
     prev_fp = dict(prev_fp or {})
     prev_ts = dict(prev_ts or {})
@@ -483,18 +480,21 @@ def compute_imd_timestamps(
                 "date":     (days.get("tomorrow") or {}).get("date"),
             },
         }
+
+        # Fingerprint content
         fp = json.dumps(norm, sort_keys=True, separators=(",", ":"))
         changed = (prev_fp.get(region) != fp)
 
+        # Timestamp: bump to now if changed; else keep old
         ts = now_ts if changed else float(prev_ts.get(region) or 0.0)
         if ts <= 0:
             ts = now_ts
 
         d = dict(e)
-        d["timestamp"] = float(ts)
+        d["timestamp"] = ts
         d["is_new"] = bool(changed)
 
-        # propagate to day dicts if present
+        # propagate per-day is_new flags
         dd = dict(days)
         if "today" in dd and isinstance(dd["today"], dict):
             dd_today = dict(dd["today"])
@@ -508,9 +508,10 @@ def compute_imd_timestamps(
 
         updated.append(d)
         fp_by_region[region] = fp
-        ts_by_region[region] = float(ts)
+        ts_by_region[region] = ts
 
     return updated, fp_by_region, ts_by_region
+
 
 
 # --------------------------------------------------------------------
