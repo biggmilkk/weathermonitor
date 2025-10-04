@@ -513,6 +513,70 @@ def compute_imd_timestamps(
     return updated, fp_by_region, ts_by_region
 
 
+# --------------------------------------------------------------------
+# IMD clear-on-close snapshot helper
+# --------------------------------------------------------------------
+
+def _imd_build_fingerprint(entry: Mapping[str, Any]) -> tuple[str, str]:
+    """Return (region, fingerprint_json) for an IMD entry, using the same normalization as compute_imd_timestamps."""
+    region = (entry.get("region") or "").strip()
+    days = entry.get("days") or {}
+    norm = {
+        "region": region,
+        "today": {
+            "severity": (days.get("today") or {}).get("severity"),
+            "hazards":  (days.get("today") or {}).get("hazards") or [],
+            "date":     (days.get("today") or {}).get("date"),
+        },
+        "tomorrow": {
+            "severity": (days.get("tomorrow") or {}).get("severity"),
+            "hazards":  (days.get("tomorrow") or {}).get("hazards") or [],
+            "date":     (days.get("tomorrow") or {}).get("date"),
+        },
+    }
+    fp = json.dumps(norm, sort_keys=True, separators=(",", ":"))
+    return region, fp
+
+
+def snapshot_imd_seen(
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    now_ts: float | None = None,
+) -> tuple[dict[str, str], dict[str, float], list[dict]]:
+    """
+    Build per-region fingerprints from the current entries and return:
+      (fp_by_region, ts_by_region, cleared_entries)
+
+    - fp_by_region / ts_by_region: persisted so the next fetch round won't
+      re-mark unchanged regions as new.
+    - cleared_entries: entries with is_new and per-day is_new flags cleared.
+    """
+    ts = float(now_ts or time.time())
+    fp_by_region: dict[str, str] = {}
+    ts_by_region: dict[str, float] = {}
+    cleared: list[dict] = []
+
+    for e in entries or []:
+        region, fp = _imd_build_fingerprint(e)
+        if not region:
+            region = ""
+        fp_by_region[region] = fp
+        existing_ts = e.get("timestamp")
+        ts_by_region[region] = float(existing_ts) if isinstance(existing_ts, (int, float)) and float(existing_ts) > 0 else ts
+
+        d = dict(e)
+        d["is_new"] = False
+        days = d.get("days") or {}
+        if isinstance(days, dict):
+            dd = dict(days)
+            if "today" in dd and isinstance(dd["today"], dict):
+                t = dict(dd["today"]); t["is_new"] = False; dd["today"] = t
+            if "tomorrow" in dd and isinstance(dd["tomorrow"], dict):
+                t = dict(dd["tomorrow"]); t["is_new"] = False; dd["tomorrow"] = t
+            d["days"] = dd
+        cleared.append(d)
+
+    return fp_by_region, ts_by_region, cleared
 
 # --------------------------------------------------------------------
 # Backwards-compatible counters for top-level badges
