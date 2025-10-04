@@ -90,6 +90,7 @@ def render(entries, conf):
     st.session_state.setdefault(open_key, None)
     st.session_state.setdefault(pending_map_key, {})
     st.session_state.setdefault(lastseen_key, {})
+    st.session_state.setdefault(f"{feed_key}_remaining_new_total", 0)
 
     active_bucket   = st.session_state[open_key]
     pending_seen    = st.session_state[pending_map_key]
@@ -109,6 +110,23 @@ def render(entries, conf):
     if not normalized:
         render_empty_state()
         return
+
+    # ---------- Actions ----------
+    cols_actions = st.columns([1, 6])
+    with cols_actions[0]:
+        if st.button("Mark all as seen", key=f"{feed_key}_mark_all_seen"):
+            now_ts = time.time()
+            # mark every visible state|bucket pair as seen
+            for a in normalized:
+                bucket_lastseen[a["bkey"]] = now_ts
+            # clear any "pending opened" bucket and close the active one
+            pending_seen.clear()
+            st.session_state[open_key] = None
+            st.session_state[lastseen_key] = bucket_lastseen
+            # ensure the button badges zero instantly
+            st.session_state[f"{feed_key}_remaining_new_total"] = 0
+            _safe_rerun()
+            return
 
     # Group by state
     groups = OrderedDict()
