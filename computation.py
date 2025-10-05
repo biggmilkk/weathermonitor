@@ -339,6 +339,73 @@ def meteoalarm_total_active_instances(entries: Sequence[Mapping[str, Any]]) -> i
     return total
 
 
+def meteoalarm_unseen_active_instance_total(
+    entries: Sequence[Mapping[str, Any]],
+    last_seen_ids: set[str],
+    *,
+    levels_considered: Sequence[str] = ("Orange", "Red"),
+) -> int:
+    """
+    Sum the active-instance counts for *unseen* Meteoalarm buckets.
+
+    - We deduplicate by (day, level, type) so multiple alerts with the same bucket
+      don't double-count.
+    - We read counts preferentially from:
+        counts.by_day[day]["{Level}|{Type}"]
+      and fall back to:
+        counts.by_type[type][level] or counts.by_type[type]["total"]
+      if a day-level-type count isn't available.
+    """
+    def _bucket_count(counts: Mapping[str, Any] | None, day: str, level: str, typ: str) -> int:
+        if not isinstance(counts, Mapping):
+            return 0
+
+        by_day = counts.get("by_day")
+        if isinstance(by_day, Mapping):
+            # try exact and a few normalized variants of 'day'
+            for dkey in (day, str(day).capitalize(), str(day).title()):
+                d = by_day.get(dkey)
+                if isinstance(d, Mapping):
+                    val = d.get(f"{level}|{typ}")
+                    if isinstance(val, int) and val > 0:
+                        return int(val)
+
+        by_type = counts.get("by_type")
+        if isinstance(by_type, Mapping):
+            bucket = by_type.get(typ)
+            if isinstance(bucket, Mapping):
+                val = bucket.get(level)
+                if isinstance(val, int) and val > 0:
+                    return int(val)
+                val = bucket.get("total")
+                if isinstance(val, int) and val > 0:
+                    return int(val)
+
+        return 0
+
+    total = 0
+    for country in entries or []:
+        counts = country.get("counts") if isinstance(country, Mapping) else None
+        alerts_map = country.get("alerts", {}) or {}
+        unseen_buckets: set[tuple[str, str, str]] = set()  # (day, level, type)
+
+        if isinstance(alerts_map, Mapping):
+            for day, alerts in alerts_map.items():
+                for a in (alerts or []):
+                    if not isinstance(a, Mapping):
+                        continue
+                    lvl = a.get("level")
+                    if lvl not in levels_considered:
+                        continue
+                    if alert_id(a) not in last_seen_ids:
+                        unseen_buckets.add((str(day), str(lvl), str(a.get("type"))))
+
+        for (day, level, typ) in unseen_buckets:
+            total += _bucket_count(counts, day, level, typ)
+
+    return total
+
+
 # --------------------------------------------------------------------
 # IMD (India) helpers
 # --------------------------------------------------------------------
