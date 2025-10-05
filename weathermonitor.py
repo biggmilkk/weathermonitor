@@ -369,4 +369,8 @@ if active:
     conf = FEED_CONFIG[active]
     entries = st.session_state[f"{active}_data"]
     renderer = RENDERERS.get(conf["type"])
-    renderer(entries, {**conf, "key": active}) if renderer else render_empty_state()
+
+    if renderer:
+        renderer(entries, {**conf, "key": active})
+    else:
+        render_empty_state()
