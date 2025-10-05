@@ -273,9 +273,8 @@ global_idx = 0  # retained for layout flow only; no longer used in widget keys
 def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
         seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
-        total_active = meteoalarm_total_active_instances(entries)
-        unseen_count = meteoalarm_unseen_active_instances(entries, seen_ids)
-        return unseen_count
+        from computation import meteoalarm_unseen_active_instance_total
+        return meteoalarm_unseen_active_instance_total(entries, seen_ids)
 
     if conf["type"] in ("ec_async", "ec_grouped_compact"):
         last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
