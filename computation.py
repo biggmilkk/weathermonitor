@@ -461,6 +461,38 @@ def compute_imd_timestamps(
     return updated, fp_by_region, ts_by_region
 
 
+def imd_unseen_day_total(entries: Sequence[Mapping[str, Any]]) -> int:
+    """
+    Count unseen IMD 'alert units' as day-slots:
+      - +1 for 'today' if present and marked is_new
+      - +1 for 'tomorrow' if present and marked is_new
+    Falls back to the item-level 'is_new' if day-level flags are absent.
+    """
+    total = 0
+    for e in entries or []:
+        days = e.get("days") or {}
+        tdy = days.get("today") or {}
+        tom = days.get("tomorrow") or {}
+
+        used_day_flags = False
+        if isinstance(tdy, dict) and "is_new" in tdy:
+            if tdy.get("is_new"):
+                total += 1
+            used_day_flags = True
+        if isinstance(tom, dict) and "is_new" in tom:
+            if tom.get("is_new"):
+                total += 1
+            used_day_flags = True
+
+        # Fallback if we only have entry-level is_new
+        if not used_day_flags and e.get("is_new"):
+            if isinstance(tdy, dict) and tdy:
+                total += 1
+            if isinstance(tom, dict) and tom:
+                total += 1
+    return total
+
+
 # --------------------------------------------------------------------
 # IMD clear-on-close snapshot helper
 # --------------------------------------------------------------------
