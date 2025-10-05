@@ -96,9 +96,12 @@ tick_counter = st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main"
 def load_feeds():
     return get_feed_definitions()
 
+# NOTE: normalized cache key: use stable tuple of keys instead of raw dict
 @st.cache_data(ttl=FETCH_TTL, show_spinner=False)
-def cached_fetch_round(to_fetch: dict, max_conc: int):
-    return run_fetch_round(to_fetch, max_concurrency=max_conc)
+def cached_fetch_round(keys: tuple[str, ...], max_conc: int):
+    # Rebuild subset dict deterministically from FEED_CONFIG at call time
+    subset = {k: FEED_CONFIG[k] for k in keys if k in FEED_CONFIG}
+    return run_fetch_round(subset, max_concurrency=max_conc)
 
 FEED_CONFIG = load_feeds()
 now = time.time()
@@ -120,7 +123,8 @@ do_cold_boot = not st.session_state.get("_cold_boot_done", False) or \
                all(len(st.session_state.get(f"{k}_data", [])) == 0 for k in FEED_CONFIG)
 
 if do_cold_boot:
-    all_results = cached_fetch_round(FEED_CONFIG, MAX_CONCURRENCY)
+    # normalized: pass tuple of keys
+    all_results = cached_fetch_round(tuple(sorted(FEED_CONFIG.keys())), MAX_CONCURRENCY)
     now_ts = time.time()
     for key, raw in all_results:
         entries = raw.get("entries", [])
@@ -183,7 +187,8 @@ if len(to_fetch) > BATCH_SIZE:
     )[:BATCH_SIZE])
 
 if to_fetch:
-    results = cached_fetch_round(to_fetch, MAX_CONCURRENCY)
+    # normalized: pass tuple of keys
+    results = cached_fetch_round(tuple(sorted(to_fetch.keys())), MAX_CONCURRENCY)
     now = time.time()
     for key, raw in results:
         entries = raw.get("entries", [])
@@ -263,7 +268,7 @@ pinned_keys = set(FEED_POSITIONS.keys())
 items = [(k, v) for k, v in FEED_CONFIG.items() if k not in pinned_keys]
 
 _toggled = False
-global_idx = 0
+global_idx = 0  # retained for layout flow only; no longer used in widget keys
 
 def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
@@ -321,7 +326,7 @@ for row in range(num_rows):
                 is_active = (st.session_state.get("active_feed") == feed_key)
                 clicked = st.button(
                     conf.get("label", feed_key.upper()),
-                    key=f"btn_{feed_key}_{global_idx}",
+                    key=f"btn_{feed_key}",  # ✅ stable identity-only key
                     use_container_width=True,
                     type=("primary" if is_active else "secondary"),
                 )
