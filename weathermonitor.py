@@ -276,6 +276,10 @@ def _new_count_for_feed(key, conf, entries):
         from computation import meteoalarm_unseen_active_instance_total
         return meteoalarm_unseen_active_instance_total(entries, seen_ids)
 
+    if conf["type"] == "imd_current_orange_red":
+        from computation import imd_unseen_day_total
+        return imd_unseen_day_total(entries)
+
     if conf["type"] in ("ec_async", "ec_grouped_compact"):
         last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
         return int(ec_new_total(entries, last_seen_bkey_map=last_map))
