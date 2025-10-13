@@ -52,21 +52,18 @@ def _any_new(alerts_map: dict) -> bool:
                 return True
     return False
 
-def _day_level_type_count(by_day: dict, by_type: dict, day: str, level: str, typ: str) -> int | None:
-    """Prefer exact per-day count; fall back to per-type totals."""
+def _day_level_type_count(by_day, by_type, day, level, typ):
+    total = 0
     if isinstance(by_day, dict):
-        d = by_day.get(day) or by_day.get(day.capitalize()) or by_day.get(day.title())
-        if isinstance(d, dict):
-            n = d.get(f"{level}|{typ}")
-            if isinstance(n, int) and n > 0:
-                return n
-    if isinstance(by_type, dict):
+        # sum across all days or all day-buckets for this type/level
+        for d in by_day.values():
+            if isinstance(d, dict):
+                total += d.get(f"{level}|{typ}", 0)
+    if total == 0 and isinstance(by_type, dict):
         bucket = by_type.get(typ)
         if isinstance(bucket, dict):
-            n = bucket.get(level) or bucket.get("total")
-            if isinstance(n, int) and n > 0:
-                return n
-    return None
+            total += bucket.get(level, 0) or bucket.get("total", 0)
+    return total if total > 0 else None
 
 def _render_country(country: dict):
     """Render a single country section, with striped header if any alert is new."""
