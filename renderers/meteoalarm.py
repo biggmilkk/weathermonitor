@@ -71,26 +71,41 @@ def _day_level_type_count(by_day: dict, by_type: dict, day: str, level: str, typ
 def _render_country(country: dict):
     """Render a single country section, with striped header if any alert is new."""
     title = _norm(country.get("title") or country.get("name") or "")
-    total_severe = 0
     counts = country.get("counts") or {}
-    if isinstance(counts, dict):
-        try:
-            total_severe = int(counts.get("total") or country.get("total_alerts") or 0)
-        except Exception:
-            total_severe = int(country.get("total_alerts") or 0)
-
-    header = title or "Meteoalarm"
-    if total_severe > 0:
-        header = f"{header} ({total_severe} active)"
 
     alerts_map = country.get("alerts") or {}
+    by_day  = counts.get("by_day")  if isinstance(counts, dict) else {}
+    by_type = counts.get("by_type") if isinstance(counts, dict) else {}
+
+    # Compute the total strictly from what is currently visible (rows we'll render).
+    # If we have no visible rows, fall back to counts.total / total_alerts.
+    visible_total = 0
+    for day in ("today", "tomorrow"):
+        rows = _alerts_for_day(alerts_map, day)
+        for e in rows or []:
+            level = _norm(e.get("level", ""))
+            typ   = _norm(e.get("type", ""))
+            n = _day_level_type_count(by_day, by_type, day, level, typ)
+            if not isinstance(n, int) or n <= 0:
+                n = 1  # treat a visible category row with unknown count as one active
+            visible_total += n
+
+    # Build header using the visible_total; if there are no visible rows, fall back.
+    fallback_total = 0
+    try:
+        fallback_total = int(counts.get("total") or country.get("total_alerts") or 0)
+    except Exception:
+        fallback_total = int(country.get("total_alerts") or 0)
+
+    header_total = visible_total if visible_total > 0 else fallback_total
+    header = title or "Meteoalarm"
+    if header_total > 0:
+        header = f"{header} ({header_total} active)"
+
     st.markdown(
         _stripe_wrap(f"<h2>{html.escape(header)}</h2>", _any_new(alerts_map)),
         unsafe_allow_html=True,
     )
-
-    by_day  = counts.get("by_day")  if isinstance(counts, dict) else {}
-    by_type = counts.get("by_type") if isinstance(counts, dict) else {}
 
     for day in ("today", "tomorrow"):
         alerts = _alerts_for_day(alerts_map, day)
