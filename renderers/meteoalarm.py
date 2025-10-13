@@ -53,23 +53,19 @@ def _any_new(alerts_map: dict) -> bool:
     return False
 
 def _day_level_type_count(by_day: dict, by_type: dict, day: str, level: str, typ: str) -> int | None:
-    """Strict per-day, per-level, per-type count. No cross-level or cross-day blending."""
-    # 1) Exact per-day bucket (authoritative)
+    """Prefer exact per-day count; fall back to per-type totals."""
     if isinstance(by_day, dict):
         d = by_day.get(day) or by_day.get(day.capitalize()) or by_day.get(day.title())
         if isinstance(d, dict):
             n = d.get(f"{level}|{typ}")
             if isinstance(n, int) and n > 0:
                 return n
-
-    # 2) Optional fallback: exact level for this type (NOT 'total', and still level-specific)
     if isinstance(by_type, dict):
         bucket = by_type.get(typ)
         if isinstance(bucket, dict):
-            n = bucket.get(level)
+            n = bucket.get(level) or bucket.get("total")
             if isinstance(n, int) and n > 0:
                 return n
-
     return None
 
 def _render_country(country: dict):
