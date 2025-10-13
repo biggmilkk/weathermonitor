@@ -1,4 +1,5 @@
 # scraper/meteoalarm.py
+
 import feedparser
 import logging
 import re
@@ -131,7 +132,7 @@ def _fmt_utc(dt):
     if not dt:
         return ""
     dt_utc = dt.astimezone(timezone.utc)
-    return dt_utc.strftime("%b %d %H:%M UTC")
+    return dt_utc.strftime("%b  %d %H:%M UTC").replace("  ", " ")
 
 # Parse the HTML table in each RSS item (EU and per-country)
 def _parse_table_rows(description_html: str):
@@ -143,12 +144,13 @@ def _parse_table_rows(description_html: str):
     now_utc = datetime.now(timezone.utc)
 
     for row in rows:
-        header = row.find("th")
-        if header:
-            txt = header.get_text(strip=True).lower()
-            if "tomorrow" in txt:
+        # Consider all <th> cells in the row to robustly set the day context
+        headers = row.find_all("th")
+        if headers:
+            header_text = " ".join(h.get_text(strip=True).lower() for h in headers)
+            if "tomorrow" in header_text:
                 current = "tomorrow"
-            elif "today" in txt:
+            elif "today" in header_text:
                 current = "today"
             continue
 
@@ -212,24 +214,59 @@ def _counts_from_eu_rows(alerts_by_day: Dict[str, List[Dict]]) -> Dict:
                 counts["total"] += 1
     return counts
 
-# Parse per-country feed into counts (true multi-instance totals)
+def _is_national_summary(entry) -> bool:
+    """
+    Heuristic: per-country feeds include a national summary 'Spain'/'Israel' item
+    with link containing '?region=XX'. Regional items include '?geocode='.
+    """
+    link = (entry.get("link") if isinstance(entry, dict) else getattr(entry, "link", "")) or ""
+    if "region=" in link and "geocode=" not in link:
+        return True
+    title = (entry.get("title") if isinstance(entry, dict) else getattr(entry, "title", "")) or ""
+    return bool(title.strip().lower().startswith("meteoalarm "))
+
+# Parse per-country feed into counts (true multi-instance totals, per unique region)
 def _count_from_country_feed(fp_obj) -> Dict:
     counts = {"total": 0, "by_type": {}, "by_day": {"today": {}, "tomorrow": {}}}
+
+    # Track unique (region, day, level, type) to avoid double-counting duplicates
+    seen_keys = set()
+
     for entry in fp_obj.entries:
+        # Skip the national summary item; we only want regional instances
+        if _is_national_summary(entry):
+            continue
+
         desc = entry.get("description", "") or getattr(entry, "description", "") or ""
         per_day = _parse_table_rows(desc)
+
+        # Region name (title of the entry is the administrative/zone region)
+        region_title = (entry.get("title") if isinstance(entry, dict) else getattr(entry, "title", "")) or ""
+        region = region_title.strip()
+
         for day in ("today", "tomorrow"):
             for it in per_day.get(day, []):
-                level = it.get("level", "")
-                typ   = it.get("type", "")
+                level = (it.get("level", "") or "").strip()
                 if level not in ("Orange", "Red"):
                     continue
-                key = f"{level}|{typ}"
+                typ = (it.get("type", "") or "").strip()
+
+                # Dedupe by region+day+level+type so a region contributes once per bucket
+                skey = (region, day, level, typ)
+                if skey in seen_keys:
+                    continue
+                seen_keys.add(skey)
+
+                # Per-day bucket
+                k = f"{level}|{typ}"
                 day_map = counts["by_day"].setdefault(day, {})
-                day_map[key] = day_map.get(key, 0) + 1
+                day_map[k] = day_map.get(k, 0) + 1
+
+                # Per-type totals
                 bucket = counts["by_type"].setdefault(typ, {"Orange": 0, "Red": 0, "total": 0})
                 bucket[level] += 1
                 bucket["total"] += 1
+
                 counts["total"] += 1
     return counts
 
@@ -276,8 +313,10 @@ def scrape_meteoalarm(conf: dict):
     for item in base_entries:
         country = item.get("region", "")
         alerts_by_day = item.get("alerts") or {}
+
         # Try override URL first, then slug URL
         tried = []
+        found_counts = False
         for which in ("override", "slug"):
             rss_url = (
                 FEED_URL_OVERRIDES.get(country)
@@ -289,16 +328,17 @@ def scrape_meteoalarm(conf: dict):
             try:
                 fp = feedparser.parse(rss_url)
                 counts = _count_from_country_feed(fp)
-                # If a real per-country feed produced >0 counts, use it; else continue to fallback
+                # Use regional counts if any were found; this reflects "active regions" per bucket
                 if counts.get("total", 0) > 0:
                     item["counts"] = counts
                     item["total_alerts"] = counts.get("total", 0)
+                    found_counts = True
                     break
             except Exception as e:
                 logging.warning(f"[METEOALARM WARN] Count fetch failed for {country} via {rss_url}: {e}")
 
-        # Final fallback: synthesize minimal counts from EU rows so (x active) prints at least 1s
-        if "counts" not in item:
+        # Final fallback: synthesize minimal counts from EU rows so (x active) prints at least something
+        if not found_counts:
             fallback_counts = _counts_from_eu_rows(alerts_by_day)
             item["counts"] = fallback_counts
             item["total_alerts"] = fallback_counts.get("total", 0)
