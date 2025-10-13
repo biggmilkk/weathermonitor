@@ -343,6 +343,16 @@ def scrape_meteoalarm(conf: dict):
             item["counts"] = fallback_counts
             item["total_alerts"] = fallback_counts.get("total", 0)
 
+        # --- DEBUG LOG FOR SPAIN ---
+        if country.lower() == "spain":
+            logging.warning(
+                "🟢 [SPAIN DEBUG] counts.total=%s  by_day_today=%s  by_day_tomorrow=%s  by_type=%s",
+                item.get("counts", {}).get("total"),
+                item.get("counts", {}).get("by_day", {}).get("today"),
+                item.get("counts", {}).get("by_day", {}).get("tomorrow"),
+                item.get("counts", {}).get("by_type"),
+            )
+    
     base_entries.sort(key=lambda x: (x.get("region") or x.get("title","")).lower())
     logging.warning(f"[METEOALARM DEBUG] Parsed {len(base_entries)} alerts (sync)")
     return {"entries": base_entries, "source": url}
