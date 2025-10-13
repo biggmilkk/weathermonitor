@@ -30,6 +30,29 @@ from renderers import RENDERERS
 def render_empty_state():
     st.info("No active warnings at this time.")
 
+# --- TEMP DEBUG: show Spain counts in the UI ---
+def _debug_dump_spain_counts(entries):
+    try:
+        for c in entries or []:
+            # Country blocks are titled like "Spain Alerts" (from the EU feed parse)
+            title = (c.get("title") or "").strip().lower()
+            region = (c.get("region") or "").strip().lower()
+            if title.startswith("spain alerts") or region == "spain":
+                counts = c.get("counts") or {}
+                st.info(
+                    "SPAIN DEBUG → total=%s\nby_day.today=%s\nby_day.tomorrow=%s\nby_type=%s"
+                    % (
+                        counts.get("total"),
+                        (counts.get("by_day") or {}).get("today"),
+                        (counts.get("by_day") or {}).get("tomorrow"),
+                        counts.get("by_type"),
+                    )
+                )
+                break
+    except Exception as e:
+        st.warning(f"SPAIN DEBUG error: {e}")
+
+
 def _immediate_rerun():
     if hasattr(st, "rerun"): st.rerun()
     elif hasattr(st, "experimental_rerun"): st.experimental_rerun()
@@ -142,6 +165,11 @@ if do_cold_boot:
 
         st.session_state[f"{key}_data"] = entries
         st.session_state[f"{key}_last_fetch"] = now_ts
+
+        # TEMP: show Spain counts when meteoalarm feed loads on cold boot
+        if key == "meteoalarm":
+            _debug_dump_spain_counts(entries)
+    
     st.session_state["last_refreshed"] = now_ts
     st.session_state["_cold_boot_done"] = True
 
@@ -209,6 +237,10 @@ if to_fetch:
         st.session_state[f"{key}_last_fetch"] = now
         st.session_state["last_refreshed"] = now
 
+        # TEMP: show Spain counts when meteoalarm feed refreshes
+        if key == "meteoalarm":
+            _debug_dump_spain_counts(entries)
+        
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
