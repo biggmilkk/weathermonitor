@@ -189,21 +189,20 @@ def render(entries, conf):
 
             with cols[1]:
                 active_count = len(items)
-                st.markdown(
+                badges_html = (
                     "<span style='margin-left:6px;padding:2px 6px;"
                     "border-radius:4px;background:#eef0f3;color:#000;font-size:0.9em;"
                     "font-weight:600;display:inline-block;'>"
-                    f"{active_count} Active</span>",
-                    unsafe_allow_html=True,
+                    f"{active_count} Active</span>"
                 )
                 if new_count > 0:
-                    st.markdown(
-                        "<span style='margin-left:6px;padding:2px 6px;display:inline-block;"
+                    badges_html += (
+                        "<span style='margin-left:8px;padding:2px 6px;"
                         "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
-                        "font-weight:bold;'>"
-                        f"❗ {new_count} New</span>",
-                        unsafe_allow_html=True,
+                        "font-weight:bold;display:inline-block;'>"
+                        f"❗ {new_count} New</span>"
                     )
+                st.markdown(badges_html, unsafe_allow_html=True)
 
             # expanded bucket content
             if st.session_state.get(open_key) == bkey:
