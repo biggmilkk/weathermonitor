@@ -198,7 +198,7 @@ def render(entries, conf):
                 if new_count > 0:
                     badges_html += (
                         "<span style='margin-left:8px;padding:2px 6px;"
-                        "border-radius:4px;background:#ffeecc;color:#000;font-size:0.9em;"
+                        "border-radius:4px;background:#FFEB99;color:#000;font-size:0.9em;"
                         "font-weight:bold;display:inline-block;'>"
                         f"❗ {new_count} New</span>"
                     )
