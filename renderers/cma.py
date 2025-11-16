@@ -87,8 +87,12 @@ def _render_card(item: dict, *, is_new: bool) -> None:
     if published:
         st.caption(f"Published: {published}")
 
-    st.markdown("---")
+    # Render full body text if present
+    body = item.get("body")
+    if body:
+        st.markdown(body)
 
+    st.markdown("---")
 
 # --------------------------
 # Public renderer entrypoint
