@@ -55,11 +55,33 @@ def _discover_links_from_map(html: str) -> List[str]:
 
 
 def _parse_title(soup: BeautifulSoup) -> str:
+    """
+    Try to extract a good human-readable title for CMA warnings.
+
+    Priority:
+    1. First <p> inside <div class="xml"> (CMA detail body heading)
+    2. <h1> (breadcrumb on some pages)
+    3. <title> or generic fallback.
+    """
+    # 1) CMA-style XML block heading
+    xml_div = soup.find("div", class_="xml")
+    if xml_div:
+        first_p = xml_div.find("p")
+        if first_p:
+            text = first_p.get_text("", strip=True)
+            if text:
+                # Strip trailing colon-like characters
+                text = re.sub(r"[：:]\s*$", "", text)
+                return text
+
+    # 2) Fallback: breadcrumb <h1>
     h1 = soup.find("h1")
     if h1 and h1.get_text(strip=True):
         raw = h1.get_text(strip=True)
-    else:
-        raw = soup.title.get_text(strip=True) if soup.title else "气象预警"
+        return raw.strip()
+
+    # 3) Final fallback: <title> or generic label
+    raw = soup.title.get_text(strip=True) if soup.title else "气象预警"
     return raw.strip()
 
 
@@ -77,8 +99,48 @@ def _parse_published(soup: BeautifulSoup) -> Optional[str]:
 
 
 def _parse_body(soup: BeautifulSoup) -> Optional[str]:
+    """
+    Extract the main text/body of the CMA warning.
+
+    Priority:
+    1. Text paragraphs inside <div class="xml">, skipping the first <p>
+       (used as title) and empty paragraphs.
+    2. Fallback to the older generic logic (id="text" / <article> / full soup).
+    """
+
+    # --- 1) CMA-specific XML block ---
+    xml_div = soup.find("div", class_="xml")
+    if xml_div:
+        ps = xml_div.find_all("p")
+        texts: List[str] = []
+
+        for idx, p in enumerate(ps):
+            # Grab visible text from the <p>
+            t = p.get_text(" ", strip=True)
+            if not t:
+                # skip empty / &nbsp; paragraphs
+                continue
+
+            if idx == 0:
+                # First <p> is the headline we used as title; skip from body
+                continue
+
+            # If you prefer to stop before 防御指南, you could uncomment:
+            # if t.startswith("防御指南"):
+            #     break
+
+            texts.append(t)
+
+        if texts:
+            body = "\n\n".join(texts)
+            if body:
+                return body
+
+    # --- 2) Fallback: old behavior ---
     art = soup.find(id="text") or soup.find("article") or soup
-    ps = [p.get_text(" ", strip=True) for p in art.find_all("p")] or [art.get_text(" ", strip=True)]
+    ps = [p.get_text(" ", strip=True) for p in art.find_all("p")] or [
+        art.get_text(" ", strip=True)
+    ]
     body = "\n\n".join([t for t in ps if t])
     return body or None
 
@@ -119,7 +181,9 @@ async def _fetch_detail(client: httpx.AsyncClient, url: str) -> Optional[Entry]:
     return Entry(title=title, url=url, published=published, body=body)
 
 
-async def scrape_cma_async(conf: Optional[Dict[str, Any]] = None, client: Optional[httpx.AsyncClient] = None) -> Dict[str, Any]:
+async def scrape_cma_async(
+    conf: Optional[Dict[str, Any]] = None, client: Optional[httpx.AsyncClient] = None
+) -> Dict[str, Any]:
     close_client = False
     if client is None:
         client = httpx.AsyncClient(timeout=TIMEOUT, headers=HEADERS, follow_redirects=True)
