@@ -75,9 +75,10 @@ def _render_card(item: dict, *, is_new: bool) -> None:
     if region:
         st.caption(f"Region: {region}")
 
-    summary = item.get("summary")
-    if summary:
-        st.markdown(summary)
+    # Show summary if present, otherwise fall back to body
+    text_block = item.get("summary") or item.get("body")
+    if text_block:
+        st.markdown(text_block)
 
     link = _norm(item.get("link"))
     if link and title:
@@ -86,11 +87,6 @@ def _render_card(item: dict, *, is_new: bool) -> None:
     published = _to_utc_label(item.get("published"))
     if published:
         st.caption(f"Published: {published}")
-
-    # Render full body text if present
-    body = item.get("body")
-    if body:
-        st.markdown(body)
 
     st.markdown("---")
 
