@@ -1,4 +1,4 @@
-# renderers/ec.py
+# renderers/cma.py
 import html
 import time
 from collections import OrderedDict
@@ -9,7 +9,8 @@ from dateutil import parser as dateparser
 from computation import (
     attach_timestamp,
     sort_newest,
-    ec_bucket_from_title,
+    alphabetic_with_last,
+    entry_ts,
 )
 
 # ============================================================
@@ -49,33 +50,97 @@ def render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
 # ============================================================
-# Province ordering
+# CMA buckets — RED/ORANGE ONLY
 # ============================================================
 
-_PROVINCE_ORDER = [
-    "Alberta", "British Columbia", "Manitoba", "New Brunswick",
-    "Newfoundland and Labrador", "Northwest Territories", "Nova Scotia",
-    "Nunavut", "Ontario", "Prince Edward Island", "Quebec",
-    "Saskatchewan", "Yukon",
+LEVEL_TO_BUCKET_LABEL = {
+    "Red":    "Red Warning",
+    "Orange": "Orange Warning",
+    # Intentionally omit Yellow/Blue
+}
+
+_BUCKET_ORDER = [
+    "Red Warning",
+    "Orange Warning",
 ]
 
+# Bullet colors for per-alert titles
+LEVEL_TO_BULLET_COLOR = {
+    "Red": "#E60026",
+    "Orange": "#FF7F00",
+}
+
+def _cma_bucket_from_level(level: str | None) -> str | None:
+    return LEVEL_TO_BUCKET_LABEL.get(_norm(level))
+
 # ============================================================
-# EC Grouped Compact Renderer
+# Counting logic
+# ============================================================
+
+def _effective_last_seen(
+    bkey: str,
+    *,
+    bucket_lastseen: dict,
+    pending_seen: dict,
+    active_bucket: str | None,
+) -> float:
+    """
+    Key fix:
+    - If the bucket is currently open, treat the bucket as "seen since open time"
+      using pending_seen[bkey], even before close commits.
+    - Otherwise, use the committed bucket_lastseen[bkey].
+    """
+    committed = float(bucket_lastseen.get(bkey, 0.0) or 0.0)
+    if active_bucket == bkey:
+        opened = float(pending_seen.get(bkey, committed) or committed)
+        return max(committed, opened)
+    return committed
+
+def _remaining_new_total(
+    entries: list[dict],
+    *,
+    bucket_lastseen: dict,
+    pending_seen: dict,
+    active_bucket: str | None,
+) -> int:
+    total = 0
+    for e in entries or []:
+        prov = _norm(e.get("province_name") or e.get("province") or e.get("region")) or "全国"
+        bucket = e.get("bucket")
+        if not bucket:
+            continue
+        bkey = f"{prov}|{bucket}"
+        last_seen = _effective_last_seen(
+            bkey,
+            bucket_lastseen=bucket_lastseen,
+            pending_seen=pending_seen,
+            active_bucket=active_bucket,
+        )
+        if entry_ts(e) > last_seen:
+            total += 1
+    return total
+
+# ============================================================
+# CMA Grouped Renderer
 # ============================================================
 
 def render(entries, conf):
     """
-    Grouped compact renderer for Environment Canada:
-      Province → Warning bucket → list of alerts
+    CMA renderer (Environment Canada style):
+      Province → (Red Warning / Orange Warning) → alerts
+
+    Fixes:
+    - NEW count tags use effective_last_seen (pending-aware)
+    - Per-item NEW tags follow the same logic
+    - remaining_new_total in session_state updates immediately on toggle
     """
-    feed_key = conf.get("key", "ec")
+    feed_key = conf.get("key", "cma")
 
     open_key        = f"{feed_key}_active_bucket"
     pending_map_key = f"{feed_key}_bucket_pending_seen"
     lastseen_key    = f"{feed_key}_bucket_last_seen"
     rerun_guard_key = f"{feed_key}_rerun_guard"
 
-    # clear one-shot guard (prevents double rerun loops)
     if st.session_state.get(rerun_guard_key):
         st.session_state.pop(rerun_guard_key, None)
 
@@ -88,22 +153,35 @@ def render(entries, conf):
     pending_seen    = st.session_state[pending_map_key]
     bucket_lastseen = st.session_state[lastseen_key]
 
-    # normalize + sort newest-first
     items = sort_newest(attach_timestamp(entries or []))
 
-    # precompute normalized alerts with province + bucket keys
-    filtered = []
+    # Normalize and filter to Red/Orange only (extra guard)
+    filtered: list[dict] = []
     for e in items:
-        bucket = ec_bucket_from_title(e.get("title", ""))
+        bucket = _cma_bucket_from_level(e.get("level"))
         if not bucket:
             continue
-        prov_name = (e.get("province_name") or str(e.get("province") or "")).strip() or "Unknown"
-        d = dict(e, bucket=bucket, province_name=prov_name, bkey=f"{prov_name}|{bucket}")
-        filtered.append(d)
+
+        prov = _norm(e.get("region") or e.get("province_name") or e.get("province")) or "全国"
+        filtered.append(dict(
+            e,
+            bucket=bucket,
+            province_name=prov,
+            bkey=f"{prov}|{bucket}",
+        ))
 
     if not filtered:
+        st.session_state[f"{feed_key}_remaining_new_total"] = 0
         render_empty_state()
         return
+
+    # Update country-level NEW badge stored in session_state
+    st.session_state[f"{feed_key}_remaining_new_total"] = _remaining_new_total(
+        filtered,
+        bucket_lastseen=bucket_lastseen,
+        pending_seen=pending_seen,
+        active_bucket=active_bucket,
+    )
 
     # ---------- Actions ----------
     cols_actions = st.columns([1, 6])
@@ -115,111 +193,136 @@ def render(entries, conf):
             pending_seen.clear()
             st.session_state[open_key] = None
             st.session_state[lastseen_key] = bucket_lastseen
-            # ensure the button badges zero instantly
             st.session_state[f"{feed_key}_remaining_new_total"] = 0
             _safe_rerun()
             return
 
-    # group by province; order by canonical list first, then any extras
-    from collections import OrderedDict as _OD
-    groups = _OD()
+    # Group by province
+    groups: OrderedDict[str, list[dict]] = OrderedDict()
     for e in filtered:
         groups.setdefault(e["province_name"], []).append(e)
 
-    provinces = [p for p in _PROVINCE_ORDER if p in groups] + [
-        p for p in groups if p not in _PROVINCE_ORDER
-    ]
+    provinces = alphabetic_with_last(groups.keys(), last_value="全国")
 
     # ---------- Provinces ----------
     for prov in provinces:
-        alerts = groups.get(prov, []) or []
+        alerts = groups.get(prov, [])
         if not alerts:
             continue
 
         def _prov_has_new() -> bool:
             for a in alerts:
-                last_seen = float(bucket_lastseen.get(a["bkey"], 0.0))
-                if float(a.get("timestamp") or 0.0) > last_seen:
+                bkey = a["bkey"]
+                last_seen = _effective_last_seen(
+                    bkey,
+                    bucket_lastseen=bucket_lastseen,
+                    pending_seen=pending_seen,
+                    active_bucket=active_bucket,
+                )
+                if entry_ts(a) > last_seen:
                     return True
             return False
 
-        st.markdown(_stripe_wrap(f"<h2>{html.escape(prov)}</h2>", _prov_has_new()), unsafe_allow_html=True)
+        st.markdown(
+            _stripe_wrap(f"<h2>{html.escape(prov)}</h2>", _prov_has_new()),
+            unsafe_allow_html=True,
+        )
 
-        # group by warning bucket inside the province
-        buckets = _OD()
+        # Group by bucket
+        buckets: OrderedDict[str, list[dict]] = OrderedDict()
         for a in alerts:
             buckets.setdefault(a["bucket"], []).append(a)
 
+        ordered_labels = [b for b in _BUCKET_ORDER if b in buckets]
+
         # ---------- Buckets ----------
-        for label, items in buckets.items():
+        for label in ordered_labels:
+            items_in_bucket = buckets[label]
             bkey = f"{prov}|{label}"
+
             cols = st.columns([0.7, 0.3])
 
-            # bucket toggle + pending/seen bookkeeping
+            # Toggle button (NO bullet)
             with cols[0]:
                 if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
-                    state_changed = False
                     prev = active_bucket
 
-                    # if switching buckets, commit the previously open bucket as seen
+                    # commit previous bucket if switching
                     if prev and prev != bkey:
-                        ts_opened_prev = float(pending_seen.pop(prev, time.time()))
-                        bucket_lastseen[prev] = ts_opened_prev
+                        bucket_lastseen[prev] = float(pending_seen.pop(prev, time.time()))
 
                     if active_bucket == bkey:
-                        # closing the same bucket -> commit as seen
-                        ts_opened = float(pending_seen.pop(bkey, time.time()))
-                        bucket_lastseen[bkey] = ts_opened
+                        # closing: commit as seen at open time
+                        bucket_lastseen[bkey] = float(pending_seen.pop(bkey, time.time()))
                         st.session_state[open_key] = None
-                        state_changed = True
+                        active_bucket = None  # keep local in sync
                     else:
-                        # opening a new bucket -> start pending timer
+                        # opening: start pending timer
                         st.session_state[open_key] = bkey
                         pending_seen[bkey] = time.time()
-                        state_changed = True
+                        active_bucket = bkey  # keep local in sync
 
-                    if state_changed and not st.session_state.get(rerun_guard_key, False):
+                    # recompute totals immediately
+                    st.session_state[f"{feed_key}_remaining_new_total"] = _remaining_new_total(
+                        filtered,
+                        bucket_lastseen=bucket_lastseen,
+                        pending_seen=pending_seen,
+                        active_bucket=active_bucket,
+                    )
+
+                    if not st.session_state.get(rerun_guard_key):
                         st.session_state[rerun_guard_key] = True
                         _safe_rerun()
                         return
 
-            # counts (active + new since last_seen)
-            last_seen = float(bucket_lastseen.get(bkey, 0.0))
-            new_count = sum(1 for x in items if float(x.get("timestamp") or 0.0) > last_seen)
+            # NEW count (pending-aware)
+            last_seen_effective = _effective_last_seen(
+                bkey,
+                bucket_lastseen=bucket_lastseen,
+                pending_seen=pending_seen,
+                active_bucket=active_bucket,
+            )
+            new_count = sum(1 for x in items_in_bucket if entry_ts(x) > last_seen_effective)
 
             with cols[1]:
-                active_count = len(items)
-                badges_html = (
+                badges = (
                     "<span style='margin-left:6px;padding:2px 6px;"
                     "border-radius:4px;background:#eef0f3;color:#000;font-size:0.9em;"
                     "font-weight:600;display:inline-block;'>"
-                    f"{active_count} Active</span>"
+                    f"{len(items_in_bucket)} Active</span>"
                 )
                 if new_count > 0:
-                    badges_html += (
+                    badges += (
                         "<span style='margin-left:8px;padding:2px 6px;"
                         "border-radius:4px;background:#FFEB99;color:#000;font-size:0.9em;"
                         "font-weight:bold;display:inline-block;'>"
                         f"❗ {new_count} New</span>"
                     )
-                st.markdown(badges_html, unsafe_allow_html=True)
+                st.markdown(badges, unsafe_allow_html=True)
 
-            # expanded bucket content
+            # Expanded bucket content
             if st.session_state.get(open_key) == bkey:
-                for a in items:
-                    is_new = float(a.get("timestamp") or 0.0) > last_seen
+                for a in sort_newest(attach_timestamp(items_in_bucket)):
+                    is_new = entry_ts(a) > last_seen_effective
                     prefix = "[NEW] " if is_new else ""
-                    title  = _norm(a.get("title", "")) or "(no title)"
-                    region = _norm(a.get("region", ""))
-                    link   = _norm(a.get("link"))
 
-                    if link and title:
-                        st.markdown(f"{prefix}**[{title}]({link})**")
-                    else:
-                        st.markdown(f"{prefix}**{title}**")
+                    # Use headline (fallback title)
+                    headline = _norm(a.get("headline") or a.get("title")) or "(no title)"
 
-                    if region:
-                        st.caption(f"Region: {region}")
+                    # Colored bullet based on level
+                    lvl = _norm(a.get("level"))
+                    bullet_color = LEVEL_TO_BULLET_COLOR.get(lvl, "#888")
+
+                    title_html = (
+                        f"{prefix}"
+                        f"<span style='color:{bullet_color};font-size:16px;'>&#9679;</span> "
+                        f"<strong>{html.escape(headline)}</strong>"
+                    )
+                    st.markdown(_stripe_wrap(title_html, is_new), unsafe_allow_html=True)
+
+                    desc = _norm(a.get("summary") or a.get("description") or a.get("body"))
+                    if desc:
+                        st.markdown(html.escape(desc).replace("\n", "  \n"))
 
                     pub_label = _to_utc_label(a.get("published"))
                     if pub_label:
