@@ -122,6 +122,19 @@ def _province_from_id(item: Dict[str, Any]) -> str:
                 return PROVINCE_CODE_TO_CN[code]
     return "全国"
 
+
+def _alarm_link_from_id(iid: Optional[str]) -> Optional[str]:
+    """
+    CMA detail pages follow:
+      https://weather.cma.cn/web/alarm/<id>.html
+    """
+    if not iid or not isinstance(iid, str):
+        return None
+    iid = iid.strip()
+    if not iid:
+        return None
+    return f"https://weather.cma.cn/web/alarm/{iid}.html"
+
 # --------------------------
 # Main scraper
 # --------------------------
@@ -148,6 +161,9 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
             level = _extract_level(item)
             if level not in ALLOWED_LEVELS:
                 continue
+
+            iid = item.get("id")
+            link = _alarm_link_from_id(iid)
 
             headline = (item.get("headline") or "").strip()
             short_title = (item.get("title") or "").strip()
@@ -178,7 +194,7 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
                     "summary": summary,
                     "published": published,
                     "timestamp": ts,
-                    "link": None,
+                    "link": link,  # ✅ NEW
                 }
             )
 
