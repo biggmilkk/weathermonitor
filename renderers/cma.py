@@ -2,7 +2,6 @@
 import html
 import time
 from collections import OrderedDict
-from datetime import timezone as _tz
 
 import streamlit as st
 from dateutil import parser as dateparser
@@ -11,20 +10,12 @@ from computation import (
     attach_timestamp,
     sort_newest,
     alphabetic_with_last,
-    compute_remaining_new_by_region,
+    entry_ts,
 )
 
-# --------------------------
+# ============================================================
 # Helpers
-# --------------------------
-
-def _as_list(entries):
-    if not entries:
-        return []
-    return entries if isinstance(entries, list) else [entries]
-
-def _norm(s: str | None) -> str:
-    return (s or "").strip()
+# ============================================================
 
 def _to_utc_label(pub: str | None) -> str | None:
     if not pub:
@@ -32,10 +23,13 @@ def _to_utc_label(pub: str | None) -> str | None:
     try:
         dt = dateparser.parse(pub)
         if dt:
-            return dt.astimezone(_tz.utc).strftime("%a, %d %b %y %H:%M:%S UTC")
+            return dt.astimezone().strftime("%a, %d %b %y %H:%M:%S UTC")
     except Exception:
         pass
     return pub
+
+def _norm(s: str | None) -> str:
+    return (s or "").strip()
 
 def _stripe_wrap(content: str, is_new: bool) -> str:
     if not is_new:
@@ -52,9 +46,16 @@ def _safe_rerun():
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
 
-def _render_empty_state():
+def render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
+# ============================================================
+# CMA bucket ordering (severity)
+# ============================================================
+
+_SEVERITY_ORDER = ["Red", "Orange", "Yellow", "Blue"]
+
+# Bullet colors (matches your old CMA renderer)
 CMA_COLORS = {
     "Yellow": "#FFD400",
     "Orange": "#FF7F00",
@@ -62,169 +63,212 @@ CMA_COLORS = {
     "Blue":   "#1E90FF",
 }
 
-def _render_alert(item: dict, *, is_new: bool) -> None:
-    title = _norm(item.get("title")) or _norm(item.get("headline")) or "(no title)"
-    level = _norm(item.get("level"))
-    color = CMA_COLORS.get(level, "#888")
+def _cma_bucket_from_level(level: str | None) -> str | None:
+    lvl = _norm(level)
+    return lvl if lvl in ("Red", "Orange", "Yellow", "Blue") else None
 
-    prefix = "[NEW] " if is_new else ""
-    title_html = (
-        f"{prefix}<span style='color:{color};font-size:18px;'>&#9679;</span> "
-        f"<strong>{html.escape(title)}</strong>"
-    )
-    st.markdown(_stripe_wrap(title_html, is_new), unsafe_allow_html=True)
+def _remaining_new_total(entries, bucket_lastseen) -> int:
+    """
+    Count unseen items using province|bucket keys (province|severity).
+    Mirrors computation.ec_remaining_new_total pattern but for CMA. :contentReference[oaicite:5]{index=5}
+    """
+    total = 0
+    for e in entries or []:
+        prov = _norm(e.get("province_name") or e.get("province") or e.get("region") or "Unknown") or "Unknown"
+        bucket = _cma_bucket_from_level(e.get("bucket") or e.get("level"))
+        if not bucket:
+            continue
+        bkey = f"{prov}|{bucket}"
+        last_seen = float(bucket_lastseen.get(bkey, 0.0))
+        if entry_ts(e) > last_seen:
+            total += 1
+    return total
 
-    text_block = _norm(item.get("summary") or item.get("description") or item.get("body"))
-    if text_block:
-        st.markdown(html.escape(text_block).replace("\n", "  \n"))
-
-    link = _norm(item.get("link"))
-    if link:
-        st.markdown(f"[Read more]({link})")
-
-    published = _to_utc_label(item.get("published"))
-    if published:
-        st.caption(f"Published: {published}")
-
-    st.markdown("---")
-
-
-# --------------------------
-# Public renderer
-# --------------------------
+# ============================================================
+# CMA EC-style Grouped Compact Renderer
+# ============================================================
 
 def render(entries, conf):
     """
-    CMA renderer with *province buckets* (single-level toggle).
+    EC-style grouped renderer for CMA:
+      Province → Severity bucket (Red/Orange/Yellow/Blue) → list of alerts
 
-    IMPORTANT:
-    - last_seen is tracked per province (region) only.
-    - Opening/closing a province marks ALL alerts in that province as seen.
-    - Total remaining new count is computed via compute_remaining_new_by_region. :contentReference[oaicite:3]{index=3}
+    Clear-on-close behavior:
+      - Opening a bucket starts pending timer
+      - Closing commits as seen for that province|severity bucket
     """
     feed_key = conf.get("key", "cma")
 
-    open_key        = f"{feed_key}_active_region"          # province currently open
-    pending_key     = f"{feed_key}_region_pending_seen"    # { province: opened_ts }
-    lastseen_key    = f"{feed_key}_region_last_seen"       # { province: last_seen_ts }
+    open_key        = f"{feed_key}_active_bucket"
+    pending_map_key = f"{feed_key}_bucket_pending_seen"
+    lastseen_key    = f"{feed_key}_bucket_last_seen"
     rerun_guard_key = f"{feed_key}_rerun_guard"
 
-    # Init state
+    # clear one-shot guard
+    if st.session_state.get(rerun_guard_key):
+        st.session_state.pop(rerun_guard_key, None)
+
     st.session_state.setdefault(open_key, None)
-    st.session_state.setdefault(pending_key, {})
+    st.session_state.setdefault(pending_map_key, {})
     st.session_state.setdefault(lastseen_key, {})
     st.session_state.setdefault(f"{feed_key}_remaining_new_total", 0)
 
-    active_region = st.session_state[open_key]
-    pending_seen  = st.session_state[pending_key]
-    last_seen_map = st.session_state[lastseen_key]
+    active_bucket   = st.session_state[open_key]
+    pending_seen    = st.session_state[pending_map_key]
+    bucket_lastseen = st.session_state[lastseen_key]
 
-    # Normalize timestamps + sort
-    items = sort_newest(attach_timestamp(_as_list(entries)))
+    # normalize + sort newest-first
+    items = sort_newest(attach_timestamp(entries or []))
 
-    # Ensure every item has a province-like region
-    norm_items = []
+    # normalize alerts with province + severity bucket keys
+    filtered = []
     for e in items:
-        region = _norm(e.get("region") or "全国")
-        d = dict(e)
-        d["region"] = region
-        norm_items.append(d)
+        bucket = _cma_bucket_from_level(e.get("level"))
+        if not bucket:
+            continue
+        prov_name = _norm(e.get("region") or e.get("province_name") or e.get("province")) or "全国"
+        d = dict(e, bucket=bucket, province_name=prov_name, bkey=f"{prov_name}|{bucket}")
+        filtered.append(d)
 
-    if not norm_items:
+    if not filtered:
         st.session_state[f"{feed_key}_remaining_new_total"] = 0
-        _render_empty_state()
+        render_empty_state()
         return
 
-    # Group by province
-    groups: OrderedDict[str, list[dict]] = OrderedDict()
-    for e in norm_items:
-        groups.setdefault(e["region"], []).append(e)
+    # Update the feed-level "remaining new" total for your country button
+    st.session_state[f"{feed_key}_remaining_new_total"] = _remaining_new_total(filtered, bucket_lastseen)
 
-    # Province ordering (put 全国 last)
-    regions = alphabetic_with_last(groups.keys(), last_value="全国")
-
-    # Update the total remaining new count for the top-level (country) badge
-    total_new = compute_remaining_new_by_region(
-        norm_items,
-        region_field="region",
-        last_seen_map=last_seen_map,
-        ts_key="timestamp",
-    )
-    st.session_state[f"{feed_key}_remaining_new_total"] = int(total_new)
-
-    # Action row
+    # ---------- Actions ----------
     cols_actions = st.columns([1, 6])
     with cols_actions[0]:
         if st.button("Mark all as seen", key=f"{feed_key}_mark_all_seen"):
             now_ts = time.time()
-            for r in groups.keys():
-                last_seen_map[r] = now_ts
+            for a in filtered:
+                bucket_lastseen[a["bkey"]] = now_ts
             pending_seen.clear()
             st.session_state[open_key] = None
-            st.session_state[lastseen_key] = last_seen_map
+            st.session_state[lastseen_key] = bucket_lastseen
             st.session_state[f"{feed_key}_remaining_new_total"] = 0
             _safe_rerun()
             return
 
-    # Render province buckets
-    for region in regions:
-        region_items = groups.get(region, [])
-        if not region_items:
+    # group by province; keep 全国 last
+    groups: OrderedDict[str, list[dict]] = OrderedDict()
+    for e in filtered:
+        groups.setdefault(e["province_name"], []).append(e)
+
+    provinces = alphabetic_with_last(groups.keys(), last_value="全国")
+
+    # ---------- Provinces ----------
+    for prov in provinces:
+        alerts = groups.get(prov, []) or []
+        if not alerts:
             continue
 
-        last_seen = float(last_seen_map.get(region, 0.0) or 0.0)
-        new_count = sum(1 for x in region_items if float(x.get("timestamp") or 0.0) > last_seen)
+        def _prov_has_new() -> bool:
+            for a in alerts:
+                last_seen = float(bucket_lastseen.get(a["bkey"], 0.0))
+                if float(a.get("timestamp") or 0.0) > last_seen:
+                    return True
+            return False
 
-        cols = st.columns([0.7, 0.3])
+        st.markdown(_stripe_wrap(f"<h2>{html.escape(prov)}</h2>", _prov_has_new()), unsafe_allow_html=True)
 
-        with cols[0]:
-            # Province header button
-            if st.button(region, key=f"{feed_key}:{region}:btn", use_container_width=True):
-                prev = active_region
+        # group by severity bucket inside province, order by severity
+        buckets: OrderedDict[str, list[dict]] = OrderedDict()
+        for a in alerts:
+            buckets.setdefault(a["bucket"], []).append(a)
 
-                # Commit last-seen for previous open region if switching
-                if prev and prev != region:
-                    ts_opened_prev = float(pending_seen.pop(prev, time.time()))
-                    last_seen_map[prev] = ts_opened_prev
+        bucket_labels = [b for b in _SEVERITY_ORDER if b in buckets] + [b for b in buckets if b not in _SEVERITY_ORDER]
 
-                # Toggle close/open
-                if active_region == region:
-                    ts_opened = float(pending_seen.pop(region, time.time()))
-                    last_seen_map[region] = ts_opened
-                    st.session_state[open_key] = None
-                else:
-                    st.session_state[open_key] = region
-                    pending_seen[region] = time.time()
+        # ---------- Buckets ----------
+        for label in bucket_labels:
+            items_in_bucket = buckets.get(label, []) or []
+            if not items_in_bucket:
+                continue
 
-                # Persist maps + rerun
-                st.session_state[pending_key] = pending_seen
-                st.session_state[lastseen_key] = last_seen_map
-                _safe_rerun()
-                return
+            bkey = f"{prov}|{label}"
+            cols = st.columns([0.7, 0.3])
 
-        with cols[1]:
-            active_count = len(region_items)
-            badges_html = (
-                "<span style='margin-left:6px;padding:2px 6px;"
-                "border-radius:4px;background:#eef0f3;color:#000;font-size:0.9em;"
-                "font-weight:600;display:inline-block;'>"
-                f"{active_count} Active</span>"
-            )
-            if new_count > 0:
-                badges_html += (
-                    "<span style='margin-left:8px;padding:2px 6px;"
-                    "border-radius:4px;background:#FFEB99;color:#000;font-size:0.9em;"
-                    "font-weight:bold;display:inline-block;'>"
-                    f"❗ {new_count} New</span>"
+            # bucket toggle + pending/seen bookkeeping
+            with cols[0]:
+                # show colored bullet next to bucket label
+                color = CMA_COLORS.get(label, "#888")
+                btn_label = f"● {label}"
+                if st.button(btn_label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
+                    state_changed = False
+                    prev = active_bucket
+
+                    # if switching buckets, commit previously open bucket
+                    if prev and prev != bkey:
+                        ts_opened_prev = float(pending_seen.pop(prev, time.time()))
+                        bucket_lastseen[prev] = ts_opened_prev
+
+                    if active_bucket == bkey:
+                        # closing -> commit as seen
+                        ts_opened = float(pending_seen.pop(bkey, time.time()))
+                        bucket_lastseen[bkey] = ts_opened
+                        st.session_state[open_key] = None
+                        state_changed = True
+                    else:
+                        # opening -> start pending timer
+                        st.session_state[open_key] = bkey
+                        pending_seen[bkey] = time.time()
+                        state_changed = True
+
+                    if state_changed and not st.session_state.get(rerun_guard_key, False):
+                        st.session_state[rerun_guard_key] = True
+                        # update totals immediately on UI action
+                        st.session_state[f"{feed_key}_remaining_new_total"] = _remaining_new_total(filtered, bucket_lastseen)
+                        _safe_rerun()
+                        return
+
+            # counts (active + new since last_seen)
+            last_seen = float(bucket_lastseen.get(bkey, 0.0))
+            new_count = sum(1 for x in items_in_bucket if float(x.get("timestamp") or 0.0) > last_seen)
+
+            with cols[1]:
+                active_count = len(items_in_bucket)
+                badges_html = (
+                    "<span style='margin-left:6px;padding:2px 6px;"
+                    "border-radius:4px;background:#eef0f3;color:#000;font-size:0.9em;"
+                    "font-weight:600;display:inline-block;'>"
+                    f"{active_count} Active</span>"
                 )
-            st.markdown(badges_html, unsafe_allow_html=True)
+                if new_count > 0:
+                    badges_html += (
+                        "<span style='margin-left:8px;padding:2px 6px;"
+                        "border-radius:4px;background:#FFEB99;color:#000;font-size:0.9em;"
+                        "font-weight:bold;display:inline-block;'>"
+                        f"❗ {new_count} New</span>"
+                    )
+                st.markdown(badges_html, unsafe_allow_html=True)
 
-        # If open, render all alerts in this province
-        if st.session_state.get(open_key) == region:
-            # Ensure newest first inside province too
-            region_items_sorted = sort_newest(attach_timestamp(region_items))
-            for a in region_items_sorted:
-                is_new = float(a.get("timestamp") or 0.0) > last_seen
-                _render_alert(a, is_new=is_new)
+            # expanded bucket content (newest first)
+            if st.session_state.get(open_key) == bkey:
+                expanded = sort_newest(attach_timestamp(items_in_bucket))
+                for a in expanded:
+                    is_new = float(a.get("timestamp") or 0.0) > last_seen
+                    prefix = "[NEW] " if is_new else ""
+
+                    title = _norm(a.get("headline") or a.get("title") or "") or "(no title)"
+                    desc  = _norm(a.get("summary") or a.get("description") or a.get("body") or "")
+
+                    # alert title line with bullet color by severity
+                    color = CMA_COLORS.get(label, "#888")
+                    title_html = (
+                        f"{prefix}<span style='color:{color};font-size:16px;'>&#9679;</span> "
+                        f"<strong>{html.escape(title)}</strong>"
+                    )
+                    st.markdown(_stripe_wrap(title_html, is_new), unsafe_allow_html=True)
+
+                    if desc:
+                        st.markdown(html.escape(desc).replace("\n", "  \n"))
+
+                    pub_label = _to_utc_label(a.get("published"))
+                    if pub_label:
+                        st.caption(f"Published: {pub_label}")
+
+                    st.markdown("---")
 
         st.markdown("---")
