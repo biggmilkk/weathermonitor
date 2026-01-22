@@ -47,6 +47,25 @@ PROVINCE_CN_TO_EN = {
 
 ALLOWED_LEVELS = {"Orange", "Red"}
 
+# Match real warning color tokens (avoid place-names like “红河”)
+RE_COLOR_TOKEN = re.compile(r"(红色|橙色|黄色|蓝色)\s*(?:预警|预警信号|警报|警报信号)")
+RE_COLOR_SIMPLE = re.compile(r"(红色|橙色|黄色|蓝色)")
+RE_COLOR_CODE = re.compile(r"_(RED|ORANGE|YELLOW|BLUE)\b", re.IGNORECASE)
+
+CN_COLOR_TO_EN = {
+    "红色": "Red",
+    "橙色": "Orange",
+    "黄色": "Yellow",
+    "蓝色": "Blue",
+}
+
+CODE_COLOR_TO_EN = {
+    "RED": "Red",
+    "ORANGE": "Orange",
+    "YELLOW": "Yellow",
+    "BLUE": "Blue",
+}
+
 
 def _parse_pubtime(s: Optional[str]) -> Optional[str]:
     """
@@ -64,42 +83,48 @@ def _parse_pubtime(s: Optional[str]) -> Optional[str]:
         except Exception:
             pass
 
-    # Leave as-is if parse fails; renderer/controller may still parse it
     return s
 
 
 def _extract_level(item: Dict[str, Any]) -> Optional[str]:
     """
-    CMA payloads vary; reliably detect severity by scanning headline/title/description.
-    Works with both '橙色/红色' and '橙/红'.
+    Robust severity detection:
+    - Only treat 红/橙/黄/蓝 as a level when it appears as a COLOR TOKEN (e.g. “黄色预警信号”)
+    - Avoid false positives from place names like “红河”
     """
-    blob = " ".join(
-        str(x) for x in (
-            item.get("headline"),
-            item.get("title"),
-            item.get("description"),
-            item.get("level"),
-            item.get("severity"),
-            item.get("signalLevelName"),
-            item.get("type"),
-        ) if x
-    )
+    parts = [
+        item.get("headline"),
+        item.get("title"),
+        item.get("description"),
+        item.get("level"),
+        item.get("severity"),
+        item.get("signalLevelName"),
+        item.get("type"),
+    ]
+    blob = " ".join(str(x) for x in parts if x)
     blob = re.sub(r"\s+", "", blob)
 
-    if "红" in blob:
-        return "Red"
-    if "橙" in blob:
-        return "Orange"
-    if "黄" in blob:
-        return "Yellow"
-    if "蓝" in blob:
-        return "Blue"
+    # 1) Strong match: “黄色预警(信号)” etc.
+    m = RE_COLOR_TOKEN.search(blob)
+    if m:
+        return CN_COLOR_TO_EN.get(m.group(1))
+
+    # 2) Type code match: “…_RED” etc.
+    m = RE_COLOR_CODE.search(blob)
+    if m:
+        return CODE_COLOR_TO_EN.get(m.group(1).upper())
+
+    # 3) Weaker match: “黄色/蓝色/橙色/红色” exists somewhere (still much safer than single char)
+    m = RE_COLOR_SIMPLE.search(blob)
+    if m:
+        return CN_COLOR_TO_EN.get(m.group(1))
+
     return None
 
 
 def _province_from_id(item: Dict[str, Any]) -> Tuple[str, str]:
     """
-    Reliable province bucketing from numeric prefix in 'id' (GB/T 2260-like).
+    Province bucketing from numeric prefix in 'id' (GB/T 2260-like).
     Example: "37011641600000_..." -> province code "37" -> 山东.
     Returns (province_cn, province_bucket_en)
     """
@@ -143,6 +168,8 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
     for item in alarms:
         try:
             level = _extract_level(item)
+
+            # STRICT: only red/orange get through
             if level not in ALLOWED_LEVELS:
                 continue
 
@@ -164,10 +191,10 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
                     "source": "CMA",
                     "title": title,
                     "level": level,         # "Orange" / "Red"
-                    "region": prov_cn,      # renderer shows this (CN)
+                    "region": prov_cn,      # province CN
                     "bucket": bucket_en,    # optional grouping (EN)
                     "summary": desc.strip(),
-                    "link": None,           # JSON doesn't provide stable web link here
+                    "link": None,
                     "published": pub,
                     "timestamp": ts,
                 }
