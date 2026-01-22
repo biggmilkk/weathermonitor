@@ -197,6 +197,47 @@ def ec_remaining_new_total(
 
 
 # --------------------------------------------------------------------
+# CMA (China Meteorological Administration) helpers
+# --------------------------------------------------------------------
+
+CMA_LEVEL_TO_BUCKET: Mapping[str, str] = {
+    "Red": "Red Warning",
+    "Orange": "Orange Warning",
+}
+
+def cma_bucket_from_level(level: str | None) -> str | None:
+    """Map CMA 'level' to a renderer bucket label (only Orange/Red)."""
+    if not level:
+        return None
+    return CMA_LEVEL_TO_BUCKET.get(str(level).strip())
+
+def cma_remaining_new_total(
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    last_seen_bkey_map: Mapping[str, float],
+    province_field: str = "province",
+) -> int:
+    """CMA remaining-new counter using 'province|{Red/Orange Warning}' keys.
+
+    Notes:
+    - Only counts Orange/Red alerts.
+    - province_field should match what your CMA scraper emits (default: 'province').
+    """
+    total = 0
+    for e in entries or []:
+        bucket = cma_bucket_from_level(str(e.get("level") or "").strip())
+        if not bucket:
+            continue  # ignore Blue/Yellow/unknown
+        prov = (e.get("province_name") or e.get(province_field) or "Unknown")
+        prov_name = str(prov).strip() or "Unknown"
+        bkey = f"{prov_name}|{bucket}"
+        last_seen = float(last_seen_bkey_map.get(bkey, 0.0) or 0.0)
+        if entry_ts(e) > last_seen:
+            total += 1
+    return total
+
+
+# --------------------------------------------------------------------
 # NWS (US National Weather Service) helpers
 # --------------------------------------------------------------------
 
@@ -287,7 +328,10 @@ def meteoalarm_mark_and_sort(
                 d["_is_new"] = alert_id(a) not in seen_ids
                 d["timestamp"] = parse_timestamp(d.get("onset") or d.get("from") or d.get("published"))
                 filtered.append(d)
-            filtered.sort(key=lambda x: (severity_rank.get(x.get("level"), 0), float(x.get("timestamp") or 0.0)), reverse=True)
+            filtered.sort(
+                key=lambda x: (severity_rank.get(x.get("level"), 0), float(x.get("timestamp") or 0.0)),
+                reverse=True
+            )
             new_map[day] = filtered
         c = dict(country)
         c["name"] = name
@@ -613,4 +657,5 @@ def advance_seen(
 
     if not any(_ts(e) > safe_last for e in entries):
         return float(now)
+
     return None
