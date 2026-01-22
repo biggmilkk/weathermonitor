@@ -185,7 +185,7 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
         except Exception:
             logging.exception("[CMA PARSE ERROR]")
 
-    logging.warning("[CMA DEBUG] Parsed %d Red/Orange alerts", len(entries))
+    logging.warning("[CMA DEBUG] Parsed %d", len(entries))
     return {"source": "CMA", "entries": entries}
 
 # --------------------------
