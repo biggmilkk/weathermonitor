@@ -212,28 +212,34 @@ def cma_bucket_from_level(level: str | None) -> str | None:
     return CMA_LEVEL_TO_BUCKET.get(str(level).strip())
 
 def cma_remaining_new_total(
-    entries: Sequence[Mapping[str, Any]],
+    entries,
     *,
-    last_seen_bkey_map: Mapping[str, float],
-    province_field: str = "province",
+    last_seen_bkey_map,
 ) -> int:
-    """CMA remaining-new counter using 'province|{Red/Orange Warning}' keys.
+    """
+    CMA remaining-new counter using the SAME bkey logic as renderers/cma.py:
+      prov = region or province_name or province or "全国"
+      bucket = "Red Warning" / "Orange Warning" from level
+      bkey = f"{prov}|{bucket}"
 
-    Notes:
-    - Only counts Orange/Red alerts.
-    - province_field should match what your CMA scraper emits (default: 'province').
+    Only counts Orange/Red.
     """
     total = 0
     for e in entries or []:
-        bucket = cma_bucket_from_level(str(e.get("level") or "").strip())
+        level = (e.get("level") or "").strip()
+        bucket = {"Red": "Red Warning", "Orange": "Orange Warning"}.get(level)
         if not bucket:
-            continue  # ignore Blue/Yellow/unknown
-        prov = (e.get("province_name") or e.get(province_field) or "Unknown")
-        prov_name = str(prov).strip() or "Unknown"
-        bkey = f"{prov_name}|{bucket}"
+            continue  # ignore Yellow/Blue/unknown
+
+        prov = (e.get("region") or e.get("province_name") or e.get("province") or "全国")
+        prov = str(prov).strip() or "全国"
+
+        bkey = f"{prov}|{bucket}"
         last_seen = float(last_seen_bkey_map.get(bkey, 0.0) or 0.0)
+
         if entry_ts(e) > last_seen:
             total += 1
+
     return total
 
 
