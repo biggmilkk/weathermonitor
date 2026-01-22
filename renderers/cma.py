@@ -35,7 +35,7 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
     )
 
 def _render_empty_state():
-    st.info("No active CMA warnings meeting severity thresholds.")
+    st.info("No active warnings that meet thresholds at the moment.")
 
 # --------------------------
 # CMA-specific rendering
