@@ -78,16 +78,16 @@ def get_feed_definitions():
             "group": "g4_1",
         },
 
-        "cma_china": {
-            "label": "CMA (China)",
-            "type": "rss_cma",
-            "conf": {
-                "translate_to_en": True,
-                "expiry_grace_minutes": 0,
-            },
+        # "cma_china": {
+        #    "label": "CMA (China)",
+        #    "type": "rss_cma",
+        #    "conf": {
+        #        "translate_to_en": True,
+        #        "expiry_grace_minutes": 0,
+        #    },
             # Typically slower moving → 4-minute slot
-            "group": "g4_4",
-        },
+        #    "group": "g4_4",
+        #},
 
         "jma": {
             "label": "JMA (Japan)",
