@@ -1,131 +1,135 @@
 # scraper/cma.py
+from __future__ import annotations
+
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List
+
+import httpx
 
 API_URL = "https://weather.cma.cn/api/map/alarm?adcode="
 
-# Browser-like headers (REQUIRED to avoid 403)
+# Browser-like headers to avoid 403
 CMA_HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/121.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
     ),
     "Referer": "https://weather.cma.cn/",
     "Accept": "application/json, text/plain, */*",
 }
 
-# CMA severity mapping (Chinese → English canonical)
-LEVEL_MAP = {
-    "蓝色": "Blue",
-    "黄色": "Yellow",
-    "橙色": "Orange",
-    "红色": "Red",
+# Province CN→EN bucket map
+PROVINCES = {
+    "北京": "Beijing", "天津": "Tianjin", "上海": "Shanghai", "重庆": "Chongqing",
+    "河北": "Hebei", "山西": "Shanxi", "辽宁": "Liaoning", "吉林": "Jilin",
+    "黑龙江": "Heilongjiang", "江苏": "Jiangsu", "浙江": "Zhejiang", "安徽": "Anhui",
+    "福建": "Fujian", "江西": "Jiangxi", "山东": "Shandong", "河南": "Henan",
+    "湖北": "Hubei", "湖南": "Hunan", "广东": "Guangdong", "海南": "Hainan",
+    "四川": "Sichuan", "贵州": "Guizhou", "云南": "Yunnan", "陕西": "Shaanxi",
+    "甘肃": "Gansu", "青海": "Qinghai", "台湾": "Taiwan",
+    "内蒙古": "Inner Mongolia", "广西": "Guangxi", "西藏": "Tibet",
+    "宁夏": "Ningxia", "新疆": "Xinjiang", "香港": "Hong Kong", "澳门": "Macau",
 }
 
-# Only keep these levels
-ALLOWED_LEVELS = {"Orange", "Red"}
+LEVEL_MAP = {
+    "RED": "Red",
+    "ORANGE": "Orange",
+}
 
-
-def _parse_time(ts: str | None) -> str | None:
-    """Parse CMA timestamps and normalize to RFC3339 UTC."""
-    if not ts:
+def _parse_pubtime(text: str | None) -> str | None:
+    if not text:
         return None
     try:
-        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        return dt.astimezone(timezone.utc).isoformat()
+        # CMA example uses format like "2022/07/12 11:56"
+        dt = datetime.strptime(text, "%Y/%m/%d %H:%M")
+        return dt.isoformat()
     except Exception:
-        return ts
+        return None
 
-
-def _province_from_adcode(adcode: str | None) -> str:
+def _detect_level_and_type(item: dict[str, Any]) -> tuple[str | None, str | None]:
     """
-    Province bucket logic (same idea as NWS zones).
-    CMA adcode: first 2 digits = province-level.
+    Detect level and event type from either:
+      - type code like "11B09_RED"
+      - title or headline text e.g., "高温橙色预警"
     """
-    if not adcode or len(adcode) < 2:
-        return "Unknown"
-    return adcode[:2]
+    # 1. Try type code suffix
+    type_code = item.get("type", "")
+    if isinstance(type_code, str):
+        parts = type_code.split("_")
+        if len(parts) >= 2:
+            lvl = parts[-1].upper()
+            return LEVEL_MAP.get(lvl), parts[0]  # event_code
 
+    # 2. Fallback: look in title text
+    title = item.get("title", "")
+    if "红色" in title:
+        return "Red", None
+    if "橙色" in title:
+        return "Orange", None
 
-async def scrape_cma_async(conf: dict, client) -> List[Dict[str, Any]]:
-    """
-    CMA active alerts scraper (JSON API).
+    # 3. Nothing matched
+    return None, None
 
-    Output fields per item:
-      - title
-      - level (English: Orange/Red)
-      - region (province bucket)
-      - summary
-      - body
-      - link
-      - published (UTC ISO)
-      - timestamp (float)
-      - source = "CMA"
-    """
+def _infer_provinces_from_text(text: str) -> List[str]:
+    hits: list[str] = []
+    for cn, en in PROVINCES.items():
+        if cn in text:
+            hits.append(cn)
+    return hits
+
+async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
     entries: List[Dict[str, Any]] = []
+    errors: List[str] = []
 
     try:
-        resp = await client.get(
-            API_URL,
-            headers=CMA_HEADERS,
-            timeout=15.0,
-        )
+        resp = await client.get(API_URL, headers=CMA_HEADERS, timeout=15.0)
         resp.raise_for_status()
         payload = resp.json()
-    except Exception:
+    except Exception as e:
         logging.exception("[CMA FETCH ERROR]")
-        return entries
+        return {"source": "CMA", "entries": [], "error": str(e)}
 
-    data = payload.get("data") or []
-    now_ts = datetime.now(tz=timezone.utc).timestamp()
+    alarms = payload.get("data") or []
+    now_ts = datetime.utcnow().timestamp()
 
-    for item in data:
+    for item in alarms:
         try:
-            # Example fields observed in CMA API
-            # item["signalLevel"] → "橙色"/"红色"/"黄色"/"蓝色"
-            # item["signalTypeName"] → 暴雨 / 台风 / 强对流天气
-            # item["province"] or item["adcode"]
-            # item["title"], item["content"], item["pubTime"]
+            level, event_code = _detect_level_and_type(item)
+            if level not in ("Orange", "Red"):
+                continue
 
-            level_cn = (item.get("signalLevel") or "").strip()
-            level = LEVEL_MAP.get(level_cn)
+            title = item.get("title") or item.get("headline") or "(no title)"
+            desc = item.get("description") or ""
+            pub = _parse_pubtime(item.get("effective"))
 
-            if level not in ALLOWED_LEVELS:
-                continue  # skip blue/yellow entirely
+            # Province inference from title/content
+            text_blob = f"{title} {desc}"
+            prov_cn_list = _infer_provinces_from_text(text_blob)
+            if not prov_cn_list:
+                prov_cn_list = ["全国"]
 
-            title = item.get("title") or item.get("signalTypeName") or "CMA Alert"
-            body = item.get("content") or ""
-            pub = _parse_time(item.get("pubTime"))
-
-            adcode = item.get("adcode") or ""
-            province = _province_from_adcode(adcode)
-
-            link = item.get("url")
-            if link and link.startswith("/"):
-                link = "https://weather.cma.cn" + link
-
-            entry = {
-                "source": "CMA",
-                "title": title,
-                "level": level,
-                "region": province,
-                "summary": body[:280] + "…" if len(body) > 300 else body,
-                "body": body,
-                "link": link,
-                "published": pub,
-                "timestamp": (
-                    datetime.fromisoformat(pub).timestamp()
-                    if pub else now_ts
-                ),
-            }
-
-            entries.append(entry)
+            for prov_cn in prov_cn_list:
+                entries.append({
+                    "source": "CMA",
+                    "title": title,
+                    "level": level,
+                    "region": PROVINCES.get(prov_cn, prov_cn),
+                    "summary": desc.strip(),
+                    "link": None,
+                    "published": pub,
+                    "timestamp": datetime.fromisoformat(pub).timestamp() if pub else now_ts,
+                })
 
         except Exception:
             logging.exception("[CMA PARSE ERROR]")
             continue
 
-    logging.warning("[CMA DEBUG] Parsed %d", len(entries))
-    return entries
+    return {"source": "CMA", "entries": entries}
+
+# Registry compatibility
+async def scrape_async(conf, client):
+    return await scrape_cma_async(conf, client)
+
+async def scrape(conf, client):
+    return await scrape_cma_async(conf, client)
