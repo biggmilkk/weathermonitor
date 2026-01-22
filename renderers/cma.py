@@ -395,6 +395,11 @@ def render(entries, conf):
                         if desc_en:
                             st.markdown(f"*English (auto):* {html.escape(desc_en)}")
 
+                    # ✅ Read more link (from scraper: entry["link"])
+                    link = _norm(a.get("link"))
+                    if link:
+                        st.markdown(f"[Read more]({link})")
+
                     pub_label = _to_utc_label(a.get("published"))
                     if pub_label:
                         st.caption(f"Published: {pub_label}")
