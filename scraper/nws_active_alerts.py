@@ -12,6 +12,8 @@ ALLOWED_EVENTS = {
     "Tornado Warning",
     "Flood Warning",
     "Extreme Heat Warning",
+    "Extreme Cold Warning",
+    "Winter Storm Warning",
     "Air Quality Alert",
 }
 
