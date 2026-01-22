@@ -8,13 +8,14 @@ import logging
 from typing import List, Dict
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timezone
 import httpx
 
 # ----------------------- Namespaces / Filters -----------------------
 
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 CAP_NS  = {"cap": "urn:oasis:names:tc:emergency:cap:1.2"}
+
 ALLOWED_SEVERITIES = {"severe", "moderate"}
 
 # ----------------------------- Helpers -----------------------------
@@ -39,9 +40,20 @@ def _unique(seq: List[str]) -> List[str]:
     return out
 
 def _to_ts(iso_str: str | None) -> float:
-    if not iso_str: return 0.0
+    """
+    Converts ISO 8601 datetime string to unix timestamp (seconds).
+    Supports Z suffix and timezone offsets like +08:00.
+    Returns 0.0 on parse failure or if empty.
+    """
+    if not iso_str:
+        return 0.0
     try:
-        return datetime.fromisoformat(iso_str.replace("Z", "+00:00")).timestamp()
+        # fromisoformat supports "YYYY-MM-DDTHH:MM:SS+08:00" but not "Z"
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        # If naive (no tzinfo), treat as UTC to be safe (rare for CAP)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
     except Exception:
         return 0.0
 
@@ -97,6 +109,9 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
     description = _t(primary.findtext("cap:description", namespaces=CAP_NS)) if primary is not None else ""
     severity    = _t(primary.findtext("cap:severity", namespaces=CAP_NS)) if primary is not None else ""
 
+    # NEW: expires (and keep room for future lifecycle fields if you want them)
+    expires     = _t(primary.findtext("cap:expires", namespaces=CAP_NS)) if primary is not None else ""
+
     regions: List[str] = []
     if primary is not None:
         for p in primary.findall("cap:parameter", CAP_NS):
@@ -122,6 +137,7 @@ def _parse_cap_xml(xml_bytes: bytes) -> Dict:
         "severity": severity,
         "msg_type": msg_type,
         "published": sent,
+        "expires": expires or None,              # NEW
         "references_ids": ref_ids,
     }
 
@@ -188,13 +204,23 @@ async def scrape_pagasa_async(conf: dict, client: httpx.AsyncClient) -> dict:
 
     entries = _dedupe_reference_chains(entries)
 
+    # NEW: filter out expired alerts
+    now_ts = datetime.now(timezone.utc).timestamp()
+
     filtered: List[Dict] = []
     for e in entries:
         if (e.get("msg_type") or "").strip().lower() == "cancel":
             continue
+
         sev = (e.get("severity") or "").strip().lower()
         if sev not in ALLOWED_SEVERITIES:
             continue
+
+        exp_ts = _to_ts(e.get("expires"))
+        # If expires exists and is in the past, drop it
+        if exp_ts and exp_ts < now_ts:
+            continue
+
         filtered.append(e)
 
     filtered.sort(key=lambda e: e.get("published") or "", reverse=True)
