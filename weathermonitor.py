@@ -17,6 +17,7 @@ from computation import (
     compute_imd_timestamps,
     ec_remaining_new_total as ec_new_total,
     nws_remaining_new_total as nws_new_total,
+    cma_remaining_new_total as cma_new_total,  # ✅ ADD
     snapshot_imd_seen,
     meteoalarm_total_active_instances,
 )
@@ -31,22 +32,27 @@ def render_empty_state():
     st.info("No active warnings at this time.")
 
 def _immediate_rerun():
-    if hasattr(st, "rerun"): st.rerun()
-    elif hasattr(st, "experimental_rerun"): st.experimental_rerun()
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
 
 def commit_seen_for_feed(prev_key: str):
     """Commit 'seen' when closing/switching away from a feed."""
-    if not prev_key: return
+    if not prev_key:
+        return
     conf = FEED_CONFIG.get(prev_key)
-    if not conf: return
+    if not conf:
+        return
 
     entries = st.session_state.get(f"{prev_key}_data", [])
 
     if conf["type"] == "rss_meteoalarm":
         st.session_state[f"{prev_key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
 
-    elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact"):
-        pass  # handled in renderers
+    # ✅ renderer-handled feeds (bucket last_seen managed inside renderer)
+    elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact", "rss_cma"):
+        pass
 
     elif conf["type"] == "imd_current_orange_red":
         fp_key, ts_key = f"{prev_key}_fp_by_region", f"{prev_key}_ts_by_region"
@@ -70,10 +76,11 @@ logging.basicConfig(level=logging.WARNING)
 vm = psutil.virtual_memory()
 MEMORY_LIMIT = int(min(0.5 * vm.total, 4 * 1024**3))
 MEMORY_HIGH_WATER = 0.85 * MEMORY_LIMIT
-MEMORY_LOW_WATER  = 0.50 * MEMORY_LIMIT
+MEMORY_LOW_WATER = 0.50 * MEMORY_LIMIT
 MIN_CONC, MAX_CONC, STEP = 5, 50, 5
 
-def _rss_bytes(): return psutil.Process(os.getpid()).memory_info().rss
+def _rss_bytes():
+    return psutil.Process(os.getpid()).memory_info().rss
 
 st.session_state.setdefault("concurrency", 20)
 rss_before = _rss_bytes()
@@ -90,16 +97,14 @@ st.caption(f"Concurrency: {MAX_CONCURRENCY}, RSS: {rss_before // (1024*1024)} MB
 # --------------------------------------------------------------------
 FETCH_TTL = 60
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-tick_counter = st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
+st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 
 @st.cache_data(ttl=3600)
 def load_feeds():
     return get_feed_definitions()
 
-# NOTE: normalized cache key: use stable tuple of keys instead of raw dict
 @st.cache_data(ttl=FETCH_TTL, show_spinner=False)
 def cached_fetch_round(keys: tuple[str, ...], max_conc: int):
-    # Rebuild subset dict deterministically from FEED_CONFIG at call time
     subset = {k: FEED_CONFIG[k] for k in keys if k in FEED_CONFIG}
     return run_fetch_round(subset, max_concurrency=max_conc)
 
@@ -119,11 +124,11 @@ st.session_state.setdefault("active_feed", None)
 # --------------------------------------------------------------------
 # Cold boot: fetch all feeds once
 # --------------------------------------------------------------------
-do_cold_boot = not st.session_state.get("_cold_boot_done", False) or \
-               all(len(st.session_state.get(f"{k}_data", [])) == 0 for k in FEED_CONFIG)
+do_cold_boot = (not st.session_state.get("_cold_boot_done", False)) or all(
+    len(st.session_state.get(f"{k}_data", [])) == 0 for k in FEED_CONFIG
+)
 
 if do_cold_boot:
-    # normalized: pass tuple of keys
     all_results = cached_fetch_round(tuple(sorted(FEED_CONFIG.keys())), MAX_CONCURRENCY)
     now_ts = time.time()
     for key, raw in all_results:
@@ -142,6 +147,7 @@ if do_cold_boot:
 
         st.session_state[f"{key}_data"] = entries
         st.session_state[f"{key}_last_fetch"] = now_ts
+
     st.session_state["last_refreshed"] = now_ts
     st.session_state["_cold_boot_done"] = True
 
@@ -160,14 +166,17 @@ def group_is_due(group_code: str, m: int) -> bool:
     g = (group_code or "g1").lower()
     if g == "g1": return True
     if g == "g2_even": return m in (2, 4)
-    if g == "g2_odd":  return m in (1, 3)
-    if g == "g4_1":    return m == 1
-    if g == "g4_2":    return m == 2
-    if g == "g4_3":    return m == 3
-    if g == "g4_4":    return m == 4
+    if g == "g2_odd": return m in (1, 3)
+    if g == "g4_1": return m == 1
+    if g == "g4_2": return m == 2
+    if g == "g4_3": return m == 3
+    if g == "g4_4": return m == 4
     return True
 
-GROUP_MIN_SPACING = {"g1": 60, "g2_even": 120, "g2_odd": 120, "g4_1": 240, "g4_2": 240, "g4_3": 240, "g4_4": 240}
+GROUP_MIN_SPACING = {
+    "g1": 60, "g2_even": 120, "g2_odd": 120,
+    "g4_1": 240, "g4_2": 240, "g4_3": 240, "g4_4": 240
+}
 
 to_fetch = {}
 if is_timer_tick:
@@ -187,7 +196,6 @@ if len(to_fetch) > BATCH_SIZE:
     )[:BATCH_SIZE])
 
 if to_fetch:
-    # normalized: pass tuple of keys
     results = cached_fetch_round(tuple(sorted(to_fetch.keys())), MAX_CONCURRENCY)
     now = time.time()
     for key, raw in results:
@@ -198,7 +206,7 @@ if to_fetch:
             fp_key, ts_key = f"{key}_fp_by_region", f"{key}_ts_by_region"
             prev_fp = dict(st.session_state.get(fp_key, {}) or {})
             prev_ts = dict(st.session_state.get(ts_key, {}) or {})
-            now_ts  = time.time()
+            now_ts = time.time()
             entries, fp_by_region, ts_by_region = compute_imd_timestamps(
                 entries=entries, prev_fp=prev_fp, prev_ts=prev_ts, now_ts=now_ts
             )
@@ -209,13 +217,15 @@ if to_fetch:
         st.session_state[f"{key}_last_fetch"] = now
         st.session_state["last_refreshed"] = now
 
+        # If viewing a timestamp-based feed and it now has 0 new, auto-commit last_seen_time
         if st.session_state.get("active_feed") == key:
             if conf["type"] == "rss_meteoalarm":
                 last_seen_ids = set(st.session_state[f"{key}_last_seen_alerts"])
                 new_count = meteoalarm_unseen_active_instances(entries, last_seen_ids)
                 if new_count == 0:
                     pass
-            elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact"):
+            # ✅ include rss_cma here too (renderer-handled)
+            elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact", "rss_cma"):
                 pass
             elif conf["type"] == "uk_grouped_compact":
                 last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
@@ -239,7 +249,9 @@ if rss_after > MEMORY_HIGH_WATER:
 # Header
 # --------------------------------------------------------------------
 st.title("Global Weather Monitor")
-st.caption(f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}")
+st.caption(
+    f"Last refreshed: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(st.session_state['last_refreshed']))}"
+)
 st.markdown("---")
 
 
@@ -253,22 +265,21 @@ if not FEED_CONFIG:
 MAX_BTNS_PER_ROW = 6
 
 FEED_POSITIONS = {
-    "ec":               (0, 0),
-    "metoffice_uk":     (0, 1),
-    "nws":              (1, 0),
-    "meteoalarm":       (1, 1),
-    "imd_india_today":  (1, 3),
-    "cma_china":        (0, 3),
-    "jma":              (0, 4),
-    "pagasa":           (1, 4),
-    "bom_multi":        (1, 5),
+    "ec": (0, 0),
+    "metoffice_uk": (0, 1),
+    "nws": (1, 0),
+    "meteoalarm": (1, 1),
+    "imd_india_today": (1, 3),
+    "cma_china": (0, 3),
+    "jma": (0, 4),
+    "pagasa": (1, 4),
+    "bom_multi": (1, 5),
 }
 
 pinned_keys = set(FEED_POSITIONS.keys())
 items = [(k, v) for k, v in FEED_CONFIG.items() if k not in pinned_keys]
 
 _toggled = False
-global_idx = 0  # retained for layout flow only; no longer used in widget keys
 
 def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
@@ -287,6 +298,11 @@ def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "nws_grouped_compact":
         last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
         return int(nws_new_total(entries, last_seen_bkey_map=last_map))
+
+    # ✅ CMA: compute NEW using bucket_last_seen map (NOT last_seen_time)
+    if conf["type"] == "rss_cma":
+        last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
+        return int(cma_new_total(entries, last_seen_bkey_map=last_map))
 
     if conf["type"] == "uk_grouped_compact":
         seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
@@ -308,12 +324,15 @@ for row in range(num_rows):
 
     for col in range(MAX_BTNS_PER_ROW):
         feed_key = None
+
         for k, (r, c) in FEED_POSITIONS.items():
             if r == row and c == col:
-                feed_key = k; break
+                feed_key = k
+                break
+
         if not feed_key:
             try:
-                feed_key, conf = next(seq_iter)
+                feed_key, _conf = next(seq_iter)
             except StopIteration:
                 feed_key = None
 
@@ -329,7 +348,7 @@ for row in range(num_rows):
                 is_active = (st.session_state.get("active_feed") == feed_key)
                 clicked = st.button(
                     conf.get("label", feed_key.upper()),
-                    key=f"btn_{feed_key}",  # ✅ stable identity-only key
+                    key=f"btn_{feed_key}",
                     use_container_width=True,
                     type=("primary" if is_active else "secondary"),
                 )
@@ -358,11 +377,11 @@ for row in range(num_rows):
                         commit_seen_for_feed(prev_active)
                     st.session_state["active_feed"] = feed_key
                 _toggled = True
-
-            global_idx += 1
         else:
-            with btn_col: st.write("")
-            with badge_col: st.markdown("&nbsp;", unsafe_allow_html=True)
+            with btn_col:
+                st.write("")
+            with badge_col:
+                st.markdown("&nbsp;", unsafe_allow_html=True)
 
 if _toggled:
     _immediate_rerun()
