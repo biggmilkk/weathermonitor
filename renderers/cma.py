@@ -52,6 +52,65 @@ def render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
 # ============================================================
+# Province name mapping (CN → ISO-style EN)
+# ============================================================
+# Notes:
+# - For autonomous regions, use "X Autonomous Region" (and include ethnic group where standard/common).
+# - For municipalities, use "Beijing Municipality", etc.
+# - For SARs, use "Hong Kong SAR", "Macao SAR".
+# - "Nationwide" for 全国.
+
+PROVINCE_CN_TO_ISO_EN = {
+    "北京": "Beijing Municipality",
+    "天津": "Tianjin Municipality",
+    "河北": "Hebei Province",
+    "山西": "Shanxi Province",
+    "内蒙古": "Inner Mongolia Autonomous Region",
+    "辽宁": "Liaoning Province",
+    "吉林": "Jilin Province",
+    "黑龙江": "Heilongjiang Province",
+    "上海": "Shanghai Municipality",
+    "江苏": "Jiangsu Province",
+    "浙江": "Zhejiang Province",
+    "安徽": "Anhui Province",
+    "福建": "Fujian Province",
+    "江西": "Jiangxi Province",
+    "山东": "Shandong Province",
+    "河南": "Henan Province",
+    "湖北": "Hubei Province",
+    "湖南": "Hunan Province",
+    "广东": "Guangdong Province",
+    "广西": "Guangxi Zhuang Autonomous Region",
+    "海南": "Hainan Province",
+    "重庆": "Chongqing Municipality",
+    "四川": "Sichuan Province",
+    "贵州": "Guizhou Province",
+    "云南": "Yunnan Province",
+    "西藏": "Tibet Autonomous Region",
+    "陕西": "Shaanxi Province",
+    "甘肃": "Gansu Province",
+    "青海": "Qinghai Province",
+    "宁夏": "Ningxia Hui Autonomous Region",
+    "新疆": "Xinjiang Uygur Autonomous Region",
+    "香港": "Hong Kong SAR",
+    "澳门": "Macao SAR",
+    "台湾": "Taiwan",
+    "全国": "Nationwide",
+}
+
+def _format_province_label(cn_name: str, *, translate_enabled: bool) -> str:
+    """
+    Display-only label:
+      - If translate_enabled and CN name is known, show "云南 (Yunnan Province)"
+      - Otherwise show CN only.
+    """
+    cn = (cn_name or "").strip()
+    if not translate_enabled:
+        return cn
+    en = PROVINCE_CN_TO_ISO_EN.get(cn)
+    return f"{cn} ({en})" if en else cn
+
+# ============================================================
 # Translation (DeepL, cached, on-demand)
 # ============================================================
 
@@ -73,14 +132,21 @@ def _translate_to_en_deepl(text: str) -> str | None:
     except Exception:
         pass
 
-    api_key = os.getenv("DEEPL_API_KEY")
+    # Prefer Streamlit secrets (Cloud), fallback to env var (local/Docker)
+    api_key = None
+    try:
+        api_key = st.secrets.get("DEEPL_API_KEY")
+    except Exception:
+        api_key = None
+    if not api_key:
+        api_key = os.getenv("DEEPL_API_KEY")
+
     if not api_key:
         return None
 
     try:
         import deepl  # pip install deepl
         translator = deepl.Translator(api_key)
-        # DeepL expects language codes like ZH/EN-US
         result = translator.translate_text(t, source_lang="ZH", target_lang="EN-US")
         out = (result.text or "").strip()
         if not out or out == t:
@@ -148,11 +214,11 @@ def render(entries, conf):
     - Adds colored bullet before each alert title
     - Filters Yellow/Blue out defensively
     - Optional auto-translation (English (auto)) when translate_to_en is True
+    - Province header shows ISO-style EN name in parentheses when translate is enabled
     """
     feed_key = conf.get("key", "cma")
 
-    # In your feeds.py, translate_to_en is under feed["conf"], and you pass {**conf, "key": active}.
-    # That means inside this renderer it should be available as conf.get("conf", {}).get("translate_to_en")
+    # Your feeds.py nests translate_to_en under feed["conf"]
     translate_enabled = bool((conf.get("conf") or {}).get("translate_to_en") or conf.get("translate_to_en"))
 
     open_key        = f"{feed_key}_active_bucket"
@@ -230,8 +296,10 @@ def render(entries, conf):
                 for a in alerts
             )
 
+        prov_label = _format_province_label(prov, translate_enabled=translate_enabled)
+
         st.markdown(
-            _stripe_wrap(f"<h2>{html.escape(prov)}</h2>", _prov_has_new()),
+            _stripe_wrap(f"<h2>{html.escape(prov_label)}</h2>", _prov_has_new()),
             unsafe_allow_html=True,
         )
 
@@ -299,7 +367,7 @@ def render(entries, conf):
                     is_new = entry_ts(a) > last_seen
                     prefix = "[NEW] " if is_new else ""
 
-                    # USE HEADLINE (fallback to title)
+                    # Use headline (fallback title)
                     headline_cn = _norm(a.get("headline") or a.get("title")) or "(no title)"
 
                     # Colored bullet based on level
