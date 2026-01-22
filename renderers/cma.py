@@ -14,7 +14,7 @@ from computation import (
 )
 
 # ============================================================
-# Helpers (same as EC)
+# Helpers
 # ============================================================
 
 def _to_utc_label(pub: str | None) -> str | None:
@@ -50,22 +50,25 @@ def render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
 # ============================================================
-# CMA bucket labels (EC-style)
+# CMA bucket labels (EC-style) — RED/ORANGE ONLY
 # ============================================================
 
 LEVEL_TO_BUCKET_LABEL = {
     "Red":    "Red Warning",
     "Orange": "Orange Warning",
-    "Yellow": "Yellow Warning",
-    "Blue":   "Blue Warning",
+    # Intentionally omit Yellow/Blue
 }
 
 _BUCKET_ORDER = [
     "Red Warning",
     "Orange Warning",
-    "Yellow Warning",
-    "Blue Warning",
 ]
+
+# Bullet colors for per-alert titles
+LEVEL_TO_BULLET_COLOR = {
+    "Red": "#E60026",
+    "Orange": "#FF7F00",
+}
 
 def _cma_bucket_from_level(level: str | None) -> str | None:
     return LEVEL_TO_BUCKET_LABEL.get(_norm(level))
@@ -89,7 +92,12 @@ def _remaining_new_total(entries, bucket_lastseen) -> int:
 def render(entries, conf):
     """
     CMA renderer (Environment Canada style):
-      Province → Red/Orange/Yellow/Blue Warning → alerts
+      Province → (Red Warning / Orange Warning) → alerts
+
+    Notes:
+    - Uses headline for display.
+    - Adds colored bullet before each alert title (not in bucket label).
+    - Extra guard: will not render Yellow/Blue buckets.
     """
     feed_key = conf.get("key", "cma")
 
@@ -114,9 +122,11 @@ def render(entries, conf):
 
     filtered = []
     for e in items:
+        # Only Red/Orange buckets
         bucket = _cma_bucket_from_level(e.get("level"))
         if not bucket:
             continue
+
         prov = _norm(e.get("region") or e.get("province_name") or e.get("province")) or "全国"
         filtered.append(dict(
             e,
@@ -190,13 +200,16 @@ def render(entries, conf):
                 if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
                     prev = active_bucket
 
+                    # commit previous bucket if switching
                     if prev and prev != bkey:
                         bucket_lastseen[prev] = float(pending_seen.pop(prev, time.time()))
 
                     if active_bucket == bkey:
+                        # closing: commit this bucket as seen at open time
                         bucket_lastseen[bkey] = float(pending_seen.pop(bkey, time.time()))
                         st.session_state[open_key] = None
                     else:
+                        # opening: start pending timer
                         st.session_state[open_key] = bkey
                         pending_seen[bkey] = time.time()
 
@@ -227,14 +240,26 @@ def render(entries, conf):
 
             # Expanded bucket content
             if st.session_state.get(open_key) == bkey:
-                for a in items_in_bucket:
+                # newest first within the open bucket
+                for a in sort_newest(attach_timestamp(items_in_bucket)):
                     is_new = entry_ts(a) > last_seen
                     prefix = "[NEW] " if is_new else ""
-                    title = _norm(a.get("headline") or a.get("title")) or "(no title)"
-                    desc  = _norm(a.get("summary") or a.get("description") or a.get("body"))
 
-                    st.markdown(_stripe_wrap(f"{prefix}**{html.escape(title)}**", is_new), unsafe_allow_html=True)
+                    # USE HEADLINE (fallback to title)
+                    headline = _norm(a.get("headline") or a.get("title")) or "(no title)"
 
+                    # Colored bullet based on level
+                    lvl = _norm(a.get("level"))
+                    bullet_color = LEVEL_TO_BULLET_COLOR.get(lvl, "#888")
+
+                    title_html = (
+                        f"{prefix}"
+                        f"<span style='color:{bullet_color};font-size:16px;'>&#9679;</span> "
+                        f"<strong>{html.escape(headline)}</strong>"
+                    )
+                    st.markdown(_stripe_wrap(title_html, is_new), unsafe_allow_html=True)
+
+                    desc = _norm(a.get("summary") or a.get("description") or a.get("body"))
                     if desc:
                         st.markdown(html.escape(desc).replace("\n", "  \n"))
 
