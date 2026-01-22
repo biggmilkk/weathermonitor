@@ -1,5 +1,6 @@
 # renderers/cma.py
 import html
+import os
 import time
 from collections import OrderedDict
 
@@ -23,6 +24,7 @@ def _to_utc_label(pub: str | None) -> str | None:
     try:
         dt = dateparser.parse(pub)
         if dt:
+            # Convert to UTC for display
             return dt.astimezone().strftime("%a, %d %b %y %H:%M:%S UTC")
     except Exception:
         pass
@@ -50,6 +52,49 @@ def render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
 # ============================================================
+# Translation (DeepL, cached, on-demand)
+# ============================================================
+
+@st.cache_data(ttl=7 * 24 * 3600, show_spinner=False)
+def _translate_to_en_deepl(text: str) -> str | None:
+    """
+    Translate Chinese → English using DeepL API (Free/Pro).
+    Cached so identical strings translate once (saves quota).
+    Returns None if missing key or translation fails.
+    """
+    t = (text or "").strip()
+    if not t:
+        return None
+
+    # Skip mostly ASCII (already English-ish)
+    try:
+        if (sum(1 for ch in t if ord(ch) < 128) / max(1, len(t))) > 0.9:
+            return None
+    except Exception:
+        pass
+
+    api_key = os.getenv("DEEPL_API_KEY")
+    if not api_key:
+        return None
+
+    try:
+        import deepl  # pip install deepl
+        translator = deepl.Translator(api_key)
+        # DeepL expects language codes like ZH/EN-US
+        result = translator.translate_text(t, source_lang="ZH", target_lang="EN-US")
+        out = (result.text or "").strip()
+        if not out or out == t:
+            return None
+        return out
+    except Exception:
+        return None
+
+def _maybe_translate(text: str, *, enabled: bool) -> str | None:
+    if not enabled:
+        return None
+    return _translate_to_en_deepl(text)
+
+# ============================================================
 # CMA bucket labels — RED/ORANGE ONLY
 # ============================================================
 
@@ -74,6 +119,11 @@ def _cma_bucket_from_level(level: str | None) -> str | None:
     return LEVEL_TO_BUCKET_LABEL.get(_norm(level))
 
 def _remaining_new_total(entries, bucket_lastseen) -> int:
+    """
+    Remaining NEW across all entries (Red/Orange only), keyed by:
+      prov = region or province_name or province or "全国"
+      bkey = f"{prov}|{bucket}"
+    """
     total = 0
     for e in entries or []:
         prov = _norm(e.get("province_name") or e.get("province") or e.get("region")) or "全国"
@@ -91,15 +141,19 @@ def _remaining_new_total(entries, bucket_lastseen) -> int:
 
 def render(entries, conf):
     """
-    CMA renderer (Environment Canada style):
+    CMA renderer (EC-style):
       Province → (Red Warning / Orange Warning) → alerts
 
-    Notes:
-    - Uses headline for display.
-    - Adds colored bullet before each alert title (not in bucket label).
-    - Extra guard: will not render Yellow/Blue buckets.
+    - Uses 'headline' (fallback 'title') for display
+    - Adds colored bullet before each alert title
+    - Filters Yellow/Blue out defensively
+    - Optional auto-translation (English (auto)) when translate_to_en is True
     """
     feed_key = conf.get("key", "cma")
+
+    # In your feeds.py, translate_to_en is under feed["conf"], and you pass {**conf, "key": active}.
+    # That means inside this renderer it should be available as conf.get("conf", {}).get("translate_to_en")
+    translate_enabled = bool((conf.get("conf") or {}).get("translate_to_en") or conf.get("translate_to_en"))
 
     open_key        = f"{feed_key}_active_bucket"
     pending_map_key = f"{feed_key}_bucket_pending_seen"
@@ -120,9 +174,9 @@ def render(entries, conf):
 
     items = sort_newest(attach_timestamp(entries or []))
 
+    # Filter to Red/Orange and normalize keys used for bucketing
     filtered = []
     for e in items:
-        # Only Red/Orange buckets
         bucket = _cma_bucket_from_level(e.get("level"))
         if not bucket:
             continue
@@ -140,7 +194,7 @@ def render(entries, conf):
         render_empty_state()
         return
 
-    # Update country-level NEW badge
+    # Country-level remaining NEW badge
     st.session_state[f"{feed_key}_remaining_new_total"] = _remaining_new_total(filtered, bucket_lastseen)
 
     # ---------- Actions ----------
@@ -200,16 +254,16 @@ def render(entries, conf):
                 if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
                     prev = active_bucket
 
-                    # commit previous bucket if switching
+                    # Commit previous bucket if switching
                     if prev and prev != bkey:
                         bucket_lastseen[prev] = float(pending_seen.pop(prev, time.time()))
 
                     if active_bucket == bkey:
-                        # closing: commit this bucket as seen at open time
+                        # Closing: commit this bucket as seen at open time
                         bucket_lastseen[bkey] = float(pending_seen.pop(bkey, time.time()))
                         st.session_state[open_key] = None
                     else:
-                        # opening: start pending timer
+                        # Opening: start pending timer
                         st.session_state[open_key] = bkey
                         pending_seen[bkey] = time.time()
 
@@ -246,7 +300,7 @@ def render(entries, conf):
                     prefix = "[NEW] " if is_new else ""
 
                     # USE HEADLINE (fallback to title)
-                    headline = _norm(a.get("headline") or a.get("title")) or "(no title)"
+                    headline_cn = _norm(a.get("headline") or a.get("title")) or "(no title)"
 
                     # Colored bullet based on level
                     lvl = _norm(a.get("level"))
@@ -255,13 +309,23 @@ def render(entries, conf):
                     title_html = (
                         f"{prefix}"
                         f"<span style='color:{bullet_color};font-size:16px;'>&#9679;</span> "
-                        f"<strong>{html.escape(headline)}</strong>"
+                        f"<strong>{html.escape(headline_cn)}</strong>"
                     )
                     st.markdown(_stripe_wrap(title_html, is_new), unsafe_allow_html=True)
 
-                    desc = _norm(a.get("summary") or a.get("description") or a.get("body"))
-                    if desc:
-                        st.markdown(html.escape(desc).replace("\n", "  \n"))
+                    # Auto translate headline
+                    headline_en = _maybe_translate(headline_cn, enabled=translate_enabled)
+                    if headline_en:
+                        st.markdown(f"*English (auto):* {html.escape(headline_en)}")
+
+                    desc_cn = _norm(a.get("summary") or a.get("description") or a.get("body"))
+                    if desc_cn:
+                        st.markdown(html.escape(desc_cn).replace("\n", "  \n"))
+
+                        # Auto translate description
+                        desc_en = _maybe_translate(desc_cn, enabled=translate_enabled)
+                        if desc_en:
+                            st.markdown(f"*English (auto):* {html.escape(desc_en)}")
 
                     pub_label = _to_utc_label(a.get("published"))
                     if pub_label:
