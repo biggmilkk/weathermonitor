@@ -50,7 +50,7 @@ def render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
 # ============================================================
-# CMA bucket labels (EC-style) — RED/ORANGE ONLY
+# CMA bucket labels — RED/ORANGE ONLY
 # ============================================================
 
 LEVEL_TO_BUCKET_LABEL = {
@@ -86,7 +86,7 @@ def _remaining_new_total(entries, bucket_lastseen) -> int:
     return total
 
 # ============================================================
-# CMA EC-style Grouped Renderer
+# CMA Grouped Renderer
 # ============================================================
 
 def render(entries, conf):
