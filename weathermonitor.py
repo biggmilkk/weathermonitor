@@ -258,7 +258,7 @@ FEED_POSITIONS = {
     "nws":              (1, 0),
     "meteoalarm":       (1, 1),
     "imd_india_today":  (1, 3),
-    "cma_china":        (0, 3),
+    #"cma_china":        (0, 3),
     "jma":              (0, 4),
     "pagasa":           (1, 4),
     "bom_multi":        (1, 5),
