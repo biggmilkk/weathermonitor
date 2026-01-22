@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timezone, timedelta
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -53,34 +53,39 @@ CN_COLOR_TO_EN = {
     "蓝色": "Blue",
 }
 
-# STRICT: only match real warning color tokens
-RE_COLOR_STRONG = re.compile(
-    r"(红色|橙色|黄色|蓝色)\s*(?:预警|预警信号|警报|警报信号)"
-)
+RE_COLOR_STRONG = re.compile(r"(红色|橙色|黄色|蓝色)\s*(?:预警|预警信号|警报|警报信号)")
 RE_COLOR_SIMPLE = re.compile(r"(红色|橙色|黄色|蓝色)")
 RE_COLOR_CODE = re.compile(r"_(RED|ORANGE|YELLOW|BLUE)\b", re.I)
+
+# --------------------------
+# Time handling (FIXED)
+# --------------------------
+
+CST = timezone(timedelta(hours=8))  # China Standard Time
+
+def _parse_pubtime(s: Optional[str]) -> Optional[str]:
+    """
+    Parse CMA times as UTC+8 and convert to UTC ISO 8601.
+    """
+    if not s:
+        return None
+
+    s = str(s).strip()
+    for fmt in ("%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            local_dt = datetime.strptime(s, fmt).replace(tzinfo=CST)
+            utc_dt = local_dt.astimezone(timezone.utc)
+            return utc_dt.isoformat()
+        except Exception:
+            continue
+
+    return None
 
 # --------------------------
 # Helpers
 # --------------------------
 
-def _parse_pubtime(s: Optional[str]) -> Optional[str]:
-    if not s:
-        return None
-    s = str(s).strip()
-    for fmt in ("%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
-        try:
-            dt = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
-            return dt.isoformat()
-        except Exception:
-            pass
-    return s
-
-
 def _extract_level(item: Dict[str, Any]) -> Optional[str]:
-    """
-    Extract warning level WITHOUT false positives from place names.
-    """
     text = " ".join(
         str(v) for v in (
             item.get("headline"),
@@ -108,9 +113,6 @@ def _extract_level(item: Dict[str, Any]) -> Optional[str]:
 
 
 def _province_from_id(item: Dict[str, Any]) -> str:
-    """
-    Province derived from numeric ID prefix.
-    """
     iid = item.get("id")
     if isinstance(iid, str):
         m = re.match(r"^(\d{6,})", iid)
@@ -119,7 +121,6 @@ def _province_from_id(item: Dict[str, Any]) -> str:
             if code in PROVINCE_CODE_TO_CN:
                 return PROVINCE_CODE_TO_CN[code]
     return "全国"
-
 
 # --------------------------
 # Main scraper
@@ -146,13 +147,14 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
         try:
             level = _extract_level(item)
             if level not in ALLOWED_LEVELS:
-                continue  # HARD FILTER: only Red / Orange
+                continue
 
             headline = (item.get("headline") or "").strip()
             short_title = (item.get("title") or "").strip()
             title = headline or short_title or "CMA Alert"
 
             summary = (item.get("description") or "").strip()
+
             published = _parse_pubtime(
                 item.get("effective")
                 or item.get("pubTime")
@@ -170,8 +172,8 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
                 {
                     "source": "CMA",
                     "headline": headline,
-                    "title": title,        # renderer compatibility
-                    "level": level,        # Red / Orange ONLY
+                    "title": title,
+                    "level": level,  # Red / Orange only
                     "region": _province_from_id(item),
                     "summary": summary,
                     "published": published,
@@ -185,7 +187,6 @@ async def scrape_cma_async(conf: Dict[str, Any], client: httpx.AsyncClient) -> D
 
     logging.warning("[CMA DEBUG] Parsed %d Red/Orange alerts", len(entries))
     return {"source": "CMA", "entries": entries}
-
 
 # --------------------------
 # Registry aliases
