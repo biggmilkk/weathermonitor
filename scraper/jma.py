@@ -9,11 +9,12 @@ JMA_WARNING_BASE = "https://www.jma.go.jp/bosai/warning/data/warning"
 
 # Only show these hazards (warnings/emergencies only; advisories excluded)
 # 03 = Heavy Rain (split by condition), 04 = Flood, 05 = Storm/Gale, 07 = High Waves
-INCLUDE_CODES = {"03", "04", "05", "07"}
+INCLUDE_CODES = {"03", "04", "05", "06", "07"}
 
 # English messages
 HEAVY_RAIN_INUNDATION = "Heavy Rain (Inundation)"
 HEAVY_RAIN_LANDSLIDE  = "Heavy Rain (Landslide)"
+HEAVY_SNOW            = "Heavy Snow"
 FLOOD                 = "Flood"
 STORM_GALE            = "Storm/Gale"
 HIGH_WAVES            = "High Waves"
@@ -85,6 +86,8 @@ def _warnings_for_area(area_obj: dict) -> List[Tuple[str, dict]]:
             results.append((FLOOD, w))
         elif code == "05":  # Storm/Gale (warning)
             results.append((STORM_GALE, w))
+        elif code == "06":  # Heavy Snow (warning)
+            results.append((HEAVY_SNOW, w))
         elif code == "07":  # High Waves (warning)
             results.append((HIGH_WAVES, w))
     return results
