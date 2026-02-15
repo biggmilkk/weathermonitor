@@ -9,10 +9,14 @@ import re
 ALLOWED_EVENTS = {
     "Severe Thunderstorm Warning",
     "Flash Flood Warning",
+    "Flood Warning",
     "Tornado Warning",
+    "Storm Warning",
+    "Hurricane Force Wind Warning",
     "Flood Warning",
     "Extreme Heat Warning",
     "Extreme Cold Warning",
+    "Blizzard Warning",
     "Winter Storm Warning",
     "Air Quality Alert",
 }
