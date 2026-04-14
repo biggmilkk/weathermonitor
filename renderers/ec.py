@@ -83,12 +83,12 @@ def _title_severity_color(title: str) -> str:
 
 def _title_bucket_specific(title: str) -> str | None:
     """
-    Build a specific bucket label from the alert title, e.g.
-      'Yellow Warning - Snowfall'
-      'Red Warning - Rain'
-      'Orange Warning - Wind'
-
-    Falls back to ec_bucket_from_title(title) if needed.
+    Build a specific bucket label from alert titles like:
+      - YELLOW WARNING - SNOWFALL
+      - RED WARNING - RAIN
+      - ORANGE WARNING - WIND
+      - Snowfall warning
+      - Rainfall warning
     """
     t = _norm(title)
     if not t:
@@ -104,42 +104,30 @@ def _title_bucket_specific(title: str) -> str | None:
     elif "yellow" in tl:
         severity = "Yellow"
 
-    # Try common Environment Canada title patterns
-    # Examples:
-    # - "Snowfall warning in effect"
-    # - "Rainfall warning"
-    # - "Blizzard warning"
-    # - "Special weather statement"
-    # - "Red heat warning"
-    # - "Yellow snowfall warning"
     type_name = None
 
-    patterns = [
-        r"\b(red|orange|yellow)\s+([a-z /-]+?)\s+warning\b",
-        r"\b([a-z /-]+?)\s+warning\b",
-        r"\b([a-z /-]+?)\s+watch\b",
-        r"\b([a-z /-]+?)\s+statement\b",
-        r"\b([a-z /-]+?)\s+advisory\b",
-    ]
+    # Pattern 1: "YELLOW WARNING - SNOWFALL"
+    m = re.search(r"\b(red|orange|yellow)\s+warning\s*[-:]\s*([a-z /-]+)\b", tl, flags=re.IGNORECASE)
+    if m:
+        severity = m.group(1).title()
+        type_name = m.group(2)
 
-    for pat in patterns:
-        m = re.search(pat, tl, flags=re.IGNORECASE)
-        if not m:
-            continue
-
-        if len(m.groups()) == 2:
+    # Pattern 2: "Yellow Snowfall Warning"
+    if not type_name:
+        m = re.search(r"\b(red|orange|yellow)\s+([a-z /-]+?)\s+warning\b", tl, flags=re.IGNORECASE)
+        if m:
+            severity = m.group(1).title()
             type_name = m.group(2)
-        elif len(m.groups()) == 1:
+
+    # Pattern 3: "Snowfall warning"
+    if not type_name:
+        m = re.search(r"\b([a-z /-]+?)\s+warning\b", tl, flags=re.IGNORECASE)
+        if m:
             type_name = m.group(1)
 
-        if type_name:
-            break
-
     if type_name:
-        type_name = re.sub(r"\s+", " ", type_name).strip(" -:/")
-        type_name = type_name.title()
+        type_name = re.sub(r"\s+", " ", type_name).strip(" -:/").title()
 
-        # Normalize some common EC phrasing
         replacements = {
             "Rainfall": "Rain",
             "Snowfall": "Snowfall",
@@ -157,7 +145,6 @@ def _title_bucket_specific(title: str) -> str | None:
     if severity and type_name:
         return f"{severity} Warning - {type_name}"
 
-    # fallback to old generic bucket behavior
     generic = ec_bucket_from_title(t)
     return generic or "Weather Warning"
 
@@ -299,20 +286,7 @@ def render(entries, conf):
 
             # bucket toggle + pending/seen bookkeeping
             with cols[0]:
-                color = _title_severity_color(label)
-                btn_html = (
-                    "<div style='border:1px solid rgba(255,255,255,0.08);"
-                    "border-left:6px solid {color};"
-                    "padding:8px 12px;border-radius:8px;"
-                    "background:rgba(255,255,255,0.02);"
-                    "font-weight:600;'>"
-                    "{label}</div>"
-                ).format(color=color, label=html.escape(label))
-
                 clicked = st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True)
-
-                # Display colored label under/over the actual button area
-                st.markdown(btn_html, unsafe_allow_html=True)
 
                 if clicked:
                     state_changed = False
@@ -362,6 +336,14 @@ def render(entries, conf):
                         f"❗ {new_count} New</span>"
                     )
                 st.markdown(badges_html, unsafe_allow_html=True)
+
+            # small colored cue under the bucket row
+            color = _title_severity_color(label)
+            st.markdown(
+                f"<div style='height:3px;width:100%;background:{color};"
+                f"border-radius:999px;margin-top:-2px;margin-bottom:8px;opacity:0.95;'></div>",
+                unsafe_allow_html=True,
+            )
 
             # expanded bucket content
             if st.session_state.get(open_key) == bkey:
