@@ -462,21 +462,27 @@ def smn_location(e: Mapping[str, Any]) -> str:
     """
     Canonical SMN item-level location accessor.
 
-    Province is already used as the section header, so this returns the
-    matched departments/areas if available.
+    Province is already used as the section header, so this returns only
+    matched local areas/departments if available.
     """
+    province = smn_province(e)
+
     areas = e.get("areas")
     if isinstance(areas, Sequence) and not isinstance(areas, (str, bytes)):
         cleaned = [str(x).strip() for x in areas if str(x).strip()]
         if cleaned:
+            if cleaned == [province]:
+                return ""
             return ", ".join(cleaned)
 
     region = e.get("region")
     if isinstance(region, str) and region.strip():
-        return region.strip()
+        region = region.strip()
+        if region != province:
+            return region
 
     return ""
-
+    
 def smn_bucket_label(e: Mapping[str, Any]) -> str | None:
     """
     Build the specific SMN bucket label used by BOTH renderer and new-count logic.
