@@ -290,7 +290,7 @@ FEED_POSITIONS = {
     "jma": (0, 4),
     "pagasa": (1, 4),
     "bmkg_indonesia": (2, 4),
-    "argentina_smn": (2, 0),
+    # "argentina_smn": (2, 0),
     "bom_multi": (2, 5),
 }
 
