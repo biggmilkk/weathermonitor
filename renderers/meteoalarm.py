@@ -4,7 +4,6 @@ from datetime import timezone as _tz
 import streamlit as st
 from dateutil import parser as dateparser
 
-# Pure logic helpers
 from computation import (
     meteoalarm_mark_and_sort,
 )
@@ -27,6 +26,23 @@ def _to_utc_label(s: str | None) -> str | None:
         pass
     return s
 
+def _display_time(s: str | None) -> str:
+    """
+    Render alert time safely.
+    If it's already a nice label from the scraper, keep it.
+    Otherwise try to parse and normalize to UTC.
+    """
+    if not s:
+        return ""
+    s = _norm(s)
+    try:
+        dt = dateparser.parse(s)
+        if dt:
+            return dt.astimezone(_tz.utc).strftime("%b %d %H:%M UTC")
+    except Exception:
+        pass
+    return s
+
 def _stripe_wrap(content: str, is_new: bool) -> str:
     if not is_new:
         return content
@@ -37,7 +53,6 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
     )
 
 def _alerts_for_day(alerts_map: dict, day: str):
-    """Case-insensitive access for 'today'/'tomorrow' keys."""
     return (
         (alerts_map or {}).get(day)
         or (alerts_map or {}).get(day.capitalize())
@@ -53,7 +68,9 @@ def _any_new(alerts_map: dict) -> bool:
     return False
 
 def _day_level_type_count(by_day: dict, by_type: dict, day: str, level: str, typ: str) -> int | None:
-    """Prefer exact per-day count; fall back to per-type totals."""
+    """
+    Prefer exact per-day count; fall back to per-type totals.
+    """
     if isinstance(by_day, dict):
         d = by_day.get(day) or by_day.get(day.capitalize()) or by_day.get(day.title())
         if isinstance(d, dict):
@@ -69,16 +86,16 @@ def _day_level_type_count(by_day: dict, by_type: dict, day: str, level: str, typ
     return None
 
 def _render_country(country: dict):
-    """Render a single country section, with striped header if any alert is new."""
+    """
+    Render a single country section, with striped header if any alert is new.
+    """
     title = _norm(country.get("title") or country.get("name") or "")
     counts = country.get("counts") or {}
 
     alerts_map = country.get("alerts") or {}
-    by_day  = counts.get("by_day")  if isinstance(counts, dict) else {}
+    by_day  = counts.get("by_day") if isinstance(counts, dict) else {}
     by_type = counts.get("by_type") if isinstance(counts, dict) else {}
 
-    # Compute the total strictly from what is currently visible (rows we'll render).
-    # If we have no visible rows, fall back to counts.total / total_alerts.
     visible_total = 0
     for day in ("today", "tomorrow"):
         rows = _alerts_for_day(alerts_map, day)
@@ -87,10 +104,9 @@ def _render_country(country: dict):
             typ   = _norm(e.get("type", ""))
             n = _day_level_type_count(by_day, by_type, day, level, typ)
             if not isinstance(n, int) or n <= 0:
-                n = 1  # treat a visible category row with unknown count as one active
+                n = 1
             visible_total += n
 
-    # Build header using the visible_total; if there are no visible rows, fall back.
     fallback_total = 0
     try:
         fallback_total = int(counts.get("total") or country.get("total_alerts") or 0)
@@ -113,26 +129,31 @@ def _render_country(country: dict):
             continue
 
         st.markdown(f"<h4 style='margin-top:16px'>{day.capitalize()}</h4>", unsafe_allow_html=True)
+
         for e in alerts:
-            # Time window
-            try:
-                dt1 = dateparser.parse(e.get("from", "")).astimezone(_tz.utc).strftime("%b %d %H:%M UTC")
-                dt2 = dateparser.parse(e.get("until", "")).astimezone(_tz.utc).strftime("%b %d %H:%M UTC")
-            except Exception:
-                dt1, dt2 = _norm(e.get("from", "")), _norm(e.get("until", ""))
+            dt1 = _display_time(e.get("from"))
+            dt2 = _display_time(e.get("until"))
 
             level = _norm(e.get("level", ""))
             typ   = _norm(e.get("type", ""))
+            area  = _norm(e.get("area", ""))
+
             color = {"Orange": "#FF7F00", "Red": "#E60026"}.get(level, "#888")
             prefix = "[NEW] " if ((e or {}).get("_is_new") or (e or {}).get("is_new")) else ""
 
             n = _day_level_type_count(by_day, by_type, day, level, typ)
             count_str = f" ({n} active)" if isinstance(n, int) and n > 0 else ""
 
-            text = f"{prefix}[{level}] {typ}{count_str} – {dt1} to {dt2}"
+            area_str = f" — {area}" if area else ""
+            time_str = f" – {dt1} to {dt2}" if (dt1 or dt2) else ""
+
+            text = f"{prefix}[{level}] {typ}{area_str}{count_str}{time_str}"
+
             st.markdown(
                 f"<div style='margin-bottom:6px;'>"
-                f"<span style='color:{color};font-size:16px;'>&#9679;</span> {text}</div>",
+                f"<span style='color:{color};font-size:16px;'>&#9679;</span> "
+                f"{html.escape(text)}"
+                f"</div>",
                 unsafe_allow_html=True,
             )
 
@@ -153,21 +174,23 @@ def _render_country(country: dict):
 
 def render(entries: list[dict], conf: dict) -> None:
     """
-    Meteoalarm renderer (standalone).
+    Meteoalarm renderer.
 
     Responsibilities:
       - Derive 'new' flags and sort groups via computation.meteoalarm_mark_and_sort().
       - Render each country block.
-      - DOES NOT auto-commit “seen” on open.
-      - DOES NOT provide a 'mark all as seen' button (clear-on-close is handled in controller).
+      - Does not auto-commit 'seen' on open.
+      - No 'mark all as seen' button; clear-on-close is handled by controller.
     """
     feed_key = conf.get("key", "meteoalarm")
     st.session_state.setdefault(f"{feed_key}_last_seen_alerts", tuple())
 
     seen_ids = set(st.session_state[f"{feed_key}_last_seen_alerts"])
-    countries = [c for c in (entries or []) if (c.get("alerts") or {}).get("today") or (c.get("alerts") or {}).get("tomorrow")]
+    countries = [
+        c for c in (entries or [])
+        if (c.get("alerts") or {}).get("today") or (c.get("alerts") or {}).get("tomorrow")
+    ]
 
-    # Mark and sort (adds _is_new and sorts by severity/time per day)
     countries = meteoalarm_mark_and_sort(countries, seen_ids)
 
     if not countries:
