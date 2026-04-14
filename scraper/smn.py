@@ -192,22 +192,24 @@ def _slug_hash(*parts: str) -> str:
 
 def _semantic_alert_key(item: dict[str, Any]) -> str:
     """
-    Merge key for same alert copies within a province.
-    Intentionally excludes polygon / area footprint so repeated CAP copies
-    with identical text/timing collapse into one display alert.
+    Broad live-alert family key.
+
+    Treat rolling SMN updates for the same province/event/severity
+    as one alert family, so the newest version replaces older ones.
     """
+    province = _norm(item.get("province_name") or item.get("province") or "")
+    event = _norm(item.get("event_es") or item.get("event") or "")
+    severity = _canonical_severity(item.get("severity") or "")
+    expires = _norm(item.get("expires") or "")
+
+    # Optional: keep expiry date only, not full timestamp granularity
+    expires_day = expires[:10] if len(expires) >= 10 else expires
+
     return "|".join([
-        _norm(item.get("province_name") or item.get("province") or ""),
-        _norm(item.get("event_es") or item.get("event") or ""),
-        _canonical_severity(item.get("severity") or ""),
-        _norm(item.get("urgency") or ""),
-        _norm(item.get("certainty") or ""),
-        _norm(item.get("status") or ""),
-        _norm(item.get("msg_type") or ""),
-        _norm(item.get("effective") or item.get("onset") or ""),
-        _norm(item.get("expires") or ""),
-        _norm(item.get("description") or item.get("summary") or ""),
-        _norm(item.get("instruction") or ""),
+        province,
+        event,
+        severity,
+        expires_day,
     ])
 
 
@@ -839,8 +841,11 @@ async def _fetch_detail(session: aiohttp.ClientSession, item: dict[str, Any], se
 
 def _merge_alert_group(items: list[dict[str, Any]]) -> dict[str, Any]:
     """
-    Collapse repeated same-alert copies into one province-level alert.
-    Keep the newest published copy as base, union all areas.
+    Collapse rolling copies of the same live alert family into one entry.
+
+    Rule:
+      - keep the newest published/effective copy as canonical
+      - union all matched areas seen across copies
     """
     items = sorted(
         items,
@@ -877,20 +882,26 @@ def _merge_alert_group(items: list[dict[str, Any]]) -> dict[str, Any]:
     )
     merged_areas = sorted(area_names, key=lambda x: x.lower())
 
-    base["matched_areas"] = merged_matched
-    base["areas"] = merged_areas
-    base["region"] = ", ".join(merged_areas) if merged_areas else _norm(base.get("province_name") or base.get("province") or "Argentina")
+    if merged_matched:
+        base["matched_areas"] = merged_matched
+    else:
+        base["matched_areas"] = base.get("matched_areas") or []
+
+    if merged_areas:
+        base["areas"] = merged_areas
+        base["region"] = ", ".join(merged_areas)
 
     stable_suffix = _slug_hash(
         _norm(base.get("province_name") or base.get("province")),
         _norm(base.get("event_es") or base.get("event")),
         _canonical_severity(base.get("severity") or ""),
-        _norm(base.get("effective") or base.get("onset")),
-        _norm(base.get("expires")),
-        _norm(base.get("description") or base.get("summary")),
-        _norm(base.get("instruction")),
+        _norm(base.get("expires") or ""),
     )
-    base["id"] = f"{_norm(base.get('identifier') or base.get('title') or base.get('event'))}|{_norm(base.get('province_name') or base.get('province'))}|{stable_suffix}"
+    base["id"] = (
+        f"{_norm(base.get('identifier') or base.get('title') or base.get('event'))}"
+        f"|{_norm(base.get('province_name') or base.get('province'))}"
+        f"|{stable_suffix}"
+    )
 
     return base
 
