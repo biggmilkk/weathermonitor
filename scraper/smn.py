@@ -49,6 +49,25 @@ SMN_EVENT_ES_TO_EN = {
     "Viento Zonda": "Zonda Wind",
 }
 
+# Keep only severe+ alerts
+ALLOWED_SEVERITIES = {
+    "Extreme",
+    "Severe",
+    "Rojo",
+    "Naranja",
+}
+
+SEVERITY_NORMALIZATION = {
+    "rojo": "Extreme",
+    "extreme": "Extreme",
+    "naranja": "Severe",
+    "severe": "Severe",
+    "amarillo": "Moderate",
+    "moderate": "Moderate",
+    "verde": "Minor",
+    "minor": "Minor",
+}
+
 
 # --------------------------------------------------------------------
 # Generic helpers
@@ -102,6 +121,17 @@ def _guess_severity_from_text(*parts: str) -> str:
     }.get(word, "")
 
 
+def _canonical_severity(value: str) -> str:
+    raw = _norm(value)
+    if not raw:
+        return ""
+    return SEVERITY_NORMALIZATION.get(raw.lower(), raw)
+
+
+def _is_allowed_severity(value: str) -> bool:
+    return _canonical_severity(value) in {"Extreme", "Severe"}
+
+
 def _guess_event_from_title(title: str) -> str:
     t = _norm(title)
     if not t:
@@ -136,7 +166,7 @@ def _extract_areas_from_text(text: str) -> list[str]:
             raw = _norm(m.group(1))
             if raw:
                 parts = [p.strip(" .;") for p in re.split(r",|;|/|\sy\s", raw) if p.strip()]
-                return parts[:20]
+                return parts[:50]
 
     return []
 
@@ -162,38 +192,22 @@ def _slug_hash(*parts: str) -> str:
 
 def _semantic_alert_key(item: dict[str, Any]) -> str:
     """
-    Stable identity for the same active SMN alert across repeated updates.
-
-    We intentionally do NOT include description/instruction text because
-    SMN often republishes tiny wording changes for the same underlying alert.
+    Merge key for same alert copies within a province.
+    Intentionally excludes polygon / area footprint so repeated CAP copies
+    with identical text/timing collapse into one display alert.
     """
-    province = _norm(item.get("province_name") or item.get("province") or "")
-    event = _norm(item.get("event_es") or item.get("event") or "")
-    severity = _norm(item.get("severity") or "")
-    effective = _norm(item.get("effective") or item.get("onset") or "")
-    expires = _norm(item.get("expires") or "")
-    status = _norm(item.get("status") or "")
-    msg_type = _norm(item.get("msg_type") or "")
-    urgency = _norm(item.get("urgency") or "")
-    certainty = _norm(item.get("certainty") or "")
-
-    areas = item.get("areas") or []
-    if isinstance(areas, list):
-        areas_key = "|".join(sorted(_norm(a) for a in areas if _norm(a)))
-    else:
-        areas_key = _norm(areas)
-
     return "|".join([
-        province,
-        event,
-        severity,
-        effective,
-        expires,
-        status,
-        msg_type,
-        urgency,
-        certainty,
-        areas_key,
+        _norm(item.get("province_name") or item.get("province") or ""),
+        _norm(item.get("event_es") or item.get("event") or ""),
+        _canonical_severity(item.get("severity") or ""),
+        _norm(item.get("urgency") or ""),
+        _norm(item.get("certainty") or ""),
+        _norm(item.get("status") or ""),
+        _norm(item.get("msg_type") or ""),
+        _norm(item.get("effective") or item.get("onset") or ""),
+        _norm(item.get("expires") or ""),
+        _norm(item.get("description") or item.get("summary") or ""),
+        _norm(item.get("instruction") or ""),
     ])
 
 
@@ -477,7 +491,11 @@ def _build_entries_from_cap(
     title = headline or fallback.get("title") or event_es or "Alerta SMN"
 
     severity_from_text = _guess_severity_from_text(title, headline, description)
-    severity_final = severity or severity_from_text or ""
+    severity_final = _canonical_severity(severity or severity_from_text or "")
+
+    # Filter out moderate and below early
+    if not _is_allowed_severity(severity_final):
+        return []
 
     event_es_final = event_es or _guess_event_from_title(title)
     event_en = _event_to_english(event_es_final)
@@ -679,7 +697,10 @@ def _parse_html_detail(html_text: str, fallback: dict[str, Any]) -> list[dict[st
                 break
 
     title = title or fallback.get("title") or "Alerta SMN"
-    severity = _guess_severity_from_text(title, text)
+    severity = _canonical_severity(_guess_severity_from_text(title, text))
+    if not _is_allowed_severity(severity):
+        return []
+
     event_es = _guess_event_from_title(title)
     event_en = _event_to_english(event_es)
 
@@ -750,7 +771,10 @@ async def _rss_only_fallback_entries(item: dict[str, Any]) -> list[dict[str, Any
     d = dict(item)
     event_es = _guess_event_from_title(d.get("title") or "")
     event_en = _event_to_english(event_es)
-    severity = _guess_severity_from_text(d.get("title"), d.get("summary"), d.get("description"))
+    severity = _canonical_severity(_guess_severity_from_text(d.get("title"), d.get("summary"), d.get("description")))
+    if not _is_allowed_severity(severity):
+        return []
+
     areas = _extract_areas_from_text(d.get("description") or d.get("summary") or "") or ["Argentina"]
     province_name = _province_from_areas(areas)
     stable_suffix = _slug_hash(d.get("id") or d.get("link") or d.get("title") or "SMN", ",".join(areas))
@@ -803,10 +827,72 @@ async def _fetch_detail(session: aiohttp.ClientSession, item: dict[str, Any], se
 
         if is_xml:
             parsed = _parse_cap_alert_xml(text, item)
-            if parsed:
+            if parsed is not None:
                 return parsed
 
         return _parse_html_detail(text, item)
+
+
+# --------------------------------------------------------------------
+# Merge helpers
+# --------------------------------------------------------------------
+
+def _merge_alert_group(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Collapse repeated same-alert copies into one province-level alert.
+    Keep the newest published copy as base, union all areas.
+    """
+    items = sorted(
+        items,
+        key=lambda x: _norm(x.get("published") or x.get("effective") or x.get("onset")),
+        reverse=True,
+    )
+    base = dict(items[0])
+
+    area_names: set[str] = set()
+    matched_by_name: dict[str, dict[str, str]] = {}
+
+    for item in items:
+        for a in item.get("areas") or []:
+            aa = _norm(a)
+            if aa:
+                area_names.add(aa)
+
+        for row in item.get("matched_areas") or []:
+            if not isinstance(row, dict):
+                continue
+            name = _norm(row.get("name"))
+            if not name:
+                continue
+            matched_by_name[name] = {
+                "name": name,
+                "full_name": _norm(row.get("full_name")) or name,
+                "category": _norm(row.get("category")),
+                "province": _norm(row.get("province")),
+            }
+
+    merged_matched = sorted(
+        matched_by_name.values(),
+        key=lambda x: (_norm(x.get("name")).lower(), _norm(x.get("category")).lower())
+    )
+    merged_areas = sorted(area_names, key=lambda x: x.lower())
+
+    base["matched_areas"] = merged_matched
+    base["areas"] = merged_areas
+    base["region"] = ", ".join(merged_areas) if merged_areas else _norm(base.get("province_name") or base.get("province") or "Argentina")
+
+    stable_suffix = _slug_hash(
+        _norm(base.get("province_name") or base.get("province")),
+        _norm(base.get("event_es") or base.get("event")),
+        _canonical_severity(base.get("severity") or ""),
+        _norm(base.get("effective") or base.get("onset")),
+        _norm(base.get("expires")),
+        _norm(base.get("description") or base.get("summary")),
+        _norm(base.get("instruction")),
+    )
+    base["id"] = f"{_norm(base.get('identifier') or base.get('title') or base.get('event'))}|{_norm(base.get('province_name') or base.get('province'))}|{stable_suffix}"
+
+    return base
 
 
 # --------------------------------------------------------------------
@@ -823,10 +909,10 @@ async def scrape_smn_argentina_async(conf: dict | None, client=None) -> dict[str
       3) prefer CAP/XML detail parsing
       4) resolve polygon -> provinces + departments/partidos/comunas
       5) create one alert entry per intersected province
-      6) attach only the local areas crossed in that province
-      7) keep the specific RSS/CAP detail URL as the alert link
-      8) use English event names for renderer bucket labels
-      9) collapse repeated same-alert updates down to the latest copy
+      6) discard Moderate/Minor alerts
+      7) merge same province + same alert text/time into one entry
+      8) keep the specific RSS/CAP detail URL as the alert link
+      9) use English event names for renderer bucket labels
     """
     conf = conf or {}
     rss_url = _norm(conf.get("url")) or DEFAULT_RSS_URL
@@ -877,27 +963,26 @@ async def scrape_smn_argentina_async(conf: dict | None, client=None) -> dict[str
             continue
 
         for item in r:
-            if isinstance(item, dict):
+            if isinstance(item, dict) and _is_allowed_severity(item.get("severity") or ""):
                 all_entries.append(item)
 
-    all_entries = sorted(
-        all_entries,
+    if not all_entries:
+        return {"entries": [], "source": "SMN Argentina"}
+
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in all_entries:
+        grouped[_semantic_alert_key(item)].append(item)
+
+    merged_entries = [_merge_alert_group(group_items) for group_items in grouped.values()]
+
+    merged_entries = sorted(
+        merged_entries,
         key=lambda x: _norm(x.get("published") or x.get("effective") or x.get("onset")),
         reverse=True,
     )
 
-    deduped: list[dict[str, Any]] = []
-    seen_semantic: set[str] = set()
-
-    for item in all_entries:
-        s_key = _semantic_alert_key(item)
-        if s_key in seen_semantic:
-            continue
-        seen_semantic.add(s_key)
-        deduped.append(item)
-
-    logger.warning("[SMN] Parsed %d alerts", len(deduped))
-    return {"entries": deduped, "source": "SMN Argentina"}
+    logger.warning("[SMN] Parsed %d severe/extreme merged alerts", len(merged_entries))
+    return {"entries": merged_entries, "source": "SMN Argentina"}
 
 
 def scrape_smn_argentina(conf: dict | None = None) -> dict[str, Any]:
