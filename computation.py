@@ -6,7 +6,7 @@ import re
 import time
 from collections import OrderedDict, defaultdict
 from datetime import datetime
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from dateutil import parser as dateparser
 
@@ -43,7 +43,8 @@ def attach_timestamp(items: Sequence[Mapping[str, Any]], *, published_key: str =
     for e in items:
         t = e.get("timestamp")
         ts = parse_timestamp(t if t is not None else e.get(published_key))
-        d = dict(e); d["timestamp"] = ts
+        d = dict(e)
+        d["timestamp"] = ts
         out.append(d)
     return out
 
@@ -65,7 +66,8 @@ def mark_is_new_ts(
     out: list[dict] = []
     for e in items:
         ts = float(e.get(ts_key) or 0.0)
-        d = dict(e); d[flag_key] = ts > safe
+        d = dict(e)
+        d[flag_key] = ts > safe
         out.append(d)
     return out
 
@@ -84,7 +86,8 @@ def alphabetic_with_last(keys: Iterable[str], *, last_value: str | None = None) 
     """Alphabetize keys, optionally moving `last_value` to the end."""
     ks = sorted(set(keys))
     if last_value and last_value in ks:
-        ks.remove(last_value); ks.append(last_value)
+        ks.remove(last_value)
+        ks.append(last_value)
     return ks
 
 
@@ -150,6 +153,7 @@ EC_WARNING_TYPES: tuple[str, ...] = (
 )
 _EC_BUCKET_PATTERNS = {w: re.compile(rf"\b{re.escape(w)}\b", flags=re.IGNORECASE) for w in EC_WARNING_TYPES}
 
+
 def ec_bucket_from_title(title: str, *, patterns: Mapping[str, re.Pattern] = _EC_BUCKET_PATTERNS) -> str | None:
     """Return canonical EC bucket from title; strict match first, then '... Warning' fallback + 'Severe Thunderstorm Watch'."""
     if not title:
@@ -159,8 +163,8 @@ def ec_bucket_from_title(title: str, *, patterns: Mapping[str, re.Pattern] = _EC
             return canon
     t_low = title.lower()
     if "warning" in t_low:
-        m = re.search(r'([A-Za-z \-/]+warning)\b', title, flags=re.IGNORECASE)
-        return (m.group(1).strip().title() if m else "Warning")
+        m = re.search(r"([A-Za-z \-/]+warning)\b", title, flags=re.IGNORECASE)
+        return m.group(1).strip().title() if m else "Warning"
     if "severe thunderstorm watch" in t_low:
         return "Severe Thunderstorm Watch"
     return None
@@ -205,11 +209,13 @@ CMA_LEVEL_TO_BUCKET: Mapping[str, str] = {
     "Orange": "Orange Warning",
 }
 
+
 def cma_bucket_from_level(level: str | None) -> str | None:
     """Map CMA 'level' to a generic bucket label (only Orange/Red)."""
     if not level:
         return None
     return CMA_LEVEL_TO_BUCKET.get(str(level).strip())
+
 
 CMA_PHENOMENON_CN_TO_EN: Mapping[str, str] = {
     "雷雨大风": "Thunderstorm Gale",
@@ -236,9 +242,11 @@ CMA_PHENOMENON_CN_TO_EN: Mapping[str, str] = {
     "寒冷": "Cold",
 }
 
+
 def cma_headline_text(e: Mapping[str, Any]) -> str:
     """Canonical CMA headline/title accessor."""
     return str(e.get("headline") or e.get("title") or "").strip()
+
 
 def cma_extract_phenomenon_cn(text: str) -> str | None:
     """
@@ -252,7 +260,6 @@ def cma_extract_phenomenon_cn(text: str) -> str | None:
     if not t:
         return None
 
-    # longest-first so 雷雨大风 wins before 大风
     for key in sorted(CMA_PHENOMENON_CN_TO_EN.keys(), key=len, reverse=True):
         if key in t:
             return key
@@ -262,6 +269,7 @@ def cma_extract_phenomenon_cn(text: str) -> str | None:
         return str(m.group(1)).strip() or None
 
     return None
+
 
 def cma_bucket_label(
     e: Mapping[str, Any],
@@ -297,6 +305,7 @@ def cma_bucket_label(
 
     return f"{generic_cn} - {phenomenon_cn}"
 
+
 def cma_remaining_new_total(
     entries,
     *,
@@ -312,9 +321,9 @@ def cma_remaining_new_total(
     for e in entries or []:
         bucket = cma_bucket_label(e, translate_to_en=translate_to_en)
         if not bucket:
-            continue  # ignore Yellow/Blue/unknown
+            continue
 
-        prov = (e.get("region") or e.get("province_name") or e.get("province") or "全国")
+        prov = e.get("region") or e.get("province_name") or e.get("province") or "全国"
         prov = str(prov).strip() or "全国"
 
         bkey = f"{prov}|{bucket}"
@@ -325,29 +334,35 @@ def cma_remaining_new_total(
 
     return total
 
+
 # --------------------------------------------------------------------
 # BMKG (Indonesia) helpers
 # --------------------------------------------------------------------
 
 BMKG_SEVERITY_ORDER: Mapping[str, int] = {
-    "Red": 4,
-    "Orange": 3,
-    "Yellow": 2,
-    "Blue": 1,
+    "Extreme": 4,
+    "Severe": 3,
+    "Moderate": 2,
+    "Minor": 1,
+    "Unknown": 0,
 }
 
-def bmkg_level(e: Mapping[str, Any]) -> str:
-    """Canonical BMKG alert level accessor."""
-    return str(e.get("level") or "").strip()
+
+def bmkg_severity(e: Mapping[str, Any]) -> str:
+    """Canonical BMKG CAP severity accessor."""
+    return str(e.get("severity") or "").strip()
+
 
 def bmkg_event(e: Mapping[str, Any]) -> str:
     """Canonical BMKG event/type accessor."""
     return str(e.get("event") or "").strip() or "Weather"
 
+
 def bmkg_province(e: Mapping[str, Any]) -> str:
     """Canonical BMKG province accessor."""
     prov = e.get("province_name") or e.get("province") or "Indonesia"
     return str(prov).strip() or "Indonesia"
+
 
 def bmkg_location(e: Mapping[str, Any]) -> str:
     """Canonical BMKG location/region accessor."""
@@ -363,20 +378,22 @@ def bmkg_location(e: Mapping[str, Any]) -> str:
 
     return bmkg_province(e)
 
+
 def bmkg_bucket_label(e: Mapping[str, Any]) -> str | None:
     """
     Build the specific BMKG bucket label used by BOTH renderer and new-count logic.
 
     Examples:
-      Orange Warning - Thunderstorm
-      Yellow Warning - Heavy Rain
-      Red Warning - Extreme Weather
+      Moderate - Thunderstorm
+      Severe - Heavy Rain
+      Extreme - Thunderstorm
     """
-    level = bmkg_level(e)
+    severity = bmkg_severity(e)
     event = bmkg_event(e)
-    if not level:
+    if not severity:
         return None
-    return f"{level} Warning - {event}"
+    return f"{severity} - {event}"
+
 
 def bmkg_remaining_new_total(
     entries,
@@ -403,6 +420,7 @@ def bmkg_remaining_new_total(
 
     return total
 
+
 # --------------------------------------------------------------------
 # NWS (US National Weather Service) helpers
 # --------------------------------------------------------------------
@@ -426,8 +444,8 @@ def nws_remaining_new_total(
     """NWS-specific remaining-new counter using 'state|bucket' keys."""
     total = 0
     for e in entries or []:
-        state = (e.get("state") or e.get("state_name") or e.get("state_code") or "Unknown")
-        bucket = (e.get("bucket") or e.get("event") or e.get("title") or "Alert")
+        state = e.get("state") or e.get("state_name") or e.get("state_code") or "Unknown"
+        bucket = e.get("bucket") or e.get("event") or e.get("title") or "Alert"
         if not state or not bucket:
             continue
         bkey = f"{state}|{bucket}"
@@ -496,7 +514,7 @@ def meteoalarm_mark_and_sort(
                 filtered.append(d)
             filtered.sort(
                 key=lambda x: (severity_rank.get(x.get("level"), 0), float(x.get("timestamp") or 0.0)),
-                reverse=True
+                reverse=True,
             )
             new_map[day] = filtered
         c = dict(country)
@@ -504,7 +522,7 @@ def meteoalarm_mark_and_sort(
         c["title"] = c.get("title") or name
         c["alerts"] = new_map
         out.append(c)
-    out.sort(key=lambda c: (str(c.get("name") or "")))
+    out.sort(key=lambda c: str(c.get("name") or ""))
     return out
 
 
@@ -572,7 +590,6 @@ def meteoalarm_unseen_active_instance_total(
 
         by_day = counts.get("by_day")
         if isinstance(by_day, Mapping):
-            # try exact and a few normalized variants of 'day'
             for dkey in (day, str(day).capitalize(), str(day).title()):
                 d = by_day.get(dkey)
                 if isinstance(d, Mapping):
@@ -597,7 +614,7 @@ def meteoalarm_unseen_active_instance_total(
     for country in entries or []:
         counts = country.get("counts") if isinstance(country, Mapping) else None
         alerts_map = country.get("alerts", {}) or {}
-        unseen_buckets: set[tuple[str, str, str]] = set()  # (day, level, type)
+        unseen_buckets: set[tuple[str, str, str]] = set()
 
         if isinstance(alerts_map, Mapping):
             for day, alerts in alerts_map.items():
@@ -641,27 +658,33 @@ def compute_imd_timestamps(
             "region": region,
             "today": {
                 "severity": (days.get("today") or {}).get("severity"),
-                "hazards":  (days.get("today") or {}).get("hazards") or [],
-                "date":     (days.get("today") or {}).get("date"),
+                "hazards": (days.get("today") or {}).get("hazards") or [],
+                "date": (days.get("today") or {}).get("date"),
             },
             "tomorrow": {
                 "severity": (days.get("tomorrow") or {}).get("severity"),
-                "hazards":  (days.get("tomorrow") or {}).get("hazards") or [],
-                "date":     (days.get("tomorrow") or {}).get("date"),
+                "hazards": (days.get("tomorrow") or {}).get("hazards") or [],
+                "date": (days.get("tomorrow") or {}).get("date"),
             },
         }
         fp = json.dumps(norm, sort_keys=True, separators=(",", ":"))
-        changed = (prev_fp.get(region) != fp)
+        changed = prev_fp.get(region) != fp
         ts = now_ts if changed else float(prev_ts.get(region) or 0.0)
         if ts <= 0:
             ts = now_ts
 
-        d = dict(e); d["timestamp"] = ts; d["is_new"] = bool(changed)
+        d = dict(e)
+        d["timestamp"] = ts
+        d["is_new"] = bool(changed)
         dd = dict(days)
         if "today" in dd and isinstance(dd["today"], dict):
-            tdy = dict(dd["today"]); tdy["is_new"] = bool(changed); dd["today"] = tdy
+            tdy = dict(dd["today"])
+            tdy["is_new"] = bool(changed)
+            dd["today"] = tdy
         if "tomorrow" in dd and isinstance(dd["tomorrow"], dict):
-            tom = dict(dd["tomorrow"]); tom["is_new"] = bool(changed); dd["tomorrow"] = tom
+            tom = dict(dd["tomorrow"])
+            tom["is_new"] = bool(changed)
+            dd["tomorrow"] = tom
         d["days"] = dd
 
         updated.append(d)
@@ -694,7 +717,6 @@ def imd_unseen_day_total(entries: Sequence[Mapping[str, Any]]) -> int:
                 total += 1
             used_day_flags = True
 
-        # Fallback if we only have entry-level is_new
         if not used_day_flags and e.get("is_new"):
             if isinstance(tdy, dict) and tdy:
                 total += 1
@@ -715,13 +737,13 @@ def _imd_build_fingerprint(entry: Mapping[str, Any]) -> tuple[str, str]:
         "region": region,
         "today": {
             "severity": (days.get("today") or {}).get("severity"),
-            "hazards":  (days.get("today") or {}).get("hazards") or [],
-            "date":     (days.get("today") or {}).get("date"),
+            "hazards": (days.get("today") or {}).get("hazards") or [],
+            "date": (days.get("today") or {}).get("date"),
         },
         "tomorrow": {
             "severity": (days.get("tomorrow") or {}).get("severity"),
-            "hazards":  (days.get("tomorrow") or {}).get("hazards") or [],
-            "date":     (days.get("tomorrow") or {}).get("date"),
+            "hazards": (days.get("tomorrow") or {}).get("hazards") or [],
+            "date": (days.get("tomorrow") or {}).get("date"),
         },
     }
     fp = json.dumps(norm, sort_keys=True, separators=(",", ":"))
@@ -747,14 +769,19 @@ def snapshot_imd_seen(
         existing_ts = e.get("timestamp")
         ts_by_region[region] = float(existing_ts) if isinstance(existing_ts, (int, float)) and float(existing_ts) > 0 else ts
 
-        d = dict(e); d["is_new"] = False
+        d = dict(e)
+        d["is_new"] = False
         days = d.get("days") or {}
         if isinstance(days, dict):
             dd = dict(days)
             if "today" in dd and isinstance(dd["today"], dict):
-                t = dict(dd["today"]); t["is_new"] = False; dd["today"] = t
+                t = dict(dd["today"])
+                t["is_new"] = False
+                dd["today"] = t
             if "tomorrow" in dd and isinstance(dd["tomorrow"], dict):
-                t = dict(dd["tomorrow"]); t["is_new"] = False; dd["tomorrow"] = t
+                t = dict(dd["tomorrow"])
+                t["is_new"] = False
+                dd["tomorrow"] = t
             d["days"] = dd
         cleared.append(d)
 
