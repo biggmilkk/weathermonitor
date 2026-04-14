@@ -17,7 +17,8 @@ from computation import (
     compute_imd_timestamps,
     ec_remaining_new_total as ec_new_total,
     nws_remaining_new_total as nws_new_total,
-    cma_remaining_new_total as cma_new_total,  # ✅ ADD
+    cma_remaining_new_total as cma_new_total,
+    bmkg_remaining_new_total as bmkg_new_total,
     snapshot_imd_seen,
     meteoalarm_total_active_instances,
 )
@@ -50,8 +51,14 @@ def commit_seen_for_feed(prev_key: str):
     if conf["type"] == "rss_meteoalarm":
         st.session_state[f"{prev_key}_last_seen_alerts"] = meteoalarm_snapshot_ids(entries)
 
-    # ✅ renderer-handled feeds (bucket last_seen managed inside renderer)
-    elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact", "rss_cma"):
+    # renderer-handled feeds (bucket last_seen managed inside renderer)
+    elif conf["type"] in (
+        "ec_async",
+        "ec_grouped_compact",
+        "nws_grouped_compact",
+        "rss_cma",
+        "rss_bmkg",
+    ):
         pass
 
     elif conf["type"] == "imd_current_orange_red":
@@ -224,8 +231,14 @@ if to_fetch:
                 new_count = meteoalarm_unseen_active_instances(entries, last_seen_ids)
                 if new_count == 0:
                     pass
-            # ✅ include rss_cma here too (renderer-handled)
-            elif conf["type"] in ("ec_async", "ec_grouped_compact", "nws_grouped_compact", "rss_cma"):
+            # renderer-handled feeds
+            elif conf["type"] in (
+                "ec_async",
+                "ec_grouped_compact",
+                "nws_grouped_compact",
+                "rss_cma",
+                "rss_bmkg",
+            ):
                 pass
             elif conf["type"] == "uk_grouped_compact":
                 last_seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
@@ -272,6 +285,7 @@ FEED_POSITIONS = {
     "imd_india_today": (1, 3),
     "cma_china": (0, 3),
     "jma": (0, 4),
+    "bmkg_indonesia": (0, 5),
     "pagasa": (1, 4),
     "bom_multi": (1, 5),
 }
@@ -303,6 +317,10 @@ def _new_count_for_feed(key, conf, entries):
         last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
         translate_enabled = bool((conf.get("conf") or {}).get("translate_to_en") or conf.get("translate_to_en"))
         return int(cma_new_total(entries, last_seen_bkey_map=last_map, translate_to_en=translate_enabled))
+
+    if conf["type"] == "rss_bmkg":
+        last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
+        return int(bmkg_new_total(entries, last_seen_bkey_map=last_map))
 
     if conf["type"] == "uk_grouped_compact":
         seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
