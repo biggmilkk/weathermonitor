@@ -66,17 +66,29 @@ def _province(e: dict) -> str:
     ) or "Argentina"
 
 def _location(e: dict) -> str:
+    """
+    For SMN:
+      - province is already the section header
+      - item-level location should show the matched departments/areas
+    """
     areas = e.get("areas") or []
-    first_area = areas[0] if isinstance(areas, list) and areas else None
-    return _norm(
-        e.get("region")
-        or e.get("area")
-        or first_area
-        or _province(e)
-    )
+    if isinstance(areas, list):
+        cleaned = [_norm(x) for x in areas if _norm(x)]
+        if cleaned:
+            return ", ".join(cleaned)
+
+    region = _norm(e.get("region"))
+    if region and region != _province(e):
+        return region
+
+    return ""
 
 def _event(e: dict) -> str:
-    return _norm(e.get("event")) or "Alerta"
+    # scraper now sets event to English for bucket labels
+    return _norm(e.get("event")) or "Alert"
+
+def _event_es(e: dict) -> str:
+    return _norm(e.get("event_es"))
 
 def _severity(e: dict) -> str:
     return _norm(e.get("severity"))
@@ -104,9 +116,9 @@ def _bucket_label(e: dict) -> str | None:
     Specific SMN sub-bucket label for display and grouping.
 
     Examples:
-      - Moderate - Lluvias
-      - Severe - Tormentas
-      - Extreme - Viento
+      - Moderate - Thunderstorms
+      - Severe - Rain
+      - Extreme - Wind
     """
     severity = _severity(e)
     event = _event(e)
@@ -120,12 +132,11 @@ def _bullet_color(severity: str) -> str:
     """
     s = _norm(severity).lower()
     return {
-        "extreme": "#E60026",   # red
-        "severe": "#FF7F00",    # orange
-        "moderate": "#D4AA00",  # yellow
-        "minor": "#2E8B57",     # green
+        "extreme": "#E60026",
+        "severe": "#FF7F00",
+        "moderate": "#D4AA00",
+        "minor": "#2E8B57",
         "unknown": "#888888",
-        # fallback support if any Spanish color words ever appear
         "rojo": "#E60026",
         "naranja": "#FF7F00",
         "amarillo": "#D4AA00",
@@ -205,9 +216,9 @@ def render(entries, conf):
       Province -> Specific sub-bucket -> alerts
 
     Example bucket labels:
-      - Moderate - Lluvias
-      - Severe - Tormentas
-      - Extreme - Viento
+      - Moderate - Thunderstorms
+      - Severe - Rain
+      - Extreme - Wind
     """
     feed_key = conf.get("key", "smn")
     translate_enabled = bool(
@@ -387,6 +398,7 @@ def render(entries, conf):
                     bullet_color = _bullet_color(severity)
                     location = _location(a)
                     event = _event(a)
+                    event_es = _event_es(a)
                     urgency = _urgency(a)
                     certainty = _certainty(a)
                     status = _status(a)
@@ -408,6 +420,9 @@ def render(entries, conf):
 
                     if event:
                         st.markdown(f"**Type:** {html.escape(event)}")
+
+                    if event_es and event_es != event:
+                        st.markdown(f"**Tipo original:** {html.escape(event_es)}")
 
                     if severity:
                         st.markdown(f"**Severity:** {html.escape(severity)}")
