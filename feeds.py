@@ -155,7 +155,6 @@ def get_feed_definitions():
             "conf": {
                 "max_concurrency": 6,
             },
-            # Structured RSS + CAP detail fetches; medium cadence is a good balance
             "group": "g2_even",
         },
     }
