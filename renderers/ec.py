@@ -169,10 +169,11 @@ def render(entries, conf):
     Grouped compact renderer for Environment Canada:
       Province -> Specific warning bucket -> list of alerts
 
-    Example bucket labels:
-      - Yellow Warning - Snowfall
-      - Orange Warning - Wind
-      - Red Warning - Rain
+    Behavior:
+      - opening a bucket starts a pending-seen timer
+      - closing that bucket commits it as seen
+      - switching buckets commits the previously open bucket as seen
+      - main EC(Canada) badge updates only after close/switch, not on open
     """
     feed_key = conf.get("key", "ec")
 
@@ -228,6 +229,7 @@ def render(entries, conf):
             pending_seen.clear()
             st.session_state[open_key] = None
             st.session_state[lastseen_key] = bucket_lastseen
+            st.session_state[pending_map_key] = pending_seen
             st.session_state[f"{feed_key}_remaining_new_total"] = 0
             _safe_rerun()
             return
@@ -264,7 +266,6 @@ def render(entries, conf):
         for a in alerts:
             buckets.setdefault(a["bucket"], []).append(a)
 
-        # Sort buckets by severity, then label
         def _bucket_sort_key(label: str):
             ll = _norm(label).lower()
             if ll.startswith("red"):
@@ -285,7 +286,6 @@ def render(entries, conf):
             bkey = f"{prov}|{label}"
             cols = st.columns([0.7, 0.3])
 
-            # bucket toggle + pending/seen bookkeeping
             with cols[0]:
                 clicked = st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True)
 
@@ -293,22 +293,27 @@ def render(entries, conf):
                     state_changed = False
                     prev = active_bucket
 
-                    # if switching buckets, commit previously open bucket as seen
+                    # switching buckets: commit previous as seen
                     if prev and prev != bkey:
                         ts_opened_prev = float(pending_seen.pop(prev, time.time()))
                         bucket_lastseen[prev] = ts_opened_prev
+                        st.session_state[lastseen_key] = bucket_lastseen
+                        st.session_state[pending_map_key] = pending_seen
 
                     if active_bucket == bkey:
-                        # closing same bucket -> commit as seen
+                        # closing same bucket: commit this bucket as seen
                         ts_opened = float(pending_seen.pop(bkey, time.time()))
                         bucket_lastseen[bkey] = ts_opened
+                        st.session_state[lastseen_key] = bucket_lastseen
+                        st.session_state[pending_map_key] = pending_seen
                         st.session_state[open_key] = None
                         active_bucket = None
                         state_changed = True
                     else:
-                        # opening new bucket -> start pending timer
+                        # opening new bucket: start pending timer only
                         st.session_state[open_key] = bkey
                         pending_seen[bkey] = time.time()
+                        st.session_state[pending_map_key] = pending_seen
                         active_bucket = bkey
                         state_changed = True
 
