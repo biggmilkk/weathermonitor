@@ -19,6 +19,7 @@ from computation import (
     nws_remaining_new_total as nws_new_total,
     cma_remaining_new_total as cma_new_total,
     bmkg_remaining_new_total as bmkg_new_total,
+    smn_remaining_new_total as smn_new_total,
     snapshot_imd_seen,
     meteoalarm_total_active_instances,
 )
@@ -58,6 +59,7 @@ def commit_seen_for_feed(prev_key: str):
         "nws_grouped_compact",
         "rss_cma",
         "rss_bmkg",
+        "rss_smn_argentina",
     ):
         pass
 
@@ -238,6 +240,7 @@ if to_fetch:
                 "nws_grouped_compact",
                 "rss_cma",
                 "rss_bmkg",
+                "rss_smn_argentina",
             ):
                 pass
             elif conf["type"] == "uk_grouped_compact":
@@ -285,8 +288,9 @@ FEED_POSITIONS = {
     "imd_india_today": (1, 3),
     "cma_china": (0, 3),
     "jma": (0, 4),
-    "bmkg_indonesia": (2, 4),
     "pagasa": (1, 4),
+    "bmkg_indonesia": (2, 4),
+    "argentina_smn": (0, 2),
     "bom_multi": (2, 5),
 }
 
@@ -321,6 +325,10 @@ def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "rss_bmkg":
         last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
         return int(bmkg_new_total(entries, last_seen_bkey_map=last_map))
+
+    if conf["type"] == "rss_smn_argentina":
+        last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
+        return int(smn_new_total(entries, last_seen_bkey_map=last_map))
 
     if conf["type"] == "uk_grouped_compact":
         seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
