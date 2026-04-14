@@ -104,9 +104,9 @@ def _bucket_label(e: dict) -> str | None:
     Specific SMN sub-bucket label for display and grouping.
 
     Examples:
-      - Rojo - Tormentas
-      - Naranja - Lluvias
-      - Amarillo - Viento
+      - Moderate - Lluvias
+      - Severe - Tormentas
+      - Extreme - Viento
     """
     severity = _severity(e)
     event = _event(e)
@@ -115,8 +115,17 @@ def _bucket_label(e: dict) -> str | None:
     return f"{severity} - {event}"
 
 def _bullet_color(severity: str) -> str:
+    """
+    SMN detail bullets based on CAP severity values.
+    """
     s = _norm(severity).lower()
     return {
+        "extreme": "#E60026",   # red
+        "severe": "#FF7F00",    # orange
+        "moderate": "#D4AA00",  # yellow
+        "minor": "#2E8B57",     # green
+        "unknown": "#888888",
+        # fallback support if any Spanish color words ever appear
         "rojo": "#E60026",
         "naranja": "#FF7F00",
         "amarillo": "#D4AA00",
@@ -124,7 +133,7 @@ def _bullet_color(severity: str) -> str:
     }.get(s, "#888")
 
 # ============================================================
-# Translation (same pattern as CMA, but Spanish -> English)
+# Translation (Spanish -> English, same DeepL pattern)
 # ============================================================
 
 @st.cache_data(ttl=7 * 24 * 3600, show_spinner=False)
@@ -132,12 +141,6 @@ def _translate_to_en_deepl(text: str) -> str | None:
     t = (text or "").strip()
     if not t:
         return None
-
-    try:
-        if (sum(1 for ch in t if ord(ch) < 128) / max(1, len(t))) > 0.9:
-            return None
-    except Exception:
-        pass
 
     api_key = None
     try:
@@ -173,7 +176,7 @@ def _maybe_translate(text: str, *, enabled: bool) -> str | None:
 def _remaining_new_total(entries, bucket_lastseen) -> int:
     """
     Remaining NEW across all SMN entries using province|bucket_key.
-    Must match computation logic you add for SMN.
+    Must match computation logic for SMN.
     """
     total = 0
     for e in entries or []:
@@ -202,14 +205,9 @@ def render(entries, conf):
       Province -> Specific sub-bucket -> alerts
 
     Example bucket labels:
-      - Rojo - Tormentas
-      - Naranja - Lluvias
-      - Amarillo - Viento
-
-    Behavior:
-      - opening a bucket starts a pending-seen timer
-      - closing the bucket commits it as seen
-      - switching buckets commits the previously open bucket as seen
+      - Moderate - Lluvias
+      - Severe - Tormentas
+      - Extreme - Viento
     """
     feed_key = conf.get("key", "smn")
     translate_enabled = bool(
@@ -236,7 +234,6 @@ def render(entries, conf):
 
     items = sort_newest(attach_timestamp(entries or []))
 
-    # Normalize and precompute bucket keys
     filtered = []
     for e in items:
         bucket_label = _bucket_label(e)
@@ -313,11 +310,16 @@ def render(entries, conf):
             first = items_in_bucket[0] if items_in_bucket else {}
             sev = _norm(_severity(first)).lower()
             sev_rank = {
+                "extreme": 0,
+                "severe": 1,
+                "moderate": 2,
+                "minor": 3,
+                "unknown": 4,
                 "rojo": 0,
                 "naranja": 1,
                 "amarillo": 2,
                 "verde": 3,
-            }.get(sev, 4)
+            }.get(sev, 5)
             return (sev_rank, _norm(label).lower())
 
         ordered_bucket_keys = sorted(
@@ -337,16 +339,13 @@ def render(entries, conf):
                 if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
                     prev = active_bucket
 
-                    # Commit previous bucket if switching
                     if prev and prev != bkey:
                         bucket_lastseen[prev] = float(pending_seen.pop(prev, time.time()))
 
                     if active_bucket == bkey:
-                        # Closing: commit this bucket as seen at open time
                         bucket_lastseen[bkey] = float(pending_seen.pop(bkey, time.time()))
                         st.session_state[open_key] = None
                     else:
-                        # Opening: start pending timer
                         st.session_state[open_key] = bkey
                         pending_seen[bkey] = time.time()
 
