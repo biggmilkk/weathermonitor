@@ -299,10 +299,10 @@ def _new_count_for_feed(key, conf, entries):
         last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
         return int(nws_new_total(entries, last_seen_bkey_map=last_map))
 
-    # ✅ CMA: compute NEW using bucket_last_seen map (NOT last_seen_time)
     if conf["type"] == "rss_cma":
         last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
-        return int(cma_new_total(entries, last_seen_bkey_map=last_map))
+        translate_enabled = bool((conf.get("conf") or {}).get("translate_to_en") or conf.get("translate_to_en"))
+        return int(cma_new_total(entries, last_seen_bkey_map=last_map, translate_to_en=translate_enabled))
 
     if conf["type"] == "uk_grouped_compact":
         seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
