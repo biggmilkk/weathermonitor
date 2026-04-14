@@ -11,6 +11,7 @@ from computation import (
     sort_newest,
     alphabetic_with_last,
     entry_ts,
+    bmkg_bucket_label,
 )
 
 # ============================================================
@@ -65,45 +66,40 @@ def _province(e: dict) -> str:
     ) or "Indonesia"
 
 def _location(e: dict) -> str:
+    areas = e.get("areas") or []
+    first_area = areas[0] if isinstance(areas, list) and areas else None
     return _norm(
         e.get("region")
         or e.get("area")
-        or (e.get("areas") or [None])[0]
+        or first_area
         or _province(e)
     )
 
 def _event(e: dict) -> str:
     return _norm(e.get("event")) or "Weather"
 
-def _level(e: dict) -> str:
-    return _norm(e.get("level"))
+def _severity(e: dict) -> str:
+    return _norm(e.get("severity"))
 
-def _bullet_color(level: str) -> str:
+def _urgency(e: dict) -> str:
+    return _norm(e.get("urgency"))
+
+def _certainty(e: dict) -> str:
+    return _norm(e.get("certainty"))
+
+def _bullet_color(severity: str) -> str:
     return {
-        "Red": "#E60026",
-        "Orange": "#FF7F00",
-        "Yellow": "#D4AA00",
-        "Blue": "#3B82F6",
-    }.get(level, "#888")
-
-def _bucket_label(e: dict) -> str | None:
-    """
-    Specific BMKG sub-bucket label for display and grouping.
-
-    Examples:
-      - Orange Warning - Thunderstorm
-      - Yellow Warning - Heavy Rain
-      - Red Warning - Extreme Weather
-    """
-    level = _level(e)
-    event = _event(e)
-    if not level:
-        return None
-    return f"{level} Warning - {event}"
+        "Extreme": "#E60026",
+        "Severe": "#FF7F00",
+        "Moderate": "#D4AA00",
+        "Minor": "#3B82F6",
+        "Unknown": "#888888",
+    }.get(severity, "#888")
 
 def _remaining_new_total(entries, bucket_lastseen) -> int:
     """
     Remaining NEW across all BMKG entries using province|bucket_key.
+    Must match computation.bmkg_remaining_new_total().
     """
     total = 0
     for e in entries or []:
@@ -120,7 +116,7 @@ def _remaining_new_total(entries, bucket_lastseen) -> int:
 # BMKG Province ordering
 # ============================================================
 
-# Keep "Indonesia" / nationwide-style rollups last if they appear
+# Keep nationwide-style rollups last if they appear
 _LAST_PROVINCE = "Indonesia"
 
 # ============================================================
@@ -133,9 +129,9 @@ def render(entries, conf):
       Province -> Specific sub-bucket -> alerts
 
     Example bucket labels:
-      - Orange Warning - Thunderstorm
-      - Yellow Warning - Heavy Rain
-      - Red Warning - Extreme Weather
+      - Moderate - Thunderstorm
+      - Severe - Heavy Rain
+      - Extreme - Thunderstorm
 
     Behavior:
       - opening a bucket starts a pending-seen timer
@@ -166,7 +162,7 @@ def render(entries, conf):
     # Normalize and precompute bucket keys
     filtered = []
     for e in items:
-        bucket_label = _bucket_label(e)
+        bucket_label = bmkg_bucket_label(e)
         if not bucket_label:
             continue
 
@@ -236,23 +232,21 @@ def render(entries, conf):
                 }
             buckets[bk]["items"].append(a)
 
-        def _bucket_sort_key(label: str):
-            ll = _norm(label).lower()
-            if ll.startswith("red"):
-                sev_rank = 0
-            elif ll.startswith("orange"):
-                sev_rank = 1
-            elif ll.startswith("yellow"):
-                sev_rank = 2
-            elif ll.startswith("blue"):
-                sev_rank = 3
-            else:
-                sev_rank = 4
-            return (sev_rank, ll)
+        def _bucket_sort_key(items_in_bucket: list[dict], label: str):
+            first = items_in_bucket[0] if items_in_bucket else {}
+            sev = _severity(first)
+            sev_rank = {
+                "Extreme": 0,
+                "Severe": 1,
+                "Moderate": 2,
+                "Minor": 3,
+                "Unknown": 4,
+            }.get(sev, 5)
+            return (sev_rank, _norm(label).lower())
 
         ordered_bucket_keys = sorted(
             buckets.keys(),
-            key=lambda bk: _bucket_sort_key(buckets[bk]["label"])
+            key=lambda bk: _bucket_sort_key(buckets[bk]["items"], buckets[bk]["label"])
         )
 
         # ---------- Buckets ----------
@@ -314,10 +308,12 @@ def render(entries, conf):
                     prefix = "[NEW] " if is_new else ""
 
                     headline = _headline(a) or "(no title)"
-                    level = _level(a)
-                    bullet_color = _bullet_color(level)
+                    severity = _severity(a)
+                    bullet_color = _bullet_color(severity)
                     location = _location(a)
                     event = _event(a)
+                    urgency = _urgency(a)
+                    certainty = _certainty(a)
 
                     title_html = (
                         f"{prefix}"
@@ -331,6 +327,15 @@ def render(entries, conf):
 
                     if event:
                         st.markdown(f"**Type:** {html.escape(event)}")
+
+                    if severity:
+                        st.markdown(f"**Severity:** {html.escape(severity)}")
+
+                    if urgency:
+                        st.markdown(f"**Urgency:** {html.escape(urgency)}")
+
+                    if certainty:
+                        st.markdown(f"**Certainty:** {html.escape(certainty)}")
 
                     summary = _norm(a.get("summary") or a.get("description"))
                     if summary:
