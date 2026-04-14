@@ -1,4 +1,3 @@
-# renderers/smn.py
 import html
 import os
 import time
@@ -29,8 +28,10 @@ def _to_utc_label(pub: str | None) -> str | None:
         pass
     return pub
 
+
 def _norm(s: str | None) -> str:
     return (s or "").strip()
+
 
 def _stripe_wrap(content: str, is_new: bool) -> str:
     if not is_new:
@@ -41,14 +42,17 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
         f"{content}</div>"
     )
 
+
 def _safe_rerun():
     if hasattr(st, "rerun"):
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
 
+
 def render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
+
 
 def _headline(e: dict) -> str:
     return _norm(
@@ -58,6 +62,7 @@ def _headline(e: dict) -> str:
         or e.get("event")
     )
 
+
 def _province(e: dict) -> str:
     return _norm(
         e.get("province_name")
@@ -65,16 +70,46 @@ def _province(e: dict) -> str:
         or "Argentina"
     ) or "Argentina"
 
+
+def _matched_area_rows(e: dict) -> list[dict]:
+    rows = e.get("matched_areas") or []
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for r in rows:
+        if isinstance(r, dict):
+            name = _norm(r.get("name"))
+            if name:
+                out.append({
+                    "name": name,
+                    "full_name": _norm(r.get("full_name")) or name,
+                    "category": _norm(r.get("category")),
+                    "province": _norm(r.get("province")),
+                })
+    return out
+
+
 def _location(e: dict) -> str:
     """
-    For SMN:
-      - province is already the section header
-      - item-level location should show the matched departments/areas
+    Province is already the section header.
+
+    Item-level location should show local matched areas only:
+      - departments / partidos / comunas crossed by polygon
+      - fallback to region if needed
     """
+    matched = _matched_area_rows(e)
+    if matched:
+        names = [row["name"] for row in matched if _norm(row.get("name"))]
+        if names:
+            return ", ".join(names)
+
     areas = e.get("areas") or []
     if isinstance(areas, list):
         cleaned = [_norm(x) for x in areas if _norm(x)]
         if cleaned:
+            province_name = _province(e)
+            if cleaned == [province_name]:
+                return ""
             return ", ".join(cleaned)
 
     region = _norm(e.get("region"))
@@ -83,53 +118,77 @@ def _location(e: dict) -> str:
 
     return ""
 
+
+def _location_full_lines(e: dict) -> list[str]:
+    """
+    More descriptive area labels for display, using category when available.
+    Example:
+      Partido de Adolfo Gonzales Chaves
+      Departamento Concordia
+      Comuna 6
+    """
+    matched = _matched_area_rows(e)
+    if matched:
+        lines: list[str] = []
+        for row in matched:
+            full_name = _norm(row.get("full_name"))
+            if full_name:
+                lines.append(full_name)
+            else:
+                lines.append(_norm(row.get("name")))
+        return [x for x in lines if _norm(x)]
+
+    location = _location(e)
+    if not location:
+        return []
+    return [part.strip() for part in location.split(",") if part.strip()]
+
+
 def _event(e: dict) -> str:
-    # scraper now sets event to English for bucket labels
     return _norm(e.get("event")) or "Alert"
+
 
 def _event_es(e: dict) -> str:
     return _norm(e.get("event_es"))
 
+
 def _severity(e: dict) -> str:
     return _norm(e.get("severity"))
+
 
 def _urgency(e: dict) -> str:
     return _norm(e.get("urgency"))
 
+
 def _certainty(e: dict) -> str:
     return _norm(e.get("certainty"))
+
 
 def _status(e: dict) -> str:
     return _norm(e.get("status"))
 
+
 def _msg_type(e: dict) -> str:
     return _norm(e.get("msg_type"))
+
 
 def _instruction(e: dict) -> str:
     return _norm(e.get("instruction"))
 
+
 def _description(e: dict) -> str:
     return _norm(e.get("description") or e.get("summary"))
 
-def _bucket_label(e: dict) -> str | None:
-    """
-    Specific SMN sub-bucket label for display and grouping.
 
-    Examples:
-      - Moderate - Thunderstorms
-      - Severe - Rain
-      - Extreme - Wind
-    """
+def _bucket_label(e: dict) -> str | None:
     severity = _severity(e)
     event = _event(e)
     if not severity:
         return None
     return f"{severity} - {event}"
 
+
 def _bullet_color(severity: str) -> str:
-    """
-    SMN detail bullets based on CAP severity values.
-    """
     s = _norm(severity).lower()
     return {
         "extreme": "#E60026",
@@ -142,6 +201,7 @@ def _bullet_color(severity: str) -> str:
         "amarillo": "#D4AA00",
         "verde": "#2E8B57",
     }.get(s, "#888")
+
 
 # ============================================================
 # Translation (Spanish -> English, same DeepL pattern)
@@ -175,20 +235,18 @@ def _translate_to_en_deepl(text: str) -> str | None:
     except Exception:
         return None
 
+
 def _maybe_translate(text: str, *, enabled: bool) -> str | None:
     if not enabled:
         return None
     return _translate_to_en_deepl(text)
+
 
 # ============================================================
 # Remaining NEW total (renderer-local)
 # ============================================================
 
 def _remaining_new_total(entries, bucket_lastseen) -> int:
-    """
-    Remaining NEW across all SMN entries using province|bucket_key.
-    Must match computation logic for SMN.
-    """
     total = 0
     for e in entries or []:
         prov = _province(e)
@@ -200,11 +258,13 @@ def _remaining_new_total(entries, bucket_lastseen) -> int:
             total += 1
     return total
 
+
 # ============================================================
 # Province ordering
 # ============================================================
 
 _LAST_PROVINCE = "Argentina"
+
 
 # ============================================================
 # SMN Grouped Renderer
@@ -216,8 +276,8 @@ def render(entries, conf):
       Province -> Specific sub-bucket -> alerts
 
     Example bucket labels:
-      - Moderate - Thunderstorms
-      - Severe - Rain
+      - Severe - Thunderstorms
+      - Moderate - Rain
       - Extreme - Wind
     """
     feed_key = conf.get("key", "smn")
@@ -226,9 +286,9 @@ def render(entries, conf):
         or conf.get("translate_to_en")
     )
 
-    open_key        = f"{feed_key}_active_bucket"
+    open_key = f"{feed_key}_active_bucket"
     pending_map_key = f"{feed_key}_bucket_pending_seen"
-    lastseen_key    = f"{feed_key}_bucket_last_seen"
+    lastseen_key = f"{feed_key}_bucket_last_seen"
     rerun_guard_key = f"{feed_key}_rerun_guard"
 
     if st.session_state.get(rerun_guard_key):
@@ -239,8 +299,8 @@ def render(entries, conf):
     st.session_state.setdefault(lastseen_key, {})
     st.session_state.setdefault(f"{feed_key}_remaining_new_total", 0)
 
-    active_bucket   = st.session_state[open_key]
-    pending_seen    = st.session_state[pending_map_key]
+    active_bucket = st.session_state[open_key]
+    pending_seen = st.session_state[pending_map_key]
     bucket_lastseen = st.session_state[lastseen_key]
 
     items = sort_newest(attach_timestamp(entries or []))
@@ -397,6 +457,7 @@ def render(entries, conf):
                     severity = _severity(a)
                     bullet_color = _bullet_color(severity)
                     location = _location(a)
+                    location_lines = _location_full_lines(a)
                     event = _event(a)
                     event_es = _event_es(a)
                     urgency = _urgency(a)
@@ -417,6 +478,14 @@ def render(entries, conf):
 
                     if location:
                         st.markdown(f"**Location:** {html.escape(location)}")
+
+                    if location_lines:
+                        if len(location_lines) == 1:
+                            st.markdown(f"**Affected area:** {html.escape(location_lines[0])}")
+                        else:
+                            st.markdown("**Affected areas:**")
+                            for line in location_lines:
+                                st.markdown(f"- {html.escape(line)}")
 
                     if event:
                         st.markdown(f"**Type:** {html.escape(event)}")
