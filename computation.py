@@ -425,6 +425,11 @@ def bmkg_remaining_new_total(
 # --------------------------------------------------------------------
 
 SMN_SEVERITY_ORDER: Mapping[str, int] = {
+    "Extreme": 4,
+    "Severe": 3,
+    "Moderate": 2,
+    "Minor": 1,
+    # fallback support if Spanish color words ever appear
     "Rojo": 4,
     "Naranja": 3,
     "Amarillo": 2,
@@ -436,8 +441,17 @@ def smn_severity(e: Mapping[str, Any]) -> str:
     return str(e.get("severity") or "").strip()
 
 def smn_event(e: Mapping[str, Any]) -> str:
-    """Canonical SMN event/type accessor."""
-    return str(e.get("event") or "").strip() or "Alerta"
+    """
+    Canonical SMN event/type accessor.
+
+    The scraper now normalizes this to EN for bucket labels
+    (e.g. Thunderstorms, Rain, Wind, Snow).
+    """
+    return str(e.get("event") or "").strip() or "Alert"
+
+def smn_event_es(e: Mapping[str, Any]) -> str:
+    """Original Spanish event accessor, if present."""
+    return str(e.get("event_es") or "").strip()
 
 def smn_province(e: Mapping[str, Any]) -> str:
     """Canonical SMN province accessor."""
@@ -445,27 +459,32 @@ def smn_province(e: Mapping[str, Any]) -> str:
     return str(prov).strip() or "Argentina"
 
 def smn_location(e: Mapping[str, Any]) -> str:
-    """Canonical SMN location/region accessor."""
-    region = e.get("region") or e.get("area")
+    """
+    Canonical SMN item-level location accessor.
+
+    Province is already used as the section header, so this returns the
+    matched departments/areas if available.
+    """
+    areas = e.get("areas")
+    if isinstance(areas, Sequence) and not isinstance(areas, (str, bytes)):
+        cleaned = [str(x).strip() for x in areas if str(x).strip()]
+        if cleaned:
+            return ", ".join(cleaned)
+
+    region = e.get("region")
     if isinstance(region, str) and region.strip():
         return region.strip()
 
-    areas = e.get("areas")
-    if isinstance(areas, Sequence) and not isinstance(areas, (str, bytes)) and len(areas) > 0:
-        first = areas[0]
-        if isinstance(first, str) and first.strip():
-            return first.strip()
-
-    return smn_province(e)
+    return ""
 
 def smn_bucket_label(e: Mapping[str, Any]) -> str | None:
     """
     Build the specific SMN bucket label used by BOTH renderer and new-count logic.
 
     Examples:
-      Rojo - Tormentas
-      Naranja - Lluvias
-      Amarillo - Viento
+      Moderate - Thunderstorms
+      Severe - Rain
+      Extreme - Wind
     """
     severity = smn_severity(e)
     event = smn_event(e)
@@ -497,7 +516,7 @@ def smn_remaining_new_total(
             total += 1
 
     return total
-
+    
 # --------------------------------------------------------------------
 # NWS (US National Weather Service) helpers
 # --------------------------------------------------------------------
