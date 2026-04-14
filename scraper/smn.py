@@ -2,20 +2,24 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
+from functools import lru_cache
 from typing import Any
 
 import aiohttp
 from bs4 import BeautifulSoup
+from shapely.geometry import Polygon, shape
 
 # --------------------------------------------------------------------
 # Constants
 # --------------------------------------------------------------------
 
 DEFAULT_RSS_URL = "https://ssl.smn.gob.ar/feeds/CAP/rss_alertaCAP_nuevo.xml"
+PROVINCES_GEOJSON_PATH = "argentina_provinces.geojson"
 
 CAP_NS = {"cap": "urn:oasis:names:tc:emergency:cap:1.2"}
 
@@ -24,12 +28,17 @@ CONNECTOR_LIMIT = 10
 
 logger = logging.getLogger(__name__)
 
-# SMN uses Spanish alert colors publicly
+# SMN sometimes surfaces public color words in pages/text
 SPANISH_SEVERITY_ORDER = {
     "Rojo": 4,
     "Naranja": 3,
     "Amarillo": 2,
     "Verde": 1,
+    # CAP-native values
+    "Extreme": 4,
+    "Severe": 3,
+    "Moderate": 2,
+    "Minor": 1,
 }
 
 COLOR_WORD_RE = re.compile(r"\b(rojo|naranja|amarillo|verde)\b", re.IGNORECASE)
@@ -86,7 +95,6 @@ def _guess_event_from_title(title: str) -> str:
     t = _norm(title)
     if not t:
         return "Alerta"
-    # Remove common leading severity words
     t = re.sub(r"^\s*(Alerta|Advertencia)\s+", "", t, flags=re.IGNORECASE)
     t = re.sub(r"\b(rojo|naranja|amarillo|verde)\b", "", t, flags=re.IGNORECASE)
     t = re.sub(r"\s+", " ", t).strip(" -,:")
@@ -134,6 +142,80 @@ def _html_to_text(html: str) -> str:
 
 
 # --------------------------------------------------------------------
+# Polygon / province helpers
+# --------------------------------------------------------------------
+
+@lru_cache(maxsize=1)
+def _load_argentina_provinces(path: str = PROVINCES_GEOJSON_PATH) -> list[tuple[str, Any]]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    provinces: list[tuple[str, Any]] = []
+    for feat in data.get("features", []):
+        props = feat.get("properties", {}) or {}
+        name = _norm(
+            props.get("nombre")
+            or props.get("name")
+            or props.get("provincia")
+            or props.get("nam")
+        )
+        geom = feat.get("geometry")
+        if not name or not geom:
+            continue
+
+        try:
+            g = shape(geom)
+            if not g.is_valid:
+                g = g.buffer(0)
+            if not g.is_empty:
+                provinces.append((name, g))
+        except Exception as e:
+            logger.warning("[SMN] Province geometry parse failed for %s: %s", name, e)
+
+    return provinces
+
+def _cap_polygon_to_shapely(poly_text: str):
+    pts = []
+    for pair in (poly_text or "").split():
+        try:
+            lat_s, lon_s = pair.split(",", 1)
+            lat = float(lat_s)
+            lon = float(lon_s)
+            pts.append((lon, lat))  # shapely uses lon,lat
+        except Exception:
+            continue
+
+    if len(pts) < 3:
+        return None
+
+    if pts[0] != pts[-1]:
+        pts.append(pts[0])
+
+    poly = Polygon(pts)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+
+    return None if poly.is_empty else poly
+
+def _match_provinces_from_polygon(poly_text: str) -> list[str]:
+    poly = _cap_polygon_to_shapely(poly_text)
+    if poly is None:
+        return []
+
+    matched: list[str] = []
+    for name, prov_geom in _load_argentina_provinces():
+        try:
+            if poly.intersects(prov_geom):
+                inter = poly.intersection(prov_geom)
+                if not inter.is_empty and inter.area > 0:
+                    matched.append(name)
+        except Exception:
+            continue
+
+    return matched
+
+
+# --------------------------------------------------------------------
 # RSS parsing
 # --------------------------------------------------------------------
 
@@ -171,7 +253,87 @@ def _parse_rss_items(xml_text: str) -> list[dict[str, Any]]:
 # CAP detail parsing
 # --------------------------------------------------------------------
 
-def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> dict[str, Any] | None:
+def _build_entries_from_cap(
+    *,
+    fallback: dict[str, Any],
+    identifier: str,
+    sent: str,
+    status: str,
+    msg_type: str,
+    scope: str,
+    language: str,
+    category: str,
+    event: str,
+    urgency: str,
+    severity: str,
+    certainty: str,
+    onset: str,
+    effective: str,
+    expires: str,
+    headline: str,
+    description: str,
+    instruction: str,
+    sender_name: str,
+    web: str,
+    area_descs: list[str],
+    polygon_text: str,
+) -> list[dict[str, Any]]:
+    title = headline or fallback.get("title") or event or "Alerta SMN"
+    severity_es = _guess_severity_from_text(title, headline, description)
+    severity_final = severity_es or severity or ""
+
+    # Prefer explicit names if present; else polygon-to-province; else text extraction
+    named_areas = [a for a in area_descs if a]
+    if not named_areas:
+        named_areas = _match_provinces_from_polygon(polygon_text)
+    if not named_areas:
+        named_areas = _extract_areas_from_text(description)
+
+    if not named_areas:
+        named_areas = ["Argentina"]
+
+    base = {
+        "id": identifier or fallback.get("id") or fallback.get("link") or title,
+        "identifier": identifier,
+        "title": title,
+        "headline": headline or title,
+        "summary": description or fallback.get("summary") or "",
+        "description": description or fallback.get("description") or "",
+        "instruction": instruction,
+        "event": event or _guess_event_from_title(title),
+        "severity": severity_final,
+        "urgency": urgency,
+        "certainty": certainty,
+        "status": status,
+        "msg_type": msg_type,
+        "scope": scope,
+        "category": category,
+        "language": language,
+        "onset": onset,
+        "effective": effective or onset,
+        "expires": expires,
+        "published": sent or fallback.get("published") or "",
+        "sender_name": sender_name,
+        "areas": named_areas[:],
+        "polygon": polygon_text,
+        "link": web or fallback.get("link") or "",
+        "source": "SMN Argentina",
+    }
+
+    # Duplicate one alert per province/area for cleaner province grouping
+    out: list[dict[str, Any]] = []
+    for area_name in named_areas:
+        prov = _norm(area_name) or "Argentina"
+        d = dict(base)
+        d["id"] = f'{base["id"]}|{prov}'
+        d["province"] = prov
+        d["province_name"] = prov
+        d["region"] = prov
+        out.append(d)
+
+    return out
+
+def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> list[dict[str, Any]] | None:
     try:
         root = ET.fromstring(xml_text)
     except Exception as e:
@@ -194,61 +356,49 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> dict[str, A
     urgency = _first_text(info, "cap:urgency", CAP_NS)
     severity = _first_text(info, "cap:severity", CAP_NS)
     certainty = _first_text(info, "cap:certainty", CAP_NS)
+    onset = _first_text(info, "cap:onset", CAP_NS)
     effective = _first_text(info, "cap:effective", CAP_NS)
     expires = _first_text(info, "cap:expires", CAP_NS)
     headline = _first_text(info, "cap:headline", CAP_NS)
     description = _first_text(info, "cap:description", CAP_NS)
     instruction = _first_text(info, "cap:instruction", CAP_NS)
     sender_name = _first_text(info, "cap:senderName", CAP_NS)
+    web = _first_text(info, "cap:web", CAP_NS)
 
     area_descs = _all_texts(info, "cap:area/cap:areaDesc", CAP_NS)
-    if not area_descs:
-        area_descs = _extract_areas_from_text(description)
+    polygon_text = _first_text(info, "cap:area/cap:polygon", CAP_NS)
 
-    title = headline or fallback.get("title") or event or "Alerta SMN"
-
-    # If CAP severity is empty or in English CAP terms, keep raw and also guess Spanish display severity from text
-    severity_es = _guess_severity_from_text(title, headline, description)
-    severity_final = severity_es or severity or ""
-
-    region = area_descs[0] if area_descs else _province_from_areas([])
-    province_name = _province_from_areas(area_descs)
-
-    return {
-        "id": identifier or fallback.get("id") or fallback.get("link") or title,
-        "identifier": identifier,
-        "title": title,
-        "headline": headline or title,
-        "summary": description or fallback.get("summary") or "",
-        "description": description or fallback.get("description") or "",
-        "instruction": instruction,
-        "event": event or _guess_event_from_title(title),
-        "severity": severity_final,
-        "urgency": urgency,
-        "certainty": certainty,
-        "status": status,
-        "msg_type": msg_type,
-        "scope": scope,
-        "category": category,
-        "language": language,
-        "effective": effective,
-        "expires": expires,
-        "published": sent or fallback.get("published") or "",
-        "sender_name": sender_name,
-        "province": province_name,
-        "province_name": province_name,
-        "region": region,
-        "areas": area_descs,
-        "link": fallback.get("link") or "",
-        "source": "SMN Argentina",
-    }
+    return _build_entries_from_cap(
+        fallback=fallback,
+        identifier=identifier,
+        sent=sent,
+        status=status,
+        msg_type=msg_type,
+        scope=scope,
+        language=language,
+        category=category,
+        event=event,
+        urgency=urgency,
+        severity=severity,
+        certainty=certainty,
+        onset=onset,
+        effective=effective,
+        expires=expires,
+        headline=headline,
+        description=description,
+        instruction=instruction,
+        sender_name=sender_name,
+        web=web,
+        area_descs=area_descs,
+        polygon_text=polygon_text,
+    )
 
 
 # --------------------------------------------------------------------
 # HTML detail fallback parsing
 # --------------------------------------------------------------------
 
-def _parse_html_detail(html_text: str, fallback: dict[str, Any]) -> dict[str, Any]:
+def _parse_html_detail(html_text: str, fallback: dict[str, Any]) -> list[dict[str, Any]]:
     soup = BeautifulSoup(html_text or "", "html.parser")
     text = _html_to_text(html_text)
 
@@ -263,9 +413,8 @@ def _parse_html_detail(html_text: str, fallback: dict[str, Any]) -> dict[str, An
     title = title or fallback.get("title") or "Alerta SMN"
     severity = _guess_severity_from_text(title, text)
     event = _guess_event_from_title(title)
-    areas = _extract_areas_from_text(text)
-    province_name = _province_from_areas(areas)
-    region = areas[0] if areas else province_name
+
+    areas = _extract_areas_from_text(text) or ["Argentina"]
 
     effective = ""
     expires = ""
@@ -276,34 +425,42 @@ def _parse_html_detail(html_text: str, fallback: dict[str, Any]) -> dict[str, An
     if m_exp:
         expires = _norm(m_exp.group(1))
 
-    return {
-        "id": fallback.get("id") or fallback.get("link") or title,
-        "identifier": "",
-        "title": title,
-        "headline": title,
-        "summary": fallback.get("summary") or "",
-        "description": text or fallback.get("description") or "",
-        "instruction": "",
-        "event": event,
-        "severity": severity,
-        "urgency": "",
-        "certainty": "",
-        "status": "",
-        "msg_type": "",
-        "scope": "",
-        "category": "",
-        "language": "es",
-        "effective": effective,
-        "expires": expires,
-        "published": fallback.get("published") or "",
-        "sender_name": "Servicio Meteorológico Nacional",
-        "province": province_name,
-        "province_name": province_name,
-        "region": region,
-        "areas": areas,
-        "link": fallback.get("link") or "",
-        "source": "SMN Argentina",
-    }
+    out: list[dict[str, Any]] = []
+    base_id = fallback.get("id") or fallback.get("link") or title
+    for prov in areas:
+        province_name = _norm(prov) or "Argentina"
+        out.append({
+            "id": f"{base_id}|{province_name}",
+            "identifier": "",
+            "title": title,
+            "headline": title,
+            "summary": fallback.get("summary") or "",
+            "description": text or fallback.get("description") or "",
+            "instruction": "",
+            "event": event,
+            "severity": severity,
+            "urgency": "",
+            "certainty": "",
+            "status": "",
+            "msg_type": "",
+            "scope": "",
+            "category": "",
+            "language": "es",
+            "onset": "",
+            "effective": effective,
+            "expires": expires,
+            "published": fallback.get("published") or "",
+            "sender_name": "Servicio Meteorológico Nacional",
+            "province": province_name,
+            "province_name": province_name,
+            "region": province_name,
+            "areas": areas[:],
+            "polygon": "",
+            "link": fallback.get("link") or "",
+            "source": "SMN Argentina",
+        })
+
+    return out
 
 
 # --------------------------------------------------------------------
@@ -321,26 +478,37 @@ async def _fetch_text(session: aiohttp.ClientSession, url: str) -> tuple[str | N
         logger.warning("[SMN] fetch error %s: %s", url, e)
         return None, ""
 
-async def _fetch_detail(session: aiohttp.ClientSession, item: dict[str, Any], sem: asyncio.Semaphore) -> dict[str, Any]:
+async def _rss_only_fallback_entries(item: dict[str, Any]) -> list[dict[str, Any]]:
+    d = dict(item)
+    d["event"] = _guess_event_from_title(d.get("title") or "")
+    d["severity"] = _guess_severity_from_text(d.get("title"), d.get("summary"), d.get("description"))
+    areas = _extract_areas_from_text(d.get("description") or d.get("summary") or "") or ["Argentina"]
+
+    out: list[dict[str, Any]] = []
+    base_id = d.get("id") or d.get("link") or d.get("title") or "SMN"
+    for prov in areas:
+        province_name = _norm(prov) or "Argentina"
+        dd = dict(d)
+        dd["id"] = f"{base_id}|{province_name}"
+        dd["province"] = province_name
+        dd["province_name"] = province_name
+        dd["region"] = province_name
+        dd["areas"] = areas[:]
+        dd["polygon"] = ""
+        dd["source"] = "SMN Argentina"
+        out.append(dd)
+
+    return out
+
+async def _fetch_detail(session: aiohttp.ClientSession, item: dict[str, Any], sem: asyncio.Semaphore) -> list[dict[str, Any]]:
     link = _norm(item.get("link"))
     if not link:
-        return dict(item)
+        return await _rss_only_fallback_entries(item)
 
     async with sem:
         text, content_type = await _fetch_text(session, link)
         if not text:
-            # RSS-only fallback
-            d = dict(item)
-            d["event"] = _guess_event_from_title(d.get("title") or "")
-            d["severity"] = _guess_severity_from_text(d.get("title"), d.get("summary"), d.get("description"))
-            areas = _extract_areas_from_text(d.get("description") or d.get("summary") or "")
-            prov = _province_from_areas(areas)
-            d["province"] = prov
-            d["province_name"] = prov
-            d["region"] = areas[0] if areas else prov
-            d["areas"] = areas
-            d["source"] = "SMN Argentina"
-            return d
+            return await _rss_only_fallback_entries(item)
 
         is_xml = ("xml" in content_type.lower()) or _xml_looks_like_cap(text)
 
@@ -349,7 +517,6 @@ async def _fetch_detail(session: aiohttp.ClientSession, item: dict[str, Any], se
             if parsed:
                 return parsed
 
-        # fallback HTML/text parse
         return _parse_html_detail(text, item)
 
 
@@ -365,7 +532,9 @@ async def scrape_smn_argentina_async(conf: dict | None, client=None) -> dict[str
       1) fetch official RSS index
       2) follow each entry link
       3) prefer CAP/XML detail parsing
-      4) fallback to HTML/text or RSS-only fields
+      4) resolve polygon -> province names using local GeoJSON
+      5) duplicate one alert per matched province
+      6) fallback to HTML/text or RSS-only fields
     """
     conf = conf or {}
     rss_url = _norm(conf.get("url")) or DEFAULT_RSS_URL
@@ -377,6 +546,12 @@ async def scrape_smn_argentina_async(conf: dict | None, client=None) -> dict[str
         "User-Agent": "WeatherMonitor/1.0",
         "Accept": "application/rss+xml, application/xml, text/xml, text/html;q=0.9, */*;q=0.8",
     }
+
+    # Warm the local province file early so errors are obvious in logs
+    try:
+        _load_argentina_provinces(PROVINCES_GEOJSON_PATH)
+    except Exception as e:
+        logger.warning("[SMN] Failed to load province GeoJSON (%s): %s", PROVINCES_GEOJSON_PATH, e)
 
     async with aiohttp.ClientSession(timeout=timeout, connector=connector, headers=headers) as session:
         rss_text, _ = await _fetch_text(session, rss_url)
@@ -403,18 +578,22 @@ async def scrape_smn_argentina_async(conf: dict | None, client=None) -> dict[str
         if isinstance(r, Exception):
             logger.warning("[SMN] detail task error: %s", r)
             continue
-        if not isinstance(r, dict):
+        if not isinstance(r, list):
             continue
 
-        dedupe_key = _norm(r.get("id") or r.get("identifier") or r.get("link") or r.get("title"))
-        if dedupe_key and dedupe_key in seen_ids:
-            continue
-        if dedupe_key:
-            seen_ids.add(dedupe_key)
+        for item in r:
+            if not isinstance(item, dict):
+                continue
 
-        entries.append(r)
+            dedupe_key = _norm(item.get("id") or item.get("identifier") or item.get("link") or item.get("title"))
+            if dedupe_key and dedupe_key in seen_ids:
+                continue
+            if dedupe_key:
+                seen_ids.add(dedupe_key)
 
-    entries = sorted(entries, key=lambda x: _norm(x.get("published") or x.get("effective")), reverse=True)
+            entries.append(item)
+
+    entries = sorted(entries, key=lambda x: _norm(x.get("published") or x.get("effective") or x.get("onset")), reverse=True)
     logger.warning("[SMN] Parsed %d alerts", len(entries))
     return {"entries": entries, "source": "SMN Argentina"}
 
