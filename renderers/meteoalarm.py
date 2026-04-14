@@ -53,6 +53,7 @@ def _stripe_wrap(content: str, is_new: bool) -> str:
     )
 
 def _alerts_for_day(alerts_map: dict, day: str):
+    """Case-insensitive access for 'today'/'tomorrow' keys."""
     return (
         (alerts_map or {}).get(day)
         or (alerts_map or {}).get(day.capitalize())
@@ -67,45 +68,17 @@ def _any_new(alerts_map: dict) -> bool:
                 return True
     return False
 
-def _day_level_type_count(by_day: dict, by_type: dict, day: str, level: str, typ: str) -> int | None:
-    """
-    Prefer exact per-day count; fall back to per-type totals.
-    """
-    if isinstance(by_day, dict):
-        d = by_day.get(day) or by_day.get(day.capitalize()) or by_day.get(day.title())
-        if isinstance(d, dict):
-            n = d.get(f"{level}|{typ}")
-            if isinstance(n, int) and n > 0:
-                return n
-    if isinstance(by_type, dict):
-        bucket = by_type.get(typ)
-        if isinstance(bucket, dict):
-            n = bucket.get(level) or bucket.get("total")
-            if isinstance(n, int) and n > 0:
-                return n
-    return None
-
 def _render_country(country: dict):
-    """
-    Render a single country section, with striped header if any alert is new.
-    """
+    """Render a single country section, with striped header if any alert is new."""
     title = _norm(country.get("title") or country.get("name") or "")
     counts = country.get("counts") or {}
-
     alerts_map = country.get("alerts") or {}
-    by_day  = counts.get("by_day") if isinstance(counts, dict) else {}
-    by_type = counts.get("by_type") if isinstance(counts, dict) else {}
 
+    # Compute total from visible rows first; fall back to counts.total / total_alerts.
     visible_total = 0
     for day in ("today", "tomorrow"):
         rows = _alerts_for_day(alerts_map, day)
-        for e in rows or []:
-            level = _norm(e.get("level", ""))
-            typ   = _norm(e.get("type", ""))
-            n = _day_level_type_count(by_day, by_type, day, level, typ)
-            if not isinstance(n, int) or n <= 0:
-                n = 1
-            visible_total += n
+        visible_total += len(rows or [])
 
     fallback_total = 0
     try:
@@ -135,19 +108,16 @@ def _render_country(country: dict):
             dt2 = _display_time(e.get("until"))
 
             level = _norm(e.get("level", ""))
-            typ   = _norm(e.get("type", ""))
-            area  = _norm(e.get("area", ""))
+            typ = _norm(e.get("type", ""))
+            area = _norm(e.get("area", ""))
 
             color = {"Orange": "#FF7F00", "Red": "#E60026"}.get(level, "#888")
             prefix = "[NEW] " if ((e or {}).get("_is_new") or (e or {}).get("is_new")) else ""
 
-            n = _day_level_type_count(by_day, by_type, day, level, typ)
-            count_str = f" ({n} active)" if isinstance(n, int) and n > 0 else ""
-
             area_str = f" — {area}" if area else ""
             time_str = f" – {dt1} to {dt2}" if (dt1 or dt2) else ""
 
-            text = f"{prefix}[{level}] {typ}{area_str}{count_str}{time_str}"
+            text = f"{prefix}[{level}] {typ}{area_str}{time_str}"
 
             st.markdown(
                 f"<div style='margin-bottom:6px;'>"
@@ -191,6 +161,7 @@ def render(entries: list[dict], conf: dict) -> None:
         if (c.get("alerts") or {}).get("today") or (c.get("alerts") or {}).get("tomorrow")
     ]
 
+    # Mark and sort (adds _is_new and sorts by severity/time per day)
     countries = meteoalarm_mark_and_sort(countries, seen_ids)
 
     if not countries:
