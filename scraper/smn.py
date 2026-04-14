@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from typing import Any
@@ -20,6 +22,7 @@ from shapely.geometry import Polygon, shape
 
 DEFAULT_RSS_URL = "https://ssl.smn.gob.ar/feeds/CAP/rss_alertaCAP_nuevo.xml"
 PROVINCES_GEOJSON_PATH = "argentina_provinces.geojson"
+DEPARTMENTS_GEOJSON_PATH = "argentina_departments.geojson"
 
 CAP_NS = {"cap": "urn:oasis:names:tc:emergency:cap:1.2"}
 
@@ -28,13 +31,13 @@ CONNECTOR_LIMIT = 10
 
 logger = logging.getLogger(__name__)
 
-# SMN sometimes surfaces public color words in pages/text
+# SMN sometimes surfaces public color words in pages/text.
+# CAP-native severities are usually Extreme / Severe / Moderate / Minor.
 SPANISH_SEVERITY_ORDER = {
     "Rojo": 4,
     "Naranja": 3,
     "Amarillo": 2,
     "Verde": 1,
-    # CAP-native values
     "Extreme": 4,
     "Severe": 3,
     "Moderate": 2,
@@ -42,6 +45,24 @@ SPANISH_SEVERITY_ORDER = {
 }
 
 COLOR_WORD_RE = re.compile(r"\b(rojo|naranja|amarillo|verde)\b", re.IGNORECASE)
+
+# Stable manual event translation for bucket labels / grouping.
+SMN_EVENT_ES_TO_EN = {
+    "Tormentas": "Thunderstorms",
+    "Lluvias": "Rain",
+    "Viento": "Wind",
+    "Nevadas": "Snow",
+    "Frío": "Cold",
+    "Calor": "Heat",
+    "Zonda": "Zonda Wind",
+    "Granizo": "Hail",
+    "Niebla": "Fog",
+    "Polvo": "Dust",
+    "Viento Zonda": "Zonda Wind",
+    "Tormenta": "Thunderstorms",
+    "Lluvia": "Rain",
+    "Nevada": "Snow",
+}
 
 
 # --------------------------------------------------------------------
@@ -100,12 +121,15 @@ def _guess_event_from_title(title: str) -> str:
     t = re.sub(r"\s+", " ", t).strip(" -,:")
     return t or "Alerta"
 
+def _event_to_english(event_es: str) -> str:
+    event_es = _norm(event_es)
+    if not event_es:
+        return "Alert"
+    return SMN_EVENT_ES_TO_EN.get(event_es, event_es)
+
 def _extract_areas_from_text(text: str) -> list[str]:
     """
     Best-effort extraction of affected areas from RSS/HTML text.
-    Looks for phrases like:
-      '... afecta a ...'
-      '... para las siguientes zonas: ...'
     """
     t = _norm(text)
     if not t:
@@ -128,9 +152,7 @@ def _extract_areas_from_text(text: str) -> list[str]:
     return []
 
 def _province_from_areas(areas: list[str]) -> str:
-    if not areas:
-        return "Argentina"
-    return areas[0]
+    return areas[0] if areas else "Argentina"
 
 def _xml_looks_like_cap(text: str) -> bool:
     t = (text or "")[:2000]
@@ -140,10 +162,21 @@ def _html_to_text(html: str) -> str:
     soup = BeautifulSoup(html or "", "html.parser")
     return _norm(soup.get_text("\n", strip=True))
 
+def _slug_hash(*parts: str) -> str:
+    src = "|".join(_norm(p) for p in parts if _norm(p))
+    return hashlib.sha1(src.encode("utf-8")).hexdigest()[:12]
+
 
 # --------------------------------------------------------------------
-# Polygon / province helpers
+# Geometry loaders / polygon helpers
 # --------------------------------------------------------------------
+
+def _extract_name(props: dict[str, Any], candidates: list[str]) -> str:
+    for key in candidates:
+        v = _norm(props.get(key))
+        if v:
+            return v
+    return ""
 
 @lru_cache(maxsize=1)
 def _load_argentina_provinces(path: str = PROVINCES_GEOJSON_PATH) -> list[tuple[str, Any]]:
@@ -153,12 +186,13 @@ def _load_argentina_provinces(path: str = PROVINCES_GEOJSON_PATH) -> list[tuple[
     provinces: list[tuple[str, Any]] = []
     for feat in data.get("features", []):
         props = feat.get("properties", {}) or {}
-        name = _norm(
-            props.get("nombre")
-            or props.get("name")
-            or props.get("provincia")
-            or props.get("nam")
-        )
+        name = _extract_name(props, [
+            "nombre",
+            "name",
+            "provincia",
+            "nam",
+            "prov_name",
+        ])
         geom = feat.get("geometry")
         if not name or not geom:
             continue
@@ -173,6 +207,52 @@ def _load_argentina_provinces(path: str = PROVINCES_GEOJSON_PATH) -> list[tuple[
             logger.warning("[SMN] Province geometry parse failed for %s: %s", name, e)
 
     return provinces
+
+@lru_cache(maxsize=1)
+def _load_argentina_departments(path: str = DEPARTMENTS_GEOJSON_PATH) -> list[dict[str, Any]]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    departments: list[dict[str, Any]] = []
+    for feat in data.get("features", []):
+        props = feat.get("properties", {}) or {}
+        dept_name = _extract_name(props, [
+            "nombre",
+            "name",
+            "departamento",
+            "depto",
+            "nomdep",
+            "department",
+            "departamen",
+        ])
+        prov_name = _extract_name(props, [
+            "provincia_nombre",
+            "provincia",
+            "nomprov",
+            "prov_name",
+            "province",
+            "nombre_provincia",
+            "provincia_nom",
+        ])
+        geom = feat.get("geometry")
+        if not dept_name or not geom:
+            continue
+
+        try:
+            g = shape(geom)
+            if not g.is_valid:
+                g = g.buffer(0)
+            if g.is_empty:
+                continue
+            departments.append({
+                "department": dept_name,
+                "province": prov_name,
+                "geometry": g,
+            })
+        except Exception as e:
+            logger.warning("[SMN] Department geometry parse failed for %s: %s", dept_name, e)
+
+    return departments
 
 def _cap_polygon_to_shapely(poly_text: str):
     pts = []
@@ -197,8 +277,7 @@ def _cap_polygon_to_shapely(poly_text: str):
 
     return None if poly.is_empty else poly
 
-def _match_provinces_from_polygon(poly_text: str) -> list[str]:
-    poly = _cap_polygon_to_shapely(poly_text)
+def _match_provinces(poly) -> list[str]:
     if poly is None:
         return []
 
@@ -209,6 +288,26 @@ def _match_provinces_from_polygon(poly_text: str) -> list[str]:
                 inter = poly.intersection(prov_geom)
                 if not inter.is_empty and inter.area > 0:
                     matched.append(name)
+        except Exception:
+            continue
+
+    return matched
+
+def _match_departments(poly) -> list[dict[str, str]]:
+    if poly is None:
+        return []
+
+    matched: list[dict[str, str]] = []
+    for item in _load_argentina_departments():
+        try:
+            geom = item["geometry"]
+            if poly.intersects(geom):
+                inter = poly.intersection(geom)
+                if not inter.is_empty and inter.area > 0:
+                    matched.append({
+                        "department": item["department"],
+                        "province": item["province"],
+                    })
         except Exception:
             continue
 
@@ -263,7 +362,7 @@ def _build_entries_from_cap(
     scope: str,
     language: str,
     category: str,
-    event: str,
+    event_es: str,
     urgency: str,
     severity: str,
     certainty: str,
@@ -274,33 +373,102 @@ def _build_entries_from_cap(
     description: str,
     instruction: str,
     sender_name: str,
-    web: str,
     area_descs: list[str],
     polygon_text: str,
 ) -> list[dict[str, Any]]:
-    title = headline or fallback.get("title") or event or "Alerta SMN"
-    severity_es = _guess_severity_from_text(title, headline, description)
-    severity_final = severity_es or severity or ""
+    title = headline or fallback.get("title") or event_es or "Alerta SMN"
 
-    # Prefer explicit names if present; else polygon-to-province; else text extraction
-    named_areas = [a for a in area_descs if a]
-    if not named_areas:
-        named_areas = _match_provinces_from_polygon(polygon_text)
+    # Keep CAP-native severity if available; fallback to color words if present in public text.
+    severity_from_text = _guess_severity_from_text(title, headline, description)
+    severity_final = severity or severity_from_text or ""
+
+    event_es_final = event_es or _guess_event_from_title(title)
+    event_en = _event_to_english(event_es_final)
+
+    poly = _cap_polygon_to_shapely(polygon_text)
+
+    matched_provinces = _match_provinces(poly)
+    matched_departments = _match_departments(poly)
+
+    # Group matched departments by province.
+    dept_by_province: dict[str, list[str]] = defaultdict(list)
+    for item in matched_departments:
+        dept = _norm(item.get("department"))
+        prov = _norm(item.get("province"))
+        if not dept:
+            continue
+        dept_by_province[prov].append(dept)
+
+    # If department file doesn't carry a province name, fall back to matched provinces later.
+    out: list[dict[str, Any]] = []
+
+    # Primary path: build one entry per province, with only that province's departments.
+    province_candidates = sorted(set(
+        [p for p in matched_provinces if _norm(p)] +
+        [p for p in dept_by_province.keys() if _norm(p)]
+    ))
+
+    if province_candidates:
+        for province_name in province_candidates:
+            depts = sorted(set(dept_by_province.get(province_name, [])))
+            region = ", ".join(depts) if depts else province_name
+
+            stable_suffix = _slug_hash(identifier or fallback.get("link") or title, polygon_text, province_name)
+            out.append({
+                "id": f"{identifier or fallback.get('id') or fallback.get('link') or title}|{province_name}|{stable_suffix}",
+                "identifier": identifier,
+                "title": title,
+                "headline": headline or title,
+                "summary": description or fallback.get("summary") or "",
+                "description": description or fallback.get("description") or "",
+                "instruction": instruction,
+                "event": event_en,           # English for bucket labels
+                "event_es": event_es_final,  # keep original too
+                "severity": severity_final,
+                "urgency": urgency,
+                "certainty": certainty,
+                "status": status,
+                "msg_type": msg_type,
+                "scope": scope,
+                "category": category,
+                "language": language,
+                "onset": onset,
+                "effective": effective or onset,
+                "expires": expires,
+                "published": sent or fallback.get("published") or "",
+                "sender_name": sender_name,
+                "province": province_name,
+                "province_name": province_name,
+                "region": region,
+                "areas": depts[:] if depts else [province_name],
+                "polygon": polygon_text,
+                "link": fallback.get("link") or "",  # keep specific CAP/RSS detail URL, not generic homepage
+                "source": "SMN Argentina",
+            })
+
+        return out
+
+    # Fallback path if geometry matching failed completely.
+    named_areas = [a for a in area_descs if _norm(a)]
     if not named_areas:
         named_areas = _extract_areas_from_text(description)
-
     if not named_areas:
         named_areas = ["Argentina"]
 
-    base = {
-        "id": identifier or fallback.get("id") or fallback.get("link") or title,
+    province_name = _province_from_areas(named_areas)
+    region = ", ".join(named_areas)
+
+    stable_suffix = _slug_hash(identifier or fallback.get("link") or title, polygon_text or region)
+    return [{
+        "id": f"{identifier or fallback.get('id') or fallback.get('link') or title}|{province_name}|{stable_suffix}",
         "identifier": identifier,
         "title": title,
         "headline": headline or title,
         "summary": description or fallback.get("summary") or "",
         "description": description or fallback.get("description") or "",
         "instruction": instruction,
-        "event": event or _guess_event_from_title(title),
+        "event": event_en,
+        "event_es": event_es_final,
         "severity": severity_final,
         "urgency": urgency,
         "certainty": certainty,
@@ -314,24 +482,14 @@ def _build_entries_from_cap(
         "expires": expires,
         "published": sent or fallback.get("published") or "",
         "sender_name": sender_name,
+        "province": province_name,
+        "province_name": province_name,
+        "region": region,
         "areas": named_areas[:],
         "polygon": polygon_text,
-        "link": web or fallback.get("link") or "",
+        "link": fallback.get("link") or "",
         "source": "SMN Argentina",
-    }
-
-    # Duplicate one alert per province/area for cleaner province grouping
-    out: list[dict[str, Any]] = []
-    for area_name in named_areas:
-        prov = _norm(area_name) or "Argentina"
-        d = dict(base)
-        d["id"] = f'{base["id"]}|{prov}'
-        d["province"] = prov
-        d["province_name"] = prov
-        d["region"] = prov
-        out.append(d)
-
-    return out
+    }]
 
 def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> list[dict[str, Any]] | None:
     try:
@@ -352,7 +510,7 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> list[dict[s
 
     language = _first_text(info, "cap:language", CAP_NS)
     category = _first_text(info, "cap:category", CAP_NS)
-    event = _first_text(info, "cap:event", CAP_NS)
+    event_es = _first_text(info, "cap:event", CAP_NS)
     urgency = _first_text(info, "cap:urgency", CAP_NS)
     severity = _first_text(info, "cap:severity", CAP_NS)
     certainty = _first_text(info, "cap:certainty", CAP_NS)
@@ -363,7 +521,6 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> list[dict[s
     description = _first_text(info, "cap:description", CAP_NS)
     instruction = _first_text(info, "cap:instruction", CAP_NS)
     sender_name = _first_text(info, "cap:senderName", CAP_NS)
-    web = _first_text(info, "cap:web", CAP_NS)
 
     area_descs = _all_texts(info, "cap:area/cap:areaDesc", CAP_NS)
     polygon_text = _first_text(info, "cap:area/cap:polygon", CAP_NS)
@@ -377,7 +534,7 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> list[dict[s
         scope=scope,
         language=language,
         category=category,
-        event=event,
+        event_es=event_es,
         urgency=urgency,
         severity=severity,
         certainty=certainty,
@@ -388,7 +545,6 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> list[dict[s
         description=description,
         instruction=instruction,
         sender_name=sender_name,
-        web=web,
         area_descs=area_descs,
         polygon_text=polygon_text,
     )
@@ -412,9 +568,11 @@ def _parse_html_detail(html_text: str, fallback: dict[str, Any]) -> list[dict[st
 
     title = title or fallback.get("title") or "Alerta SMN"
     severity = _guess_severity_from_text(title, text)
-    event = _guess_event_from_title(title)
+    event_es = _guess_event_from_title(title)
+    event_en = _event_to_english(event_es)
 
     areas = _extract_areas_from_text(text) or ["Argentina"]
+    province_name = _province_from_areas(areas)
 
     effective = ""
     expires = ""
@@ -425,42 +583,38 @@ def _parse_html_detail(html_text: str, fallback: dict[str, Any]) -> list[dict[st
     if m_exp:
         expires = _norm(m_exp.group(1))
 
-    out: list[dict[str, Any]] = []
-    base_id = fallback.get("id") or fallback.get("link") or title
-    for prov in areas:
-        province_name = _norm(prov) or "Argentina"
-        out.append({
-            "id": f"{base_id}|{province_name}",
-            "identifier": "",
-            "title": title,
-            "headline": title,
-            "summary": fallback.get("summary") or "",
-            "description": text or fallback.get("description") or "",
-            "instruction": "",
-            "event": event,
-            "severity": severity,
-            "urgency": "",
-            "certainty": "",
-            "status": "",
-            "msg_type": "",
-            "scope": "",
-            "category": "",
-            "language": "es",
-            "onset": "",
-            "effective": effective,
-            "expires": expires,
-            "published": fallback.get("published") or "",
-            "sender_name": "Servicio Meteorológico Nacional",
-            "province": province_name,
-            "province_name": province_name,
-            "region": province_name,
-            "areas": areas[:],
-            "polygon": "",
-            "link": fallback.get("link") or "",
-            "source": "SMN Argentina",
-        })
-
-    return out
+    stable_suffix = _slug_hash(fallback.get("id") or fallback.get("link") or title, ",".join(areas))
+    return [{
+        "id": f"{fallback.get('id') or fallback.get('link') or title}|{province_name}|{stable_suffix}",
+        "identifier": "",
+        "title": title,
+        "headline": title,
+        "summary": fallback.get("summary") or "",
+        "description": text or fallback.get("description") or "",
+        "instruction": "",
+        "event": event_en,
+        "event_es": event_es,
+        "severity": severity,
+        "urgency": "",
+        "certainty": "",
+        "status": "",
+        "msg_type": "",
+        "scope": "",
+        "category": "",
+        "language": "es",
+        "onset": "",
+        "effective": effective,
+        "expires": expires,
+        "published": fallback.get("published") or "",
+        "sender_name": "Servicio Meteorológico Nacional",
+        "province": province_name,
+        "province_name": province_name,
+        "region": ", ".join(areas),
+        "areas": areas[:],
+        "polygon": "",
+        "link": fallback.get("link") or "",
+        "source": "SMN Argentina",
+    }]
 
 
 # --------------------------------------------------------------------
@@ -480,25 +634,44 @@ async def _fetch_text(session: aiohttp.ClientSession, url: str) -> tuple[str | N
 
 async def _rss_only_fallback_entries(item: dict[str, Any]) -> list[dict[str, Any]]:
     d = dict(item)
-    d["event"] = _guess_event_from_title(d.get("title") or "")
-    d["severity"] = _guess_severity_from_text(d.get("title"), d.get("summary"), d.get("description"))
+    event_es = _guess_event_from_title(d.get("title") or "")
+    event_en = _event_to_english(event_es)
+    severity = _guess_severity_from_text(d.get("title"), d.get("summary"), d.get("description"))
     areas = _extract_areas_from_text(d.get("description") or d.get("summary") or "") or ["Argentina"]
+    province_name = _province_from_areas(areas)
+    stable_suffix = _slug_hash(d.get("id") or d.get("link") or d.get("title") or "SMN", ",".join(areas))
 
-    out: list[dict[str, Any]] = []
-    base_id = d.get("id") or d.get("link") or d.get("title") or "SMN"
-    for prov in areas:
-        province_name = _norm(prov) or "Argentina"
-        dd = dict(d)
-        dd["id"] = f"{base_id}|{province_name}"
-        dd["province"] = province_name
-        dd["province_name"] = province_name
-        dd["region"] = province_name
-        dd["areas"] = areas[:]
-        dd["polygon"] = ""
-        dd["source"] = "SMN Argentina"
-        out.append(dd)
-
-    return out
+    return [{
+        "id": f"{d.get('id') or d.get('link') or d.get('title') or 'SMN'}|{province_name}|{stable_suffix}",
+        "identifier": "",
+        "title": d.get("title") or "",
+        "headline": d.get("headline") or d.get("title") or "",
+        "summary": d.get("summary") or "",
+        "description": d.get("description") or "",
+        "instruction": "",
+        "event": event_en,
+        "event_es": event_es,
+        "severity": severity,
+        "urgency": "",
+        "certainty": "",
+        "status": "",
+        "msg_type": "",
+        "scope": "",
+        "category": "",
+        "language": "es",
+        "onset": "",
+        "effective": "",
+        "expires": "",
+        "published": d.get("published") or "",
+        "sender_name": "Servicio Meteorológico Nacional",
+        "province": province_name,
+        "province_name": province_name,
+        "region": ", ".join(areas),
+        "areas": areas[:],
+        "polygon": "",
+        "link": d.get("link") or "",
+        "source": "SMN Argentina",
+    }]
 
 async def _fetch_detail(session: aiohttp.ClientSession, item: dict[str, Any], sem: asyncio.Semaphore) -> list[dict[str, Any]]:
     link = _norm(item.get("link"))
@@ -532,9 +705,11 @@ async def scrape_smn_argentina_async(conf: dict | None, client=None) -> dict[str
       1) fetch official RSS index
       2) follow each entry link
       3) prefer CAP/XML detail parsing
-      4) resolve polygon -> province names using local GeoJSON
-      5) duplicate one alert per matched province
-      6) fallback to HTML/text or RSS-only fields
+      4) resolve polygon -> provinces + departments using local GeoJSON files
+      5) create one alert entry per intersected province
+      6) within each province entry, store only the departments crossed in that province
+      7) keep the specific RSS/CAP detail URL as the alert link
+      8) use English event names for renderer bucket labels
     """
     conf = conf or {}
     rss_url = _norm(conf.get("url")) or DEFAULT_RSS_URL
@@ -547,11 +722,16 @@ async def scrape_smn_argentina_async(conf: dict | None, client=None) -> dict[str
         "Accept": "application/rss+xml, application/xml, text/xml, text/html;q=0.9, */*;q=0.8",
     }
 
-    # Warm the local province file early so errors are obvious in logs
+    # Warm local geometry files early so issues are obvious.
     try:
         _load_argentina_provinces(PROVINCES_GEOJSON_PATH)
     except Exception as e:
         logger.warning("[SMN] Failed to load province GeoJSON (%s): %s", PROVINCES_GEOJSON_PATH, e)
+
+    try:
+        _load_argentina_departments(DEPARTMENTS_GEOJSON_PATH)
+    except Exception as e:
+        logger.warning("[SMN] Failed to load departments GeoJSON (%s): %s", DEPARTMENTS_GEOJSON_PATH, e)
 
     async with aiohttp.ClientSession(timeout=timeout, connector=connector, headers=headers) as session:
         rss_text, _ = await _fetch_text(session, rss_url)
@@ -585,7 +765,7 @@ async def scrape_smn_argentina_async(conf: dict | None, client=None) -> dict[str
             if not isinstance(item, dict):
                 continue
 
-            dedupe_key = _norm(item.get("id") or item.get("identifier") or item.get("link") or item.get("title"))
+            dedupe_key = _norm(item.get("id"))
             if dedupe_key and dedupe_key in seen_ids:
                 continue
             if dedupe_key:
@@ -593,7 +773,11 @@ async def scrape_smn_argentina_async(conf: dict | None, client=None) -> dict[str
 
             entries.append(item)
 
-    entries = sorted(entries, key=lambda x: _norm(x.get("published") or x.get("effective") or x.get("onset")), reverse=True)
+    entries = sorted(
+        entries,
+        key=lambda x: _norm(x.get("published") or x.get("effective") or x.get("onset")),
+        reverse=True,
+    )
     logger.warning("[SMN] Parsed %d alerts", len(entries))
     return {"entries": entries, "source": "SMN Argentina"}
 
