@@ -420,6 +420,83 @@ def bmkg_remaining_new_total(
 
     return total
 
+# --------------------------------------------------------------------
+# SMN (Argentina) helpers
+# --------------------------------------------------------------------
+
+SMN_SEVERITY_ORDER: Mapping[str, int] = {
+    "Rojo": 4,
+    "Naranja": 3,
+    "Amarillo": 2,
+    "Verde": 1,
+}
+
+def smn_severity(e: Mapping[str, Any]) -> str:
+    """Canonical SMN severity accessor."""
+    return str(e.get("severity") or "").strip()
+
+def smn_event(e: Mapping[str, Any]) -> str:
+    """Canonical SMN event/type accessor."""
+    return str(e.get("event") or "").strip() or "Alerta"
+
+def smn_province(e: Mapping[str, Any]) -> str:
+    """Canonical SMN province accessor."""
+    prov = e.get("province_name") or e.get("province") or "Argentina"
+    return str(prov).strip() or "Argentina"
+
+def smn_location(e: Mapping[str, Any]) -> str:
+    """Canonical SMN location/region accessor."""
+    region = e.get("region") or e.get("area")
+    if isinstance(region, str) and region.strip():
+        return region.strip()
+
+    areas = e.get("areas")
+    if isinstance(areas, Sequence) and not isinstance(areas, (str, bytes)) and len(areas) > 0:
+        first = areas[0]
+        if isinstance(first, str) and first.strip():
+            return first.strip()
+
+    return smn_province(e)
+
+def smn_bucket_label(e: Mapping[str, Any]) -> str | None:
+    """
+    Build the specific SMN bucket label used by BOTH renderer and new-count logic.
+
+    Examples:
+      Rojo - Tormentas
+      Naranja - Lluvias
+      Amarillo - Viento
+    """
+    severity = smn_severity(e)
+    event = smn_event(e)
+    if not severity:
+        return None
+    return f"{severity} - {event}"
+
+def smn_remaining_new_total(
+    entries,
+    *,
+    last_seen_bkey_map,
+) -> int:
+    """
+    SMN remaining-new counter using province|specific_bucket keys.
+
+    This MUST match the bucketing logic used in renderers/smn.py.
+    """
+    total = 0
+    for e in entries or []:
+        bucket = smn_bucket_label(e)
+        if not bucket:
+            continue
+
+        prov = smn_province(e)
+        bkey = f"{prov}|{bucket}"
+        last_seen = float(last_seen_bkey_map.get(bkey, 0.0) or 0.0)
+
+        if entry_ts(e) > last_seen:
+            total += 1
+
+    return total
 
 # --------------------------------------------------------------------
 # NWS (US National Weather Service) helpers
