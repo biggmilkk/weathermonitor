@@ -1,6 +1,7 @@
 # renderers/cma.py
 import html
 import os
+import re
 import time
 from collections import OrderedDict
 
@@ -24,7 +25,6 @@ def _to_utc_label(pub: str | None) -> str | None:
     try:
         dt = dateparser.parse(pub)
         if dt:
-            # Convert to UTC for display
             return dt.astimezone().strftime("%a, %d %b %y %H:%M:%S UTC")
     except Exception:
         pass
@@ -54,11 +54,6 @@ def render_empty_state():
 # ============================================================
 # Province name mapping (CN → ISO-style EN)
 # ============================================================
-# Notes:
-# - For autonomous regions, use "X Autonomous Region" (and include ethnic group where standard/common).
-# - For municipalities, use "Beijing Municipality", etc.
-# - For SARs, use "Hong Kong SAR", "Macao SAR".
-# - "Nationwide" for 全国.
 
 PROVINCE_CN_TO_ISO_EN = {
     "北京": "Beijing Municipality",
@@ -99,11 +94,6 @@ PROVINCE_CN_TO_ISO_EN = {
 }
 
 def _format_province_label(cn_name: str, *, translate_enabled: bool) -> str:
-    """
-    Display-only label:
-      - If translate_enabled and CN name is known, show "云南 (Yunnan Province)"
-      - Otherwise show CN only.
-    """
     cn = (cn_name or "").strip()
     if not translate_enabled:
         return cn
@@ -116,23 +106,16 @@ def _format_province_label(cn_name: str, *, translate_enabled: bool) -> str:
 
 @st.cache_data(ttl=7 * 24 * 3600, show_spinner=False)
 def _translate_to_en_deepl(text: str) -> str | None:
-    """
-    Translate Chinese → English using DeepL API (Free/Pro).
-    Cached so identical strings translate once (saves quota).
-    Returns None if missing key or translation fails.
-    """
     t = (text or "").strip()
     if not t:
         return None
 
-    # Skip mostly ASCII (already English-ish)
     try:
         if (sum(1 for ch in t if ord(ch) < 128) / max(1, len(t))) > 0.9:
             return None
     except Exception:
         pass
 
-    # Prefer Streamlit secrets (Cloud), fallback to env var (local/Docker)
     api_key = None
     try:
         api_key = st.secrets.get("DEEPL_API_KEY")
@@ -145,7 +128,7 @@ def _translate_to_en_deepl(text: str) -> str | None:
         return None
 
     try:
-        import deepl  # pip install deepl
+        import deepl
         translator = deepl.Translator(api_key)
         result = translator.translate_text(t, source_lang="ZH", target_lang="EN-US")
         out = (result.text or "").strip()
@@ -165,9 +148,13 @@ def _maybe_translate(text: str, *, enabled: bool) -> str | None:
 # ============================================================
 
 LEVEL_TO_BUCKET_LABEL = {
-    "Red":    "Red Warning",
+    "Red": "Red Warning",
     "Orange": "Orange Warning",
-    # Intentionally omit Yellow/Blue
+}
+
+LEVEL_TO_BUCKET_LABEL_CN = {
+    "Red": "红色预警",
+    "Orange": "橙色预警",
 }
 
 _BUCKET_ORDER = [
@@ -175,7 +162,6 @@ _BUCKET_ORDER = [
     "Orange Warning",
 ]
 
-# Bullet colors for per-alert titles
 LEVEL_TO_BULLET_COLOR = {
     "Red": "#E60026",
     "Orange": "#FF7F00",
@@ -184,19 +170,95 @@ LEVEL_TO_BULLET_COLOR = {
 def _cma_bucket_from_level(level: str | None) -> str | None:
     return LEVEL_TO_BUCKET_LABEL.get(_norm(level))
 
+# ============================================================
+# CMA phenomenon parsing
+# ============================================================
+
+# Longer keys first matters, so we sort during matching.
+CMA_PHENOMENON_CN_TO_EN = {
+    "雷雨大风": "Thunderstorm Gale",
+    "道路结冰": "Road Icing",
+    "强对流": "Severe Convective Weather",
+    "森林火险": "Forest Fire Risk",
+    "地质灾害": "Geological Disaster",
+    "暴风雪": "Blizzard",
+    "暴雨": "Heavy Rain",
+    "暴雪": "Snowstorm",
+    "寒潮": "Cold Wave",
+    "高温": "High Temperature",
+    "低温": "Low Temperature",
+    "大风": "Gale",
+    "沙尘暴": "Sandstorm",
+    "冰雹": "Hail",
+    "大雾": "Fog",
+    "霾": "Haze",
+    "干旱": "Drought",
+    "台风": "Typhoon",
+    "洪水": "Flood",
+    "雷电": "Lightning",
+    "霜冻": "Frost",
+    "寒冷": "Cold",
+}
+
+def _headline_cn(a: dict) -> str:
+    return _norm(a.get("headline") or a.get("title"))
+
+def _extract_cma_phenomenon_cn(text: str) -> str | None:
+    t = _norm(text)
+    if not t:
+        return None
+
+    for key in sorted(CMA_PHENOMENON_CN_TO_EN.keys(), key=len, reverse=True):
+        if key in t:
+            return key
+
+    # fallback: try capture "<phenomenon><red/orange> warning"
+    m = re.search(r"([\u4e00-\u9fff]{1,12})(红色|橙色)预警", t)
+    if m:
+        return _norm(m.group(1)) or None
+
+    return None
+
+def _cma_bucket_display_label(a: dict, *, translate_enabled: bool) -> str:
+    """
+    Pretty UI label for the button, e.g.
+      - Orange Warning - Heavy Rain
+      - Red Warning - Fog
+
+    Falls back to generic Red/Orange Warning if no phenomenon can be extracted.
+    """
+    level = _norm(a.get("level"))
+    generic_en = LEVEL_TO_BUCKET_LABEL.get(level) or "Warning"
+    generic_cn = LEVEL_TO_BUCKET_LABEL_CN.get(level) or "预警"
+
+    headline_cn = _headline_cn(a)
+    phenomenon_cn = _extract_cma_phenomenon_cn(headline_cn)
+
+    if not phenomenon_cn:
+        return generic_en if translate_enabled else generic_cn
+
+    phenomenon_en = CMA_PHENOMENON_CN_TO_EN.get(phenomenon_cn)
+    if translate_enabled:
+        return f"{generic_en} - {phenomenon_en or phenomenon_cn}"
+    return f"{generic_cn} - {phenomenon_cn}"
+
+# ============================================================
+# Remaining NEW total (renderer-local)
+# ============================================================
+
 def _remaining_new_total(entries, bucket_lastseen) -> int:
     """
     Remaining NEW across all entries (Red/Orange only), keyed by:
       prov = region or province_name or province or "全国"
-      bkey = f"{prov}|{bucket}"
+      bkey = f"{prov}|{bucket_key}"
     """
     total = 0
     for e in entries or []:
         prov = _norm(e.get("province_name") or e.get("province") or e.get("region")) or "全国"
-        bucket = e.get("bucket")
-        if not bucket:
+        bucket_key = e.get("bucket_key")
+        if not bucket_key:
             continue
-        bkey = f"{prov}|{bucket}"
+        bkey = f"{prov}|{bucket_key}"
         if entry_ts(e) > float(bucket_lastseen.get(bkey, 0.0)):
             total += 1
     return total
@@ -207,18 +269,19 @@ def _remaining_new_total(entries, bucket_lastseen) -> int:
 
 def render(entries, conf):
     """
-    CMA renderer (EC-style):
-      Province → (Red Warning / Orange Warning) → alerts
+    CMA renderer:
+      Province -> Specific sub-bucket -> alerts
 
-    - Uses 'headline' (fallback 'title') for display
-    - Adds colored bullet before each alert title
-    - Filters Yellow/Blue out defensively
-    - Optional auto-translation (English (auto)) when translate_to_en is True
-    - Province header shows ISO-style EN name in parentheses when translate is enabled
+    Examples:
+      - Orange Warning - Heavy Rain
+      - Orange Warning - Gale
+      - Red Warning - Fog
+
+    Important:
+      - bucket_key is the stable internal key for seen-state
+      - bucket_label is the user-facing specific label
     """
     feed_key = conf.get("key", "cma")
-
-    # Your feeds.py nests translate_to_en under feed["conf"]
     translate_enabled = bool((conf.get("conf") or {}).get("translate_to_en") or conf.get("translate_to_en"))
 
     open_key        = f"{feed_key}_active_bucket"
@@ -240,19 +303,24 @@ def render(entries, conf):
 
     items = sort_newest(attach_timestamp(entries or []))
 
-    # Filter to Red/Orange and normalize keys used for bucketing
+    # Filter to Red/Orange and build stable + display bucket values
     filtered = []
     for e in items:
-        bucket = _cma_bucket_from_level(e.get("level"))
-        if not bucket:
+        level_bucket = _cma_bucket_from_level(e.get("level"))
+        if not level_bucket:
             continue
 
         prov = _norm(e.get("region") or e.get("province_name") or e.get("province")) or "全国"
+
+        bucket_label = _cma_bucket_display_label(e, translate_enabled=translate_enabled)
+        bucket_key = bucket_label  # renderer-specific grouping key
+
         filtered.append(dict(
             e,
-            bucket=bucket,
+            bucket_key=bucket_key,
+            bucket_label=bucket_label,
             province_name=prov,
-            bkey=f"{prov}|{bucket}",
+            bkey=f"{prov}|{bucket_key}",
         ))
 
     if not filtered:
@@ -260,7 +328,6 @@ def render(entries, conf):
         render_empty_state()
         return
 
-    # Country-level remaining NEW badge
     st.session_state[f"{feed_key}_remaining_new_total"] = _remaining_new_total(filtered, bucket_lastseen)
 
     # ---------- Actions ----------
@@ -273,6 +340,7 @@ def render(entries, conf):
             pending_seen.clear()
             st.session_state[open_key] = None
             st.session_state[lastseen_key] = bucket_lastseen
+            st.session_state[pending_map_key] = pending_seen
             st.session_state[f"{feed_key}_remaining_new_total"] = 0
             _safe_rerun()
             return
@@ -303,21 +371,40 @@ def render(entries, conf):
             unsafe_allow_html=True,
         )
 
-        # Group by bucket (severity)
-        buckets: OrderedDict[str, list[dict]] = OrderedDict()
+        # Group by specific bucket
+        buckets: OrderedDict[str, dict] = OrderedDict()
         for a in alerts:
-            buckets.setdefault(a["bucket"], []).append(a)
+            bk = a["bucket_key"]
+            if bk not in buckets:
+                buckets[bk] = {
+                    "label": a["bucket_label"],
+                    "items": [],
+                }
+            buckets[bk]["items"].append(a)
 
-        ordered_labels = [b for b in _BUCKET_ORDER if b in buckets]
+        def _bucket_sort_key(label: str):
+            ll = _norm(label).lower()
+            if ll.startswith("red") or ll.startswith("红色"):
+                sev_rank = 0
+            elif ll.startswith("orange") or ll.startswith("橙色"):
+                sev_rank = 1
+            else:
+                sev_rank = 2
+            return (sev_rank, ll)
+
+        ordered_bucket_keys = sorted(
+            buckets.keys(),
+            key=lambda bk: _bucket_sort_key(buckets[bk]["label"])
+        )
 
         # ---------- Buckets ----------
-        for label in ordered_labels:
-            items_in_bucket = buckets[label]
-            bkey = f"{prov}|{label}"
+        for bucket_key in ordered_bucket_keys:
+            label = buckets[bucket_key]["label"]
+            items_in_bucket = buckets[bucket_key]["items"]
+            bkey = f"{prov}|{bucket_key}"
 
             cols = st.columns([0.7, 0.3])
 
-            # Toggle button (NO bullet)
             with cols[0]:
                 if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
                     prev = active_bucket
@@ -337,6 +424,8 @@ def render(entries, conf):
 
                     if not st.session_state.get(rerun_guard_key):
                         st.session_state[rerun_guard_key] = True
+                        st.session_state[lastseen_key] = bucket_lastseen
+                        st.session_state[pending_map_key] = pending_seen
                         st.session_state[f"{feed_key}_remaining_new_total"] = _remaining_new_total(filtered, bucket_lastseen)
                         _safe_rerun()
                         return
@@ -362,15 +451,11 @@ def render(entries, conf):
 
             # Expanded bucket content
             if st.session_state.get(open_key) == bkey:
-                # newest first within the open bucket
                 for a in sort_newest(attach_timestamp(items_in_bucket)):
                     is_new = entry_ts(a) > last_seen
                     prefix = "[NEW] " if is_new else ""
 
-                    # Use headline (fallback title)
-                    headline_cn = _norm(a.get("headline") or a.get("title")) or "(no title)"
-
-                    # Colored bullet based on level
+                    headline_cn = _headline_cn(a) or "(no title)"
                     lvl = _norm(a.get("level"))
                     bullet_color = LEVEL_TO_BULLET_COLOR.get(lvl, "#888")
 
@@ -381,7 +466,7 @@ def render(entries, conf):
                     )
                     st.markdown(_stripe_wrap(title_html, is_new), unsafe_allow_html=True)
 
-                    # Auto translate headline
+                    # Optional auto-translation
                     headline_en = _maybe_translate(headline_cn, enabled=translate_enabled)
                     if headline_en:
                         st.markdown(f"*English (auto):* {html.escape(headline_en)}")
@@ -390,12 +475,10 @@ def render(entries, conf):
                     if desc_cn:
                         st.markdown(html.escape(desc_cn).replace("\n", "  \n"))
 
-                        # Auto translate description
                         desc_en = _maybe_translate(desc_cn, enabled=translate_enabled)
                         if desc_en:
                             st.markdown(f"*English (auto):* {html.escape(desc_en)}")
 
-                    # ✅ Read more link (from scraper: entry["link"])
                     link = _norm(a.get("link"))
                     if link:
                         st.markdown(f"[Read more]({link})")
