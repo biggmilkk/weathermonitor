@@ -147,4 +147,15 @@ def get_feed_definitions():
             # High volume / highly live → every minute
             "group": "g1",
         },
+
+        "bmkg_indonesia": {
+            "label": "BMKG (Indonesia)",
+            "type": "rss_bmkg",
+            "url": "https://www.bmkg.go.id/alerts/nowcast/en/rss.xml",
+            "conf": {
+                "max_concurrency": 6,
+            },
+            # Structured RSS + CAP detail fetches; medium cadence is a good balance
+            "group": "g2_even",
+        },
     }
