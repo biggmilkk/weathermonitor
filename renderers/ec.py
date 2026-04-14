@@ -50,10 +50,6 @@ def render_empty_state():
     st.info("No active warnings that meet thresholds at the moment.")
 
 def _entry_title(e: dict) -> str:
-    """
-    EC feeds occasionally change naming: some emit 'title', others 'headline'.
-    Use a safe fallback chain so bucketing + display never breaks.
-    """
     return _norm(
         e.get("title")
         or e.get("headline")
@@ -62,9 +58,6 @@ def _entry_title(e: dict) -> str:
     )
 
 def _entry_province(e: dict) -> str:
-    """
-    Normalize province field with fallbacks.
-    """
     return _norm(
         e.get("province_name")
         or e.get("province")
@@ -72,9 +65,6 @@ def _entry_province(e: dict) -> str:
     ) or "Unknown"
 
 def _entry_area(e: dict) -> str:
-    """
-    Environment Canada scraper stores impacted location in `region`.
-    """
     return _norm(
         e.get("region")
         or e.get("area")
@@ -84,12 +74,11 @@ def _entry_area(e: dict) -> str:
 
 def _title_bucket_specific(title: str) -> str | None:
     """
-    Build a specific bucket label from alert titles like:
-      - YELLOW WARNING - SNOWFALL
-      - RED WARNING - RAIN
-      - ORANGE WARNING - WIND
-      - Snowfall warning
-      - Rainfall warning
+    Pretty display label only.
+    Examples:
+      - Yellow Warning - Snowfall
+      - Orange Warning - Wind
+      - Red Warning - Rain
     """
     t = _norm(title)
     if not t:
@@ -146,6 +135,7 @@ def _title_bucket_specific(title: str) -> str | None:
     if severity and type_name:
         return f"{severity} Warning - {type_name}"
 
+    # pretty fallback
     generic = ec_bucket_from_title(t)
     return generic or "Weather Warning"
 
@@ -166,14 +156,11 @@ _PROVINCE_ORDER = [
 
 def render(entries, conf):
     """
-    Grouped compact renderer for Environment Canada:
-      Province -> Specific warning bucket -> list of alerts
+    Grouped compact renderer for Environment Canada.
 
-    Behavior:
-      - opening a bucket starts a pending-seen timer
-      - closing that bucket commits it as seen
-      - switching buckets commits the previously open bucket as seen
-      - main EC(Canada) badge updates only after close/switch, not on open
+    Important:
+      - bucket_key stays generic and stable for seen-state + main badge logic
+      - bucket_label is specific and user-friendly for display
     """
     feed_key = conf.get("key", "ec")
 
@@ -182,7 +169,6 @@ def render(entries, conf):
     lastseen_key    = f"{feed_key}_bucket_last_seen"
     rerun_guard_key = f"{feed_key}_rerun_guard"
 
-    # clear one-shot guard
     if st.session_state.get(rerun_guard_key):
         st.session_state.pop(rerun_guard_key, None)
 
@@ -195,23 +181,27 @@ def render(entries, conf):
     pending_seen    = st.session_state[pending_map_key]
     bucket_lastseen = st.session_state[lastseen_key]
 
-    # normalize + sort newest-first
     items = sort_newest(attach_timestamp(entries or []))
 
-    # precompute normalized alerts with province + bucket keys
     filtered = []
     for e in items:
         title_txt = _entry_title(e)
-        bucket = _title_bucket_specific(title_txt)
-        if not bucket:
+
+        # stable key used everywhere else
+        bucket_key = ec_bucket_from_title(title_txt)
+        if not bucket_key:
             continue
+
+        # nicer display label just for UI
+        bucket_label = _title_bucket_specific(title_txt) or bucket_key
 
         prov_name = _entry_province(e)
         d = dict(
             e,
-            bucket=bucket,
+            bucket_key=bucket_key,
+            bucket_label=bucket_label,
             province_name=prov_name,
-            bkey=f"{prov_name}|{bucket}",
+            bkey=f"{prov_name}|{bucket_key}",   # <-- stable key
         )
         filtered.append(d)
 
@@ -219,7 +209,6 @@ def render(entries, conf):
         render_empty_state()
         return
 
-    # ---------- Actions ----------
     cols_actions = st.columns([1, 6])
     with cols_actions[0]:
         if st.button("Mark all as seen", key=f"{feed_key}_mark_all_seen"):
@@ -234,7 +223,6 @@ def render(entries, conf):
             _safe_rerun()
             return
 
-    # group by province; order by canonical list first, then any extras
     groups: OrderedDict[str, list[dict]] = OrderedDict()
     for e in filtered:
         groups.setdefault(e["province_name"], []).append(e)
@@ -243,7 +231,6 @@ def render(entries, conf):
         p for p in groups if p not in _PROVINCE_ORDER
     ]
 
-    # ---------- Provinces ----------
     for prov in provinces:
         alerts = groups.get(prov, []) or []
         if not alerts:
@@ -261,10 +248,16 @@ def render(entries, conf):
             unsafe_allow_html=True
         )
 
-        # group by warning bucket inside the province
-        buckets: OrderedDict[str, list[dict]] = OrderedDict()
+        # group by stable key, but keep first display label
+        buckets: OrderedDict[str, dict] = OrderedDict()
         for a in alerts:
-            buckets.setdefault(a["bucket"], []).append(a)
+            bk = a["bucket_key"]
+            if bk not in buckets:
+                buckets[bk] = {
+                    "label": a["bucket_label"],
+                    "items": [],
+                }
+            buckets[bk]["items"].append(a)
 
         def _bucket_sort_key(label: str):
             ll = _norm(label).lower()
@@ -278,12 +271,15 @@ def render(entries, conf):
                 sev_rank = 3
             return (sev_rank, ll)
 
-        bucket_labels = sorted(buckets.keys(), key=_bucket_sort_key)
+        bucket_keys = sorted(
+            buckets.keys(),
+            key=lambda bk: _bucket_sort_key(buckets[bk]["label"])
+        )
 
-        # ---------- Buckets ----------
-        for label in bucket_labels:
-            bucket_items = buckets[label]
-            bkey = f"{prov}|{label}"
+        for bucket_key in bucket_keys:
+            label = buckets[bucket_key]["label"]
+            bucket_items = buckets[bucket_key]["items"]
+            bkey = f"{prov}|{bucket_key}"   # <-- stable key again
             cols = st.columns([0.7, 0.3])
 
             with cols[0]:
@@ -322,7 +318,6 @@ def render(entries, conf):
                         _safe_rerun()
                         return
 
-            # counts (active + new since last_seen)
             last_seen = float(bucket_lastseen.get(bkey, 0.0))
             new_count = sum(1 for x in bucket_items if float(x.get("timestamp") or 0.0) > last_seen)
 
@@ -343,7 +338,6 @@ def render(entries, conf):
                     )
                 st.markdown(badges_html, unsafe_allow_html=True)
 
-            # expanded bucket content
             if st.session_state.get(open_key) == bkey:
                 for a in bucket_items:
                     is_new = float(a.get("timestamp") or 0.0) > last_seen
@@ -359,10 +353,6 @@ def render(entries, conf):
                         _stripe_wrap(heading, is_new),
                         unsafe_allow_html=True
                     )
-
-                    summary = _norm(a.get("summary") or a.get("description") or a.get("body"))
-                    if summary:
-                        st.markdown(html.escape(summary).replace('\n', '  \n'))
 
                     pub_label = _to_utc_label(a.get("published"))
                     if pub_label:
