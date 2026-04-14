@@ -157,4 +157,15 @@ def get_feed_definitions():
             },
             "group": "g2_even",
         },
+
+        "argentina_smn": {
+            "label": "SMN (Argentina)",
+            "type": "rss_smn_argentina",
+            "url": "https://ssl.smn.gob.ar/feeds/CAP/rss_alertaCAP_nuevo.xml",
+            "conf": {
+                "translate_to_en": True,
+                "max_concurrency": 6,
+            },
+            "group": "g2_even",
+        },
     }
