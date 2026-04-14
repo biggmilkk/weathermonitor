@@ -71,15 +71,16 @@ def _entry_province(e: dict) -> str:
         or e.get("region")
     ) or "Unknown"
 
-def _title_severity_color(title: str) -> str:
-    t = _norm(title).lower()
-    if "red" in t:
-        return "#E60026"
-    if "orange" in t:
-        return "#FF7F00"
-    if "yellow" in t:
-        return "#D4AA00"
-    return "#888"
+def _entry_area(e: dict) -> str:
+    """
+    Environment Canada scraper stores impacted location in `region`.
+    """
+    return _norm(
+        e.get("region")
+        or e.get("area")
+        or e.get("location")
+        or e.get("zone")
+    )
 
 def _title_bucket_specific(title: str) -> str | None:
     """
@@ -337,29 +338,26 @@ def render(entries, conf):
                     )
                 st.markdown(badges_html, unsafe_allow_html=True)
 
-            # small colored cue under the bucket row
-            color = _title_severity_color(label)
-            st.markdown(
-                f"<div style='height:3px;width:100%;background:{color};"
-                f"border-radius:999px;margin-top:-2px;margin-bottom:8px;opacity:0.95;'></div>",
-                unsafe_allow_html=True,
-            )
-
             # expanded bucket content
             if st.session_state.get(open_key) == bkey:
                 for a in bucket_items:
                     is_new = float(a.get("timestamp") or 0.0) > last_seen
                     prefix = "[NEW] " if is_new else ""
                     title  = _entry_title(a) or "(no title)"
+                    area   = _entry_area(a)
+
+                    heading = f"{prefix}<strong>{html.escape(title)}</strong>"
+                    if area:
+                        heading += f"<br><span style='opacity:0.85;'>Location: {html.escape(area)}</span>"
 
                     st.markdown(
-                        _stripe_wrap(f"{prefix}<strong>{html.escape(title)}</strong>", is_new),
+                        _stripe_wrap(heading, is_new),
                         unsafe_allow_html=True
                     )
 
                     summary = _norm(a.get("summary") or a.get("description") or a.get("body"))
                     if summary:
-                        st.markdown(html.escape(summary).replace("\n", "  \n"))
+                        st.markdown(html.escape(summary).replace('\n', '  \n'))
 
                     pub_label = _to_utc_label(a.get("published"))
                     if pub_label:
