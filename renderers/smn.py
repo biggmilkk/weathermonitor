@@ -75,6 +75,7 @@ def _matched_area_rows(e: dict) -> list[dict]:
     rows = e.get("matched_areas") or []
     if not isinstance(rows, list):
         return []
+
     out = []
     for r in rows:
         if isinstance(r, dict):
@@ -93,15 +94,11 @@ def _location(e: dict) -> str:
     """
     Province is already the section header.
 
-    Item-level location should show local matched areas only:
-      - departments / partidos / comunas crossed by polygon
-      - fallback to region if needed
+    Only use this as a fallback when we do NOT have richer matched area labels.
     """
     matched = _matched_area_rows(e)
     if matched:
-        names = [row["name"] for row in matched if _norm(row.get("name"))]
-        if names:
-            return ", ".join(names)
+        return ""
 
     areas = e.get("areas") or []
     if isinstance(areas, list):
@@ -121,7 +118,7 @@ def _location(e: dict) -> str:
 
 def _location_full_lines(e: dict) -> list[str]:
     """
-    More descriptive area labels for display, using category when available.
+    More descriptive area labels for display, using category/full_name when available.
     Example:
       Partido de Adolfo Gonzales Chaves
       Departamento Concordia
@@ -274,11 +271,6 @@ def render(entries, conf):
     """
     SMN Argentina renderer:
       Province -> Specific sub-bucket -> alerts
-
-    Example bucket labels:
-      - Severe - Thunderstorms
-      - Moderate - Rain
-      - Extreme - Wind
     """
     feed_key = conf.get("key", "smn")
     translate_enabled = bool(
@@ -327,7 +319,6 @@ def render(entries, conf):
 
     st.session_state[f"{feed_key}_remaining_new_total"] = _remaining_new_total(filtered, bucket_lastseen)
 
-    # ---------- Actions ----------
     cols_actions = st.columns([1, 6])
     with cols_actions[0]:
         if st.button("Mark all as seen", key=f"{feed_key}_mark_all_seen"):
@@ -342,14 +333,12 @@ def render(entries, conf):
             _safe_rerun()
             return
 
-    # Group by province
     groups: OrderedDict[str, list[dict]] = OrderedDict()
     for e in filtered:
         groups.setdefault(e["province_name"], []).append(e)
 
     provinces = alphabetic_with_last(groups.keys(), last_value=_LAST_PROVINCE)
 
-    # ---------- Provinces ----------
     for prov in provinces:
         alerts = groups.get(prov, [])
         if not alerts:
@@ -366,7 +355,6 @@ def render(entries, conf):
             unsafe_allow_html=True,
         )
 
-        # Group by bucket
         buckets: OrderedDict[str, dict] = OrderedDict()
         for a in alerts:
             bk = a["bucket_key"]
@@ -398,7 +386,6 @@ def render(entries, conf):
             key=lambda bk: _bucket_sort_key(buckets[bk]["items"], buckets[bk]["label"])
         )
 
-        # ---------- Buckets ----------
         for bucket_key in ordered_bucket_keys:
             label = buckets[bucket_key]["label"]
             items_in_bucket = buckets[bucket_key]["items"]
@@ -447,7 +434,6 @@ def render(entries, conf):
                     )
                 st.markdown(badges, unsafe_allow_html=True)
 
-            # Expanded bucket content
             if st.session_state.get(open_key) == bkey:
                 for a in sort_newest(attach_timestamp(items_in_bucket)):
                     is_new = entry_ts(a) > last_seen
@@ -456,7 +442,7 @@ def render(entries, conf):
                     headline = _headline(a) or "(sin título)"
                     severity = _severity(a)
                     bullet_color = _bullet_color(severity)
-                    location = _location(a)
+                    fallback_location = _location(a)
                     location_lines = _location_full_lines(a)
                     event = _event(a)
                     event_es = _event_es(a)
@@ -476,9 +462,6 @@ def render(entries, conf):
                     if headline_en:
                         st.markdown(f"*English (auto):* {html.escape(headline_en)}")
 
-                    if location:
-                        st.markdown(f"**Location:** {html.escape(location)}")
-
                     if location_lines:
                         if len(location_lines) == 1:
                             st.markdown(f"**Affected area:** {html.escape(location_lines[0])}")
@@ -486,6 +469,8 @@ def render(entries, conf):
                             st.markdown("**Affected areas:**")
                             for line in location_lines:
                                 st.markdown(f"- {html.escape(line)}")
+                    elif fallback_location:
+                        st.markdown(f"**Location:** {html.escape(fallback_location)}")
 
                     if event:
                         st.markdown(f"**Type:** {html.escape(event)}")
