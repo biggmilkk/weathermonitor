@@ -463,14 +463,9 @@ def render(entries, conf):
                         st.markdown(f"*English (auto):* {html.escape(headline_en)}")
 
                     if location_lines:
-                        if len(location_lines) == 1:
-                            st.markdown(f"**Affected area:** {html.escape(location_lines[0])}")
-                        else:
-                            st.markdown("**Affected areas:**")
-                            for line in location_lines:
-                                st.markdown(f"- {html.escape(line)}")
-                    elif fallback_location:
-                        st.markdown(f"**Location:** {html.escape(fallback_location)}")
+                        label = "Affected area" if len(location_lines) == 1 else "Affected areas"
+                        joined = ", ".join(html.escape(x) for x in location_lines if _norm(x))
+                        st.markdown(f"**{label}:** {joined}")
 
                     if event:
                         st.markdown(f"**Type:** {html.escape(event)}")
