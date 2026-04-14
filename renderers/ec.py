@@ -1,5 +1,6 @@
 # renderers/ec.py
 import html
+import re
 import time
 from collections import OrderedDict
 
@@ -70,6 +71,96 @@ def _entry_province(e: dict) -> str:
         or e.get("region")
     ) or "Unknown"
 
+def _title_severity_color(title: str) -> str:
+    t = _norm(title).lower()
+    if "red" in t:
+        return "#E60026"
+    if "orange" in t:
+        return "#FF7F00"
+    if "yellow" in t:
+        return "#D4AA00"
+    return "#888"
+
+def _title_bucket_specific(title: str) -> str | None:
+    """
+    Build a specific bucket label from the alert title, e.g.
+      'Yellow Warning - Snowfall'
+      'Red Warning - Rain'
+      'Orange Warning - Wind'
+
+    Falls back to ec_bucket_from_title(title) if needed.
+    """
+    t = _norm(title)
+    if not t:
+        return None
+
+    tl = t.lower()
+
+    severity = None
+    if "red" in tl:
+        severity = "Red"
+    elif "orange" in tl:
+        severity = "Orange"
+    elif "yellow" in tl:
+        severity = "Yellow"
+
+    # Try common Environment Canada title patterns
+    # Examples:
+    # - "Snowfall warning in effect"
+    # - "Rainfall warning"
+    # - "Blizzard warning"
+    # - "Special weather statement"
+    # - "Red heat warning"
+    # - "Yellow snowfall warning"
+    type_name = None
+
+    patterns = [
+        r"\b(red|orange|yellow)\s+([a-z /-]+?)\s+warning\b",
+        r"\b([a-z /-]+?)\s+warning\b",
+        r"\b([a-z /-]+?)\s+watch\b",
+        r"\b([a-z /-]+?)\s+statement\b",
+        r"\b([a-z /-]+?)\s+advisory\b",
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, tl, flags=re.IGNORECASE)
+        if not m:
+            continue
+
+        if len(m.groups()) == 2:
+            type_name = m.group(2)
+        elif len(m.groups()) == 1:
+            type_name = m.group(1)
+
+        if type_name:
+            break
+
+    if type_name:
+        type_name = re.sub(r"\s+", " ", type_name).strip(" -:/")
+        type_name = type_name.title()
+
+        # Normalize some common EC phrasing
+        replacements = {
+            "Rainfall": "Rain",
+            "Snowfall": "Snowfall",
+            "Thunderstorm": "Thunderstorm",
+            "Wind": "Wind",
+            "Blizzard": "Blizzard",
+            "Heat": "Heat",
+            "Extreme Cold": "Extreme Cold",
+            "Freezing Rain": "Freezing Rain",
+            "Snow Squall": "Snow Squall",
+            "Special Weather": "Special Weather",
+        }
+        type_name = replacements.get(type_name, type_name)
+
+    if severity and type_name:
+        return f"{severity} Warning - {type_name}"
+
+    # fallback to old generic bucket behavior
+    generic = ec_bucket_from_title(t)
+    return generic or "Weather Warning"
+
 # ============================================================
 # Province ordering
 # ============================================================
@@ -88,7 +179,12 @@ _PROVINCE_ORDER = [
 def render(entries, conf):
     """
     Grouped compact renderer for Environment Canada:
-      Province → Warning bucket → list of alerts
+      Province -> Specific warning bucket -> list of alerts
+
+    Example bucket labels:
+      - Yellow Warning - Snowfall
+      - Orange Warning - Wind
+      - Red Warning - Rain
     """
     feed_key = conf.get("key", "ec")
 
@@ -97,7 +193,7 @@ def render(entries, conf):
     lastseen_key    = f"{feed_key}_bucket_last_seen"
     rerun_guard_key = f"{feed_key}_rerun_guard"
 
-    # clear one-shot guard (prevents double rerun loops)
+    # clear one-shot guard
     if st.session_state.get(rerun_guard_key):
         st.session_state.pop(rerun_guard_key, None)
 
@@ -117,12 +213,17 @@ def render(entries, conf):
     filtered = []
     for e in items:
         title_txt = _entry_title(e)
-        bucket = ec_bucket_from_title(title_txt)
+        bucket = _title_bucket_specific(title_txt)
         if not bucket:
             continue
 
         prov_name = _entry_province(e)
-        d = dict(e, bucket=bucket, province_name=prov_name, bkey=f"{prov_name}|{bucket}")
+        d = dict(
+            e,
+            bucket=bucket,
+            province_name=prov_name,
+            bkey=f"{prov_name}|{bucket}",
+        )
         filtered.append(d)
 
     if not filtered:
@@ -139,7 +240,6 @@ def render(entries, conf):
             pending_seen.clear()
             st.session_state[open_key] = None
             st.session_state[lastseen_key] = bucket_lastseen
-            # ensure the button badges zero instantly
             st.session_state[f"{feed_key}_remaining_new_total"] = 0
             _safe_rerun()
             return
@@ -176,31 +276,62 @@ def render(entries, conf):
         for a in alerts:
             buckets.setdefault(a["bucket"], []).append(a)
 
+        # Sort buckets by severity, then label
+        def _bucket_sort_key(label: str):
+            ll = _norm(label).lower()
+            if ll.startswith("red"):
+                sev_rank = 0
+            elif ll.startswith("orange"):
+                sev_rank = 1
+            elif ll.startswith("yellow"):
+                sev_rank = 2
+            else:
+                sev_rank = 3
+            return (sev_rank, ll)
+
+        bucket_labels = sorted(buckets.keys(), key=_bucket_sort_key)
+
         # ---------- Buckets ----------
-        for label, bucket_items in buckets.items():
+        for label in bucket_labels:
+            bucket_items = buckets[label]
             bkey = f"{prov}|{label}"
             cols = st.columns([0.7, 0.3])
 
             # bucket toggle + pending/seen bookkeeping
             with cols[0]:
-                if st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True):
+                color = _title_severity_color(label)
+                btn_html = (
+                    "<div style='border:1px solid rgba(255,255,255,0.08);"
+                    "border-left:6px solid {color};"
+                    "padding:8px 12px;border-radius:8px;"
+                    "background:rgba(255,255,255,0.02);"
+                    "font-weight:600;'>"
+                    "{label}</div>"
+                ).format(color=color, label=html.escape(label))
+
+                clicked = st.button(label, key=f"{feed_key}:{bkey}:btn", use_container_width=True)
+
+                # Display colored label under/over the actual button area
+                st.markdown(btn_html, unsafe_allow_html=True)
+
+                if clicked:
                     state_changed = False
                     prev = active_bucket
 
-                    # if switching buckets, commit the previously open bucket as seen
+                    # if switching buckets, commit previously open bucket as seen
                     if prev and prev != bkey:
                         ts_opened_prev = float(pending_seen.pop(prev, time.time()))
                         bucket_lastseen[prev] = ts_opened_prev
 
                     if active_bucket == bkey:
-                        # closing the same bucket -> commit as seen
+                        # closing same bucket -> commit as seen
                         ts_opened = float(pending_seen.pop(bkey, time.time()))
                         bucket_lastseen[bkey] = ts_opened
                         st.session_state[open_key] = None
                         active_bucket = None
                         state_changed = True
                     else:
-                        # opening a new bucket -> start pending timer
+                        # opening new bucket -> start pending timer
                         st.session_state[open_key] = bkey
                         pending_seen[bkey] = time.time()
                         active_bucket = bkey
@@ -239,7 +370,10 @@ def render(entries, conf):
                     prefix = "[NEW] " if is_new else ""
                     title  = _entry_title(a) or "(no title)"
 
-                    st.markdown(_stripe_wrap(f"{prefix}<strong>{html.escape(title)}</strong>", is_new), unsafe_allow_html=True)
+                    st.markdown(
+                        _stripe_wrap(f"{prefix}<strong>{html.escape(title)}</strong>", is_new),
+                        unsafe_allow_html=True
+                    )
 
                     summary = _norm(a.get("summary") or a.get("description") or a.get("body"))
                     if summary:
