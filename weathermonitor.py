@@ -285,9 +285,9 @@ FEED_POSITIONS = {
     "imd_india_today": (1, 3),
     "cma_china": (0, 3),
     "jma": (0, 4),
-    "bmkg_indonesia": (0, 5),
+    "bmkg_indonesia": (3, 4),
     "pagasa": (1, 4),
-    "bom_multi": (1, 5),
+    "bom_multi": (3, 5),
 }
 
 pinned_keys = set(FEED_POSITIONS.keys())
