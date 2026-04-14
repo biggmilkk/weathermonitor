@@ -326,6 +326,84 @@ def cma_remaining_new_total(
     return total
 
 # --------------------------------------------------------------------
+# BMKG (Indonesia) helpers
+# --------------------------------------------------------------------
+
+BMKG_SEVERITY_ORDER: Mapping[str, int] = {
+    "Red": 4,
+    "Orange": 3,
+    "Yellow": 2,
+    "Blue": 1,
+}
+
+def bmkg_level(e: Mapping[str, Any]) -> str:
+    """Canonical BMKG alert level accessor."""
+    return str(e.get("level") or "").strip()
+
+def bmkg_event(e: Mapping[str, Any]) -> str:
+    """Canonical BMKG event/type accessor."""
+    return str(e.get("event") or "").strip() or "Weather"
+
+def bmkg_province(e: Mapping[str, Any]) -> str:
+    """Canonical BMKG province accessor."""
+    prov = e.get("province_name") or e.get("province") or "Indonesia"
+    return str(prov).strip() or "Indonesia"
+
+def bmkg_location(e: Mapping[str, Any]) -> str:
+    """Canonical BMKG location/region accessor."""
+    region = e.get("region") or e.get("area")
+    if isinstance(region, str) and region.strip():
+        return region.strip()
+
+    areas = e.get("areas")
+    if isinstance(areas, Sequence) and not isinstance(areas, (str, bytes)) and len(areas) > 0:
+        first = areas[0]
+        if isinstance(first, str) and first.strip():
+            return first.strip()
+
+    return bmkg_province(e)
+
+def bmkg_bucket_label(e: Mapping[str, Any]) -> str | None:
+    """
+    Build the specific BMKG bucket label used by BOTH renderer and new-count logic.
+
+    Examples:
+      Orange Warning - Thunderstorm
+      Yellow Warning - Heavy Rain
+      Red Warning - Extreme Weather
+    """
+    level = bmkg_level(e)
+    event = bmkg_event(e)
+    if not level:
+        return None
+    return f"{level} Warning - {event}"
+
+def bmkg_remaining_new_total(
+    entries,
+    *,
+    last_seen_bkey_map,
+) -> int:
+    """
+    BMKG remaining-new counter using province|specific_bucket keys.
+
+    This MUST match the bucketing logic used in renderers/bmkg.py.
+    """
+    total = 0
+    for e in entries or []:
+        bucket = bmkg_bucket_label(e)
+        if not bucket:
+            continue
+
+        prov = bmkg_province(e)
+        bkey = f"{prov}|{bucket}"
+        last_seen = float(last_seen_bkey_map.get(bkey, 0.0) or 0.0)
+
+        if entry_ts(e) > last_seen:
+            total += 1
+
+    return total
+
+# --------------------------------------------------------------------
 # NWS (US National Weather Service) helpers
 # --------------------------------------------------------------------
 
