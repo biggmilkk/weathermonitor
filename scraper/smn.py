@@ -161,29 +161,39 @@ def _slug_hash(*parts: str) -> str:
 
 
 def _semantic_alert_key(item: dict[str, Any]) -> str:
+    """
+    Stable identity for the same active SMN alert across repeated updates.
+
+    We intentionally do NOT include description/instruction text because
+    SMN often republishes tiny wording changes for the same underlying alert.
+    """
     province = _norm(item.get("province_name") or item.get("province") or "")
     event = _norm(item.get("event_es") or item.get("event") or "")
     severity = _norm(item.get("severity") or "")
     effective = _norm(item.get("effective") or item.get("onset") or "")
     expires = _norm(item.get("expires") or "")
-    description = _norm(item.get("description") or item.get("summary") or "")
-    instruction = _norm(item.get("instruction") or "")
+    status = _norm(item.get("status") or "")
+    msg_type = _norm(item.get("msg_type") or "")
+    urgency = _norm(item.get("urgency") or "")
+    certainty = _norm(item.get("certainty") or "")
+
     areas = item.get("areas") or []
     if isinstance(areas, list):
         areas_key = "|".join(sorted(_norm(a) for a in areas if _norm(a)))
     else:
         areas_key = _norm(areas)
-    polygon = _norm(item.get("polygon") or "")
+
     return "|".join([
         province,
         event,
         severity,
         effective,
         expires,
-        description,
-        instruction,
+        status,
+        msg_type,
+        urgency,
+        certainty,
         areas_key,
-        polygon,
     ])
 
 
@@ -499,7 +509,10 @@ def _build_entries_from_cap(
     if province_candidates:
         for province_name in province_candidates:
             local_areas = dept_by_province.get(province_name, [])
-            local_areas = sorted(local_areas, key=lambda x: (_norm(x.get("name")).lower(), _norm(x.get("category")).lower()))
+            local_areas = sorted(
+                local_areas,
+                key=lambda x: (_norm(x.get("name")).lower(), _norm(x.get("category")).lower())
+            )
 
             area_names = [a["name"] for a in local_areas if _norm(a.get("name"))]
             region = ", ".join(area_names) if area_names else province_name
