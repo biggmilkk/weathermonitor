@@ -8,6 +8,7 @@ from .jma import render as render_jma_grouped
 from .pagasa import render as render_pagasa
 from .imd import render as render_imd_compact
 from .bmkg import render as render_bmkg_grouped
+from .smn import render as render_smn_grouped
 
 RENDERERS = {
     "nws_grouped_compact": render_nws_grouped_compact,
@@ -21,4 +22,5 @@ RENDERERS = {
     "rss_pagasa": render_pagasa,
     "imd_current_orange_red": render_imd_compact,
     "rss_bmkg": render_bmkg_grouped,
+    "rss_smn_argentina": render_smn_grouped,
 }
