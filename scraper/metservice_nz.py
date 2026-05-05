@@ -1,4 +1,3 @@
-# scraper/metservice_nz.py
 from __future__ import annotations
 
 import asyncio
@@ -103,22 +102,17 @@ def _extract_cap_parameter(info: ET.Element | None, value_name: str) -> str:
 
 
 def _public_level_from_title_or_colour(title: str, colour_code: str) -> str:
-    """
-    Public NZ level should be driven by MetService's colour scheme.
-    """
     t = _norm(title)
+    colour = _norm(colour_code).lower()
 
-    if _norm(colour_code).lower() == "red" or RED_RE.search(t):
+    if colour == "red" or RED_RE.search(t):
         return "Red"
-    if _norm(colour_code).lower() == "orange" or ORANGE_RE.search(t):
+    if colour == "orange" or ORANGE_RE.search(t):
         return "Orange"
     return ""
 
 
 def _classify_product(title: str) -> str:
-    """
-    Returns Warning / Watch / Alert
-    """
     t = _norm(title)
     if WARNING_RE.search(t):
         return "Warning"
@@ -128,10 +122,6 @@ def _classify_product(title: str) -> str:
 
 
 def _should_keep_entry(*, product_type: str, public_level: str) -> bool:
-    """
-    Keep only live Orange/Red warnings/alerts.
-    Drop watches by default.
-    """
     if public_level not in {"Orange", "Red"}:
         return False
     if product_type == "Watch":
@@ -148,7 +138,7 @@ def _semantic_alert_key(item: dict[str, Any]) -> str:
 
     return "|".join([
         _norm(item.get("headline") or item.get("title")),
-        _norm(item.get("colour_code") or item.get("level")),
+        _norm(item.get("level")),
         _norm(item.get("event")),
         _norm(item.get("effective") or item.get("onset")),
         _norm(item.get("expires")),
@@ -248,7 +238,6 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> dict[str, A
 
     area_descs = _all_texts(info, "cap:area/cap:areaDesc", CAP_NS)
     primary_area = area_descs[0] if area_descs else "New Zealand"
-    region = ", ".join(area_descs) if area_descs else primary_area
 
     title = headline or fallback.get("title") or "MetService Alert"
     product_type = _classify_product(title)
@@ -262,7 +251,7 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> dict[str, A
     stable_suffix = _slug_hash(
         identifier or fallback.get("id") or title,
         public_level,
-        region,
+        primary_area,
         effective or onset,
         expires,
     )
@@ -300,7 +289,7 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> dict[str, A
         "areas": area_descs[:] if area_descs else [primary_area],
         "area_count": len(area_descs) if area_descs else 1,
         "primary_area": primary_area,
-        "colour_code": public_level or colour_code,
+        "colour_code": public_level,
         "colour_code_hex": colour_code_hex,
         "chance_of_upgrade": chance_of_upgrade,
         "next_update": next_update,
@@ -347,18 +336,6 @@ async def _fetch_cap_detail(
 # --------------------------------------------------------------------
 
 async def scrape_metservice_nz_async(conf: dict | None, client=None) -> dict[str, Any]:
-    """
-    MetService New Zealand CAP scraper.
-
-    Strategy:
-      1) fetch official Atom index
-      2) follow each CAP detail URL from link rel="related" type="application/cap+xml"
-      3) parse CAP fields directly
-      4) classify using headline/ColourCode first
-      5) keep only Orange/Red warnings/alerts
-      6) drop watches
-      7) dedupe repeated same-alert copies to latest semantic version
-    """
     conf = conf or {}
     atom_url = _norm(conf.get("url")) or DEFAULT_ATOM_URL
     max_concurrency = int(conf.get("max_concurrency") or 6)
@@ -389,7 +366,6 @@ async def scrape_metservice_nz_async(conf: dict | None, client=None) -> dict[str
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     all_entries: list[dict[str, Any]] = []
-
     for r in results:
         if isinstance(r, Exception):
             logger.warning("[NZ MetService] detail task error: %s", r)
@@ -405,7 +381,6 @@ async def scrape_metservice_nz_async(conf: dict | None, client=None) -> dict[str
 
     deduped: list[dict[str, Any]] = []
     seen_semantic: set[str] = set()
-
     for item in all_entries:
         s_key = _semantic_alert_key(item)
         if s_key in seen_semantic:
