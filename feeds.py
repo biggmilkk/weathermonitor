@@ -170,7 +170,7 @@ def get_feed_definitions():
         },
 
         "metservice_nz": {
-            "label": "MetService (New Zealand)",
+            "label": "MetService (NZ)",
             "type": "rss_metservice_nz",
             "url": "https://alerts.metservice.com/cap/atom",
             "conf": {
