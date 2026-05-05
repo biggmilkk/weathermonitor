@@ -420,6 +420,7 @@ def bmkg_remaining_new_total(
 
     return total
 
+
 # --------------------------------------------------------------------
 # SMN (Argentina) helpers
 # --------------------------------------------------------------------
@@ -436,9 +437,11 @@ SMN_SEVERITY_ORDER: Mapping[str, int] = {
     "Verde": 1,
 }
 
+
 def smn_severity(e: Mapping[str, Any]) -> str:
     """Canonical SMN severity accessor."""
     return str(e.get("severity") or "").strip()
+
 
 def smn_event(e: Mapping[str, Any]) -> str:
     """
@@ -449,14 +452,17 @@ def smn_event(e: Mapping[str, Any]) -> str:
     """
     return str(e.get("event") or "").strip() or "Alert"
 
+
 def smn_event_es(e: Mapping[str, Any]) -> str:
     """Original Spanish event accessor, if present."""
     return str(e.get("event_es") or "").strip()
+
 
 def smn_province(e: Mapping[str, Any]) -> str:
     """Canonical SMN province accessor."""
     prov = e.get("province_name") or e.get("province") or "Argentina"
     return str(prov).strip() or "Argentina"
+
 
 def smn_location(e: Mapping[str, Any]) -> str:
     """
@@ -482,7 +488,8 @@ def smn_location(e: Mapping[str, Any]) -> str:
             return region
 
     return ""
-    
+
+
 def smn_bucket_label(e: Mapping[str, Any]) -> str | None:
     """
     Build the specific SMN bucket label used by BOTH renderer and new-count logic.
@@ -497,6 +504,7 @@ def smn_bucket_label(e: Mapping[str, Any]) -> str | None:
     if not severity:
         return None
     return f"{severity} - {event}"
+
 
 def smn_remaining_new_total(
     entries,
@@ -522,7 +530,102 @@ def smn_remaining_new_total(
             total += 1
 
     return total
-    
+
+
+# --------------------------------------------------------------------
+# MetService (New Zealand) helpers
+# --------------------------------------------------------------------
+
+NZ_SEVERITY_ORDER: Mapping[str, int] = {
+    "Red": 4,
+    "Orange": 3,
+    "Yellow": 2,
+    "Minor": 1,
+}
+
+
+def nz_severity(e: Mapping[str, Any]) -> str:
+    """Canonical NZ severity accessor."""
+    return str(e.get("severity") or "").strip()
+
+
+def nz_event(e: Mapping[str, Any]) -> str:
+    """Canonical NZ event/type accessor."""
+    return str(e.get("event") or "").strip() or "Alert"
+
+
+def nz_region(e: Mapping[str, Any]) -> str:
+    """Canonical NZ top-level region accessor."""
+    region = e.get("region") or e.get("region_name") or "New Zealand"
+    return str(region).strip() or "New Zealand"
+
+
+def nz_location(e: Mapping[str, Any]) -> str:
+    """
+    Canonical NZ item-level location accessor.
+
+    Region is already used as the section header, so prefer local areas.
+    """
+    region = nz_region(e)
+
+    areas = e.get("areas")
+    if isinstance(areas, Sequence) and not isinstance(areas, (str, bytes)):
+        cleaned = [str(x).strip() for x in areas if str(x).strip()]
+        if cleaned:
+            if cleaned == [region]:
+                return ""
+            return ", ".join(cleaned)
+
+    area_desc = e.get("area_desc") or e.get("area") or e.get("location")
+    if isinstance(area_desc, str) and area_desc.strip():
+        area_desc = area_desc.strip()
+        if area_desc != region:
+            return area_desc
+
+    return ""
+
+
+def nz_bucket_label(e: Mapping[str, Any]) -> str | None:
+    """
+    Build the specific NZ bucket label used by BOTH renderer and new-count logic.
+
+    Examples:
+      Red - Heavy Rain
+      Orange - Strong Wind
+    """
+    severity = nz_severity(e)
+    event = nz_event(e)
+    if not severity:
+        return None
+    return f"{severity} - {event}"
+
+
+def nz_remaining_new_total(
+    entries,
+    *,
+    last_seen_bkey_map,
+) -> int:
+    """
+    NZ remaining-new counter using region|specific_bucket keys.
+
+    This MUST match the bucketing logic used in renderers/nz.py.
+    """
+    total = 0
+    for e in entries or []:
+        bucket = nz_bucket_label(e)
+        if not bucket:
+            continue
+
+        region = nz_region(e)
+        bkey = f"{region}|{bucket}"
+        last_seen = float(last_seen_bkey_map.get(bkey, 0.0) or 0.0)
+
+        if entry_ts(e) > last_seen:
+            total += 1
+
+    return total
+
+
 # --------------------------------------------------------------------
 # NWS (US National Weather Service) helpers
 # --------------------------------------------------------------------
