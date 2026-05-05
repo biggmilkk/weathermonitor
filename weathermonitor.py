@@ -20,6 +20,7 @@ from computation import (
     cma_remaining_new_total as cma_new_total,
     bmkg_remaining_new_total as bmkg_new_total,
     smn_remaining_new_total as smn_new_total,
+    nz_remaining_new_total as nz_new_total,
     snapshot_imd_seen,
     meteoalarm_total_active_instances,
 )
@@ -33,11 +34,13 @@ from renderers import RENDERERS
 def render_empty_state():
     st.info("No active warnings at this time.")
 
+
 def _immediate_rerun():
     if hasattr(st, "rerun"):
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
+
 
 def commit_seen_for_feed(prev_key: str):
     """Commit 'seen' when closing/switching away from a feed."""
@@ -60,6 +63,7 @@ def commit_seen_for_feed(prev_key: str):
         "rss_cma",
         "rss_bmkg",
         "rss_smn_argentina",
+        "rss_metservice_nz",
     ):
         pass
 
@@ -88,8 +92,10 @@ MEMORY_HIGH_WATER = 0.85 * MEMORY_LIMIT
 MEMORY_LOW_WATER = 0.50 * MEMORY_LIMIT
 MIN_CONC, MAX_CONC, STEP = 5, 50, 5
 
+
 def _rss_bytes():
     return psutil.Process(os.getpid()).memory_info().rss
+
 
 st.session_state.setdefault("concurrency", 20)
 rss_before = _rss_bytes()
@@ -108,14 +114,17 @@ FETCH_TTL = 60
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 st_autorefresh(interval=FETCH_TTL * 1000, key="auto_refresh_main")
 
+
 @st.cache_data(ttl=3600)
 def load_feeds():
     return get_feed_definitions()
+
 
 @st.cache_data(ttl=FETCH_TTL, show_spinner=False)
 def cached_fetch_round(keys: tuple[str, ...], max_conc: int):
     subset = {k: FEED_CONFIG[k] for k in keys if k in FEED_CONFIG}
     return run_fetch_round(subset, max_concurrency=max_conc)
+
 
 FEED_CONFIG = load_feeds()
 now = time.time()
@@ -171,20 +180,34 @@ st.session_state["_last_minute_index"] = current_minute_index
 
 minute_in_cycle_4 = (current_minute_index % 4) + 1
 
+
 def group_is_due(group_code: str, m: int) -> bool:
     g = (group_code or "g1").lower()
-    if g == "g1": return True
-    if g == "g2_even": return m in (2, 4)
-    if g == "g2_odd": return m in (1, 3)
-    if g == "g4_1": return m == 1
-    if g == "g4_2": return m == 2
-    if g == "g4_3": return m == 3
-    if g == "g4_4": return m == 4
+    if g == "g1":
+        return True
+    if g == "g2_even":
+        return m in (2, 4)
+    if g == "g2_odd":
+        return m in (1, 3)
+    if g == "g4_1":
+        return m == 1
+    if g == "g4_2":
+        return m == 2
+    if g == "g4_3":
+        return m == 3
+    if g == "g4_4":
+        return m == 4
     return True
 
+
 GROUP_MIN_SPACING = {
-    "g1": 60, "g2_even": 120, "g2_odd": 120,
-    "g4_1": 240, "g4_2": 240, "g4_3": 240, "g4_4": 240
+    "g1": 60,
+    "g2_even": 120,
+    "g2_odd": 120,
+    "g4_1": 240,
+    "g4_2": 240,
+    "g4_3": 240,
+    "g4_4": 240,
 }
 
 to_fetch = {}
@@ -241,6 +264,7 @@ if to_fetch:
                 "rss_cma",
                 "rss_bmkg",
                 "rss_smn_argentina",
+                "rss_metservice_nz",
             ):
                 pass
             elif conf["type"] == "uk_grouped_compact":
@@ -291,6 +315,7 @@ FEED_POSITIONS = {
     "pagasa": (1, 4),
     "bmkg_indonesia": (2, 4),
     "argentina_smn": (2, 0),
+    "metservice_nz": (2, 1),
     "bom_multi": (2, 5),
 }
 
@@ -298,6 +323,7 @@ pinned_keys = set(FEED_POSITIONS.keys())
 items = [(k, v) for k, v in FEED_CONFIG.items() if k not in pinned_keys]
 
 _toggled = False
+
 
 def _new_count_for_feed(key, conf, entries):
     if conf["type"] == "rss_meteoalarm":
@@ -330,6 +356,10 @@ def _new_count_for_feed(key, conf, entries):
         last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
         return int(smn_new_total(entries, last_seen_bkey_map=last_map))
 
+    if conf["type"] == "rss_metservice_nz":
+        last_map = st.session_state.get(f"{key}_bucket_last_seen", {}) or {}
+        return int(nz_new_total(entries, last_seen_bkey_map=last_map))
+
     if conf["type"] == "uk_grouped_compact":
         seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
         _, new_count = compute_counts(entries, conf, seen_ts)
@@ -338,6 +368,7 @@ def _new_count_for_feed(key, conf, entries):
     seen_ts = st.session_state.get(f"{key}_last_seen_time") or 0.0
     _, new_count = compute_counts(entries, conf, seen_ts)
     return new_count
+
 
 seq_rows = (len(items) + MAX_BTNS_PER_ROW - 1) // MAX_BTNS_PER_ROW
 pinned_rows = max((r for r, _ in FEED_POSITIONS.values()), default=-1) + 1 if FEED_POSITIONS else 0
