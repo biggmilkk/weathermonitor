@@ -1,6 +1,7 @@
 # renderers/metservice_nz.py
 import html
 import os
+import re
 import time
 from collections import OrderedDict
 
@@ -18,6 +19,9 @@ from computation import (
 # ============================================================
 # Helpers
 # ============================================================
+
+_ORANGE_RED_RE = re.compile(r"\b(Orange|Red)\b", re.IGNORECASE)
+
 
 def _to_utc_label(pub: str | None) -> str | None:
     if not pub:
@@ -75,7 +79,21 @@ def _region(e: dict) -> str:
 
 
 def _event(e: dict) -> str:
-    return _norm(e.get("event")) or "Alert"
+    event = _norm(e.get("event"))
+    if not event:
+        return "Alert"
+
+    mapping = {
+        "rain": "Rain",
+        "wind": "Wind",
+        "snow": "Snow",
+        "thunderstorm": "Thunderstorm",
+        "thunderstorms": "Thunderstorm",
+        "fog": "Fog",
+        "ice": "Ice",
+        "frost": "Frost",
+    }
+    return mapping.get(event.lower(), event.title())
 
 
 def _severity(e: dict) -> str:
@@ -118,28 +136,50 @@ def _next_update(e: dict) -> str:
     return _norm(e.get("next_update"))
 
 
-def _bucket_label(e: dict) -> str | None:
+def _display_level(e: dict) -> str:
     """
-    NZ public alert grouping should be driven by ColourCode, not CAP severity.
-    MetService can publish:
-      severity=Moderate + ColourCode=Orange
-    and that is still a live warning the user should see.
+    Public NZ display level must be driven by MetService colour level.
+
+    Preferred source:
+      - colour_code parsed from CAP parameter
+
+    Fallback:
+      - headline/title text like 'Heavy Rain Warning - Orange'
     """
     colour = _colour_code(e)
+    if colour:
+        c = colour.strip().title()
+        if c in {"Orange", "Red"}:
+            return c
+
+    text = " ".join([
+        _norm(e.get("headline")),
+        _norm(e.get("title")),
+        _norm(e.get("summary")),
+    ])
+    m = _ORANGE_RED_RE.search(text)
+    if m:
+        return m.group(1).title()
+
+    return ""
+
+
+def _bucket_label(e: dict) -> str | None:
+    level = _display_level(e)
     event = _event(e)
 
-    if colour not in {"Orange", "Red"}:
+    if level not in {"Orange", "Red"}:
         return None
 
-    return f"{colour} - {event}"
+    return f"{level} - {event}"
 
 
 def _bullet_color(e: dict) -> str:
-    colour = _colour_code(e).lower()
+    level = _display_level(e).lower()
     return {
         "red": "#E60026",
         "orange": "#FF8918",
-    }.get(colour, "#888888")
+    }.get(level, "#888888")
 
 
 # ============================================================
@@ -215,7 +255,7 @@ def render(entries, conf):
       Region -> Colour bucket -> alerts
 
     Important:
-      display filtering is based on ColourCode (Orange/Red),
+      filtering is based on public Orange/Red level,
       not CAP severity.
     """
     feed_key = conf.get("key", "metservice_nz")
@@ -242,7 +282,6 @@ def render(entries, conf):
     bucket_lastseen = st.session_state[lastseen_key]
 
     items = sort_newest(attach_timestamp(entries or []))
-    st.write(items)
 
     filtered = []
     for e in items:
@@ -266,7 +305,6 @@ def render(entries, conf):
 
     st.session_state[f"{feed_key}_remaining_new_total"] = _remaining_new_total(filtered, bucket_lastseen)
 
-    # ---------- Actions ----------
     cols_actions = st.columns([1, 6])
     with cols_actions[0]:
         if st.button("Mark all as seen", key=f"{feed_key}_mark_all_seen"):
@@ -281,14 +319,12 @@ def render(entries, conf):
             _safe_rerun()
             return
 
-    # Group by region
     groups: OrderedDict[str, list[dict]] = OrderedDict()
     for e in filtered:
         groups.setdefault(e["region_name"], []).append(e)
 
     regions = alphabetic_with_last(groups.keys(), last_value=_LAST_REGION)
 
-    # ---------- Regions ----------
     for region in regions:
         alerts = groups.get(region, [])
         if not alerts:
@@ -305,7 +341,6 @@ def render(entries, conf):
             unsafe_allow_html=True,
         )
 
-        # Group by bucket
         buckets: OrderedDict[str, dict] = OrderedDict()
         for a in alerts:
             bk = a["bucket_key"]
@@ -318,19 +353,18 @@ def render(entries, conf):
 
         def _bucket_sort_key(items_in_bucket: list[dict], label: str):
             first = items_in_bucket[0] if items_in_bucket else {}
-            colour = _colour_code(first).lower()
-            colour_rank = {
+            level = _display_level(first).lower()
+            level_rank = {
                 "red": 0,
                 "orange": 1,
-            }.get(colour, 9)
-            return (colour_rank, _norm(label).lower())
+            }.get(level, 9)
+            return (level_rank, _norm(label).lower())
 
         ordered_bucket_keys = sorted(
             buckets.keys(),
             key=lambda bk: _bucket_sort_key(buckets[bk]["items"], buckets[bk]["label"])
         )
 
-        # ---------- Buckets ----------
         for bucket_key in ordered_bucket_keys:
             label = buckets[bucket_key]["label"]
             items_in_bucket = buckets[bucket_key]["items"]
@@ -379,7 +413,6 @@ def render(entries, conf):
                     )
                 st.markdown(badges, unsafe_allow_html=True)
 
-            # Expanded bucket content
             if st.session_state.get(open_key) == bkey:
                 for a in sort_newest(attach_timestamp(items_in_bucket)):
                     is_new = entry_ts(a) > last_seen
@@ -393,7 +426,7 @@ def render(entries, conf):
                     certainty = _certainty(a)
                     status = _status(a)
                     msg_type = _msg_type(a)
-                    colour_code = _colour_code(a)
+                    display_level = _display_level(a)
                     chance_of_upgrade = _chance_of_upgrade(a)
                     next_update = _next_update(a)
 
@@ -413,8 +446,8 @@ def render(entries, conf):
                     if event:
                         st.markdown(f"**Type:** {html.escape(event)}")
 
-                    if colour_code:
-                        st.markdown(f"**Colour code:** {html.escape(colour_code)}")
+                    if display_level:
+                        st.markdown(f"**Warning level:** {html.escape(display_level)}")
 
                     if severity:
                         st.markdown(f"**CAP severity:** {html.escape(severity)}")
