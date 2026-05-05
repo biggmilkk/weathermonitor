@@ -542,37 +542,24 @@ NZ_SEVERITY_ORDER: Mapping[str, int] = {
 
 
 def nz_colour_code(e: Mapping[str, Any]) -> str:
-    """
-    Canonical public NZ warning level accessor.
-
-    This must match scraper + renderer behavior:
-    we group on public MetService colour code, not CAP severity.
-    """
-    colour = e.get("colour_code") or e.get("level") or ""
-    colour = str(colour).strip()
-    return colour.title() if colour else ""
+    return str(e.get("level") or e.get("colour_code") or "").strip().title()
 
 
 def nz_event(e: Mapping[str, Any]) -> str:
-    event = str(e.get("event") or "").strip()
-    return event or "Alert"
+    return str(e.get("event") or "").strip() or "Alert"
 
 
 def nz_region(e: Mapping[str, Any]) -> str:
-    region = e.get("region") or e.get("area_desc") or e.get("location") or "New Zealand"
-    return str(region).strip() or "New Zealand"
+    return str(
+        e.get("region")
+        or e.get("primary_area")
+        or e.get("area_desc")
+        or e.get("location")
+        or "New Zealand"
+    ).strip() or "New Zealand"
 
 
 def nz_bucket_label(e: Mapping[str, Any]) -> str | None:
-    """
-    Build the specific NZ bucket label used by BOTH renderer and new-count logic.
-
-    Must match renderers/metservice_nz.py exactly.
-
-    Examples:
-      Orange - Rain
-      Red - Wind
-    """
     colour = nz_colour_code(e)
     event = nz_event(e)
 
@@ -587,11 +574,6 @@ def nz_remaining_new_total(
     *,
     last_seen_bkey_map,
 ) -> int:
-    """
-    NZ remaining-new counter using region|specific_bucket keys.
-
-    This MUST match the bucketing logic used in renderers/metservice_nz.py.
-    """
     total = 0
     for e in entries or []:
         bucket = nz_bucket_label(e)
