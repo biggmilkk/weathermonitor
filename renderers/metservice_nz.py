@@ -1,4 +1,3 @@
-# renderers/metservice_nz.py
 import html
 import os
 import time
@@ -12,16 +11,11 @@ from computation import (
     sort_newest,
     alphabetic_with_last,
     entry_ts,
-    nz_bucket_label,
     nz_region,
     nz_colour_code,
     nz_event,
 )
 
-
-# ============================================================
-# Helpers
-# ============================================================
 
 def _to_utc_label(pub: str | None) -> str | None:
     if not pub:
@@ -117,25 +111,19 @@ def _next_update(e: dict) -> str:
     return _norm(e.get("next_update"))
 
 
-def _display_level(e: dict) -> str:
-    return _colour_code(e)
-
-
-def _bucket_label(e: dict) -> str | None:
-    return nz_bucket_label(e)
+def _bucket_label(e: dict) -> str:
+    colour = _colour_code(e) or "Alert"
+    event = _event(e)
+    return f"{colour} - {event}"
 
 
 def _bullet_color(e: dict) -> str:
-    level = _display_level(e).lower()
+    level = _colour_code(e).lower()
     return {
         "red": "#E60026",
         "orange": "#FF8918",
     }.get(level, "#888888")
 
-
-# ============================================================
-# Translation
-# ============================================================
 
 @st.cache_data(ttl=7 * 24 * 3600, show_spinner=False)
 def _translate_to_en_deepl(text: str) -> str | None:
@@ -172,10 +160,6 @@ def _maybe_translate(text: str, *, enabled: bool) -> str | None:
     return _translate_to_en_deepl(text)
 
 
-# ============================================================
-# Remaining NEW total
-# ============================================================
-
 def _remaining_new_total(entries, bucket_lastseen) -> int:
     total = 0
     for e in entries or []:
@@ -189,25 +173,10 @@ def _remaining_new_total(entries, bucket_lastseen) -> int:
     return total
 
 
-# ============================================================
-# Region ordering
-# ============================================================
-
 _LAST_REGION = "New Zealand"
 
 
-# ============================================================
-# Renderer
-# ============================================================
-
 def render(entries, conf):
-    """
-    MetService NZ renderer:
-      Region -> Colour bucket -> alerts
-
-    Filtering is driven by computation.nz_bucket_label(...)
-    so badge logic and detail logic stay identical.
-    """
     feed_key = conf.get("key", "metservice_nz")
     translate_enabled = bool(
         (conf.get("conf") or {}).get("translate_to_en")
@@ -231,15 +200,13 @@ def render(entries, conf):
     pending_seen = st.session_state[pending_map_key]
     bucket_lastseen = st.session_state[lastseen_key]
 
+    # IMPORTANT: renderer trusts scraper output and does not re-filter
     items = sort_newest(attach_timestamp(entries or []))
 
     filtered = []
     for e in items:
-        bucket_label = _bucket_label(e)
-        if not bucket_label:
-            continue
-
         region = _region(e)
+        bucket_label = _bucket_label(e)
         filtered.append(dict(
             e,
             bucket_key=bucket_label,
@@ -303,7 +270,7 @@ def render(entries, conf):
 
         def _bucket_sort_key(items_in_bucket: list[dict], label: str):
             first = items_in_bucket[0] if items_in_bucket else {}
-            level = _display_level(first).lower()
+            level = _colour_code(first).lower()
             level_rank = {
                 "red": 0,
                 "orange": 1,
@@ -376,7 +343,7 @@ def render(entries, conf):
                     certainty = _certainty(a)
                     status = _status(a)
                     msg_type = _msg_type(a)
-                    display_level = _display_level(a)
+                    display_level = _colour_code(a)
                     chance_of_upgrade = _chance_of_upgrade(a)
                     next_update = _next_update(a)
 
