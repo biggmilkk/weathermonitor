@@ -315,7 +315,7 @@ FEED_POSITIONS = {
     "pagasa": (1, 4),
     "bmkg_indonesia": (2, 4),
     "argentina_smn": (2, 0),
-    "metservice_nz": (2, 1),
+    "metservice_nz": (3, 5),
     "bom_multi": (2, 5),
 }
 
