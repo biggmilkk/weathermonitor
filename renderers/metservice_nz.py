@@ -14,6 +14,7 @@ from computation import (
     entry_ts,
 )
 
+
 # ============================================================
 # Helpers
 # ============================================================
@@ -52,51 +53,33 @@ def _safe_rerun():
 
 
 def render_empty_state():
-    st.info("No active warnings that meet thresholds at the moment.")
+    st.info("No active warnings at this time.")
 
 
 def _headline(e: dict) -> str:
     return _norm(
         e.get("headline")
         or e.get("title")
+        or e.get("name")
         or e.get("event")
-        or e.get("bucket")
     )
 
 
 def _region(e: dict) -> str:
     return _norm(
-        e.get("primary_area")
-        or e.get("region")
-        or e.get("location")
+        e.get("region")
+        or e.get("area_desc")
+        or e.get("area")
         or "New Zealand"
     ) or "New Zealand"
 
 
-def _areas(e: dict) -> list[str]:
-    areas = e.get("areas") or []
-    if isinstance(areas, list):
-        cleaned = [_norm(x) for x in areas if _norm(x)]
-        if cleaned:
-            return cleaned
-    region = _region(e)
-    return [region] if region else []
-
-
-def _areas_line(e: dict) -> str:
-    return ", ".join(_areas(e))
-
-
 def _event(e: dict) -> str:
-    return _norm(e.get("event")) or "Weather"
+    return _norm(e.get("event")) or "Alert"
 
 
 def _severity(e: dict) -> str:
-    return _norm(e.get("severity") or e.get("level"))
-
-
-def _bucket(e: dict) -> str:
-    return _norm(e.get("bucket")) or "Alert"
+    return _norm(e.get("severity"))
 
 
 def _urgency(e: dict) -> str:
@@ -115,14 +98,6 @@ def _msg_type(e: dict) -> str:
     return _norm(e.get("msg_type"))
 
 
-def _response_type(e: dict) -> str:
-    return _norm(e.get("response_type"))
-
-
-def _chance_of_upgrade(e: dict) -> str:
-    return _norm(e.get("chance_of_upgrade"))
-
-
 def _instruction(e: dict) -> str:
     return _norm(e.get("instruction"))
 
@@ -131,24 +106,40 @@ def _description(e: dict) -> str:
     return _norm(e.get("description") or e.get("summary"))
 
 
+def _colour_code(e: dict) -> str:
+    return _norm(e.get("colour_code"))
+
+
+def _chance_of_upgrade(e: dict) -> str:
+    return _norm(e.get("chance_of_upgrade"))
+
+
+def _next_update(e: dict) -> str:
+    return _norm(e.get("next_update"))
+
+
 def _bucket_label(e: dict) -> str | None:
-    severity = _severity(e)
+    """
+    NZ public alert grouping should be driven by ColourCode, not CAP severity.
+    MetService can publish:
+      severity=Moderate + ColourCode=Orange
+    and that is still a live warning the user should see.
+    """
+    colour = _colour_code(e)
     event = _event(e)
-    bucket = _bucket(e)
-    if not severity:
+
+    if colour not in {"Orange", "Red"}:
         return None
-    return f"{severity} {bucket} - {event}"
+
+    return f"{colour} - {event}"
 
 
-def _bullet_color(severity: str) -> str:
-    s = _norm(severity).lower()
+def _bullet_color(e: dict) -> str:
+    colour = _colour_code(e).lower()
     return {
         "red": "#E60026",
         "orange": "#FF8918",
-        "severe": "#FF8918",
-        "moderate": "#D4AA00",
-        "minor": "#2E8B57",
-    }.get(s, "#888")
+    }.get(colour, "#888888")
 
 
 # ============================================================
@@ -208,17 +199,24 @@ def _remaining_new_total(entries, bucket_lastseen) -> int:
 
 
 # ============================================================
+# Region ordering
+# ============================================================
+
+_LAST_REGION = "New Zealand"
+
+
+# ============================================================
 # Renderer
 # ============================================================
 
 def render(entries, conf):
     """
     MetService NZ renderer:
-      Primary area -> specific bucket -> alerts
+      Region -> Colour bucket -> alerts
 
-    Example bucket labels:
-      - Orange Warning - Heavy Rain
-      - Red Warning - Strong Wind
+    Important:
+      display filtering is based on ColourCode (Orange/Red),
+      not CAP severity.
     """
     feed_key = conf.get("key", "metservice_nz")
     translate_enabled = bool(
@@ -267,6 +265,7 @@ def render(entries, conf):
 
     st.session_state[f"{feed_key}_remaining_new_total"] = _remaining_new_total(filtered, bucket_lastseen)
 
+    # ---------- Actions ----------
     cols_actions = st.columns([1, 6])
     with cols_actions[0]:
         if st.button("Mark all as seen", key=f"{feed_key}_mark_all_seen"):
@@ -281,12 +280,14 @@ def render(entries, conf):
             _safe_rerun()
             return
 
+    # Group by region
     groups: OrderedDict[str, list[dict]] = OrderedDict()
     for e in filtered:
         groups.setdefault(e["region_name"], []).append(e)
 
-    regions = alphabetic_with_last(groups.keys(), last_value="New Zealand")
+    regions = alphabetic_with_last(groups.keys(), last_value=_LAST_REGION)
 
+    # ---------- Regions ----------
     for region in regions:
         alerts = groups.get(region, [])
         if not alerts:
@@ -303,6 +304,7 @@ def render(entries, conf):
             unsafe_allow_html=True,
         )
 
+        # Group by bucket
         buckets: OrderedDict[str, dict] = OrderedDict()
         for a in alerts:
             bk = a["bucket_key"]
@@ -315,21 +317,19 @@ def render(entries, conf):
 
         def _bucket_sort_key(items_in_bucket: list[dict], label: str):
             first = items_in_bucket[0] if items_in_bucket else {}
-            sev = _norm(_severity(first)).lower()
-            sev_rank = {
+            colour = _colour_code(first).lower()
+            colour_rank = {
                 "red": 0,
                 "orange": 1,
-                "severe": 1,
-                "moderate": 2,
-                "minor": 3,
-            }.get(sev, 5)
-            return (sev_rank, _norm(label).lower())
+            }.get(colour, 9)
+            return (colour_rank, _norm(label).lower())
 
         ordered_bucket_keys = sorted(
             buckets.keys(),
             key=lambda bk: _bucket_sort_key(buckets[bk]["items"], buckets[bk]["label"])
         )
 
+        # ---------- Buckets ----------
         for bucket_key in ordered_bucket_keys:
             label = buckets[bucket_key]["label"]
             items_in_bucket = buckets[bucket_key]["items"]
@@ -378,23 +378,23 @@ def render(entries, conf):
                     )
                 st.markdown(badges, unsafe_allow_html=True)
 
+            # Expanded bucket content
             if st.session_state.get(open_key) == bkey:
                 for a in sort_newest(attach_timestamp(items_in_bucket)):
                     is_new = entry_ts(a) > last_seen
                     prefix = "[NEW] " if is_new else ""
 
                     headline = _headline(a) or "(untitled)"
-                    severity = _severity(a)
-                    bullet_color = _bullet_color(severity)
-                    areas_line = _areas_line(a)
+                    bullet_color = _bullet_color(a)
                     event = _event(a)
-                    bucket = _bucket(a)
+                    severity = _severity(a)
                     urgency = _urgency(a)
                     certainty = _certainty(a)
                     status = _status(a)
                     msg_type = _msg_type(a)
-                    response_type = _response_type(a)
+                    colour_code = _colour_code(a)
                     chance_of_upgrade = _chance_of_upgrade(a)
+                    next_update = _next_update(a)
 
                     title_html = (
                         f"{prefix}"
@@ -407,17 +407,16 @@ def render(entries, conf):
                     if headline_en:
                         st.markdown(f"*English (auto):* {html.escape(headline_en)}")
 
-                    if areas_line:
-                        st.markdown(f"**Affected areas:** {html.escape(areas_line)}")
+                    st.markdown(f"**Affected area:** {html.escape(_region(a))}")
 
                     if event:
                         st.markdown(f"**Type:** {html.escape(event)}")
 
-                    if bucket:
-                        st.markdown(f"**Product:** {html.escape(bucket)}")
+                    if colour_code:
+                        st.markdown(f"**Colour code:** {html.escape(colour_code)}")
 
                     if severity:
-                        st.markdown(f"**Level:** {html.escape(severity)}")
+                        st.markdown(f"**CAP severity:** {html.escape(severity)}")
 
                     if urgency:
                         st.markdown(f"**Urgency:** {html.escape(urgency)}")
@@ -431,9 +430,6 @@ def render(entries, conf):
                     if msg_type:
                         st.markdown(f"**Message Type:** {html.escape(msg_type)}")
 
-                    if response_type:
-                        st.markdown(f"**Response Type:** {html.escape(response_type)}")
-
                     if chance_of_upgrade:
                         st.markdown(f"**Chance of upgrade:** {html.escape(chance_of_upgrade)}")
 
@@ -441,22 +437,30 @@ def render(entries, conf):
                     if desc:
                         st.markdown(html.escape(desc).replace("\n", "  \n"))
 
+                        desc_en = _maybe_translate(desc, enabled=translate_enabled)
+                        if desc_en:
+                            st.markdown(f"*English (auto):* {html.escape(desc_en)}")
+
                     instruction = _instruction(a)
                     if instruction:
                         st.markdown(f"**Instruction:** {html.escape(instruction)}")
 
+                        instruction_en = _maybe_translate(instruction, enabled=translate_enabled)
+                        if instruction_en:
+                            st.markdown(f"*English (auto):* {html.escape(instruction_en)}")
+
                     effective = _to_utc_label(a.get("effective") or a.get("onset"))
                     expires = _to_utc_label(a.get("expires"))
-                    next_update = _to_utc_label(a.get("next_update"))
+                    next_update_label = _to_utc_label(next_update)
 
                     if effective:
                         st.caption(f"Effective: {effective}")
                     if expires:
                         st.caption(f"Expires: {expires}")
-                    if next_update:
-                        st.caption(f"Next update: {next_update}")
+                    if next_update_label:
+                        st.caption(f"Next update: {next_update_label}")
 
-                    link = _norm(a.get("link"))
+                    link = _norm(a.get("link") or a.get("web"))
                     if link:
                         st.markdown(f"[Read more]({link})")
 
