@@ -1,7 +1,6 @@
 # renderers/metservice_nz.py
 import html
 import os
-import re
 import time
 from collections import OrderedDict
 
@@ -13,15 +12,16 @@ from computation import (
     sort_newest,
     alphabetic_with_last,
     entry_ts,
+    nz_bucket_label,
+    nz_region,
+    nz_colour_code,
+    nz_event,
 )
 
 
 # ============================================================
 # Helpers
 # ============================================================
-
-_ORANGE_RED_RE = re.compile(r"\b(Orange|Red)\b", re.IGNORECASE)
-
 
 def _to_utc_label(pub: str | None) -> str | None:
     if not pub:
@@ -70,30 +70,11 @@ def _headline(e: dict) -> str:
 
 
 def _region(e: dict) -> str:
-    return _norm(
-        e.get("region")
-        or e.get("area_desc")
-        or e.get("area")
-        or "New Zealand"
-    ) or "New Zealand"
+    return nz_region(e)
 
 
 def _event(e: dict) -> str:
-    event = _norm(e.get("event"))
-    if not event:
-        return "Alert"
-
-    mapping = {
-        "rain": "Rain",
-        "wind": "Wind",
-        "snow": "Snow",
-        "thunderstorm": "Thunderstorm",
-        "thunderstorms": "Thunderstorm",
-        "fog": "Fog",
-        "ice": "Ice",
-        "frost": "Frost",
-    }
-    return mapping.get(event.lower(), event.title())
+    return nz_event(e)
 
 
 def _severity(e: dict) -> str:
@@ -125,7 +106,7 @@ def _description(e: dict) -> str:
 
 
 def _colour_code(e: dict) -> str:
-    return _norm(e.get("colour_code"))
+    return nz_colour_code(e)
 
 
 def _chance_of_upgrade(e: dict) -> str:
@@ -137,41 +118,11 @@ def _next_update(e: dict) -> str:
 
 
 def _display_level(e: dict) -> str:
-    """
-    Public NZ display level must be driven by MetService colour level.
-
-    Preferred source:
-      - colour_code parsed from CAP parameter
-
-    Fallback:
-      - headline/title text like 'Heavy Rain Warning - Orange'
-    """
-    colour = _colour_code(e)
-    if colour:
-        c = colour.strip().title()
-        if c in {"Orange", "Red"}:
-            return c
-
-    text = " ".join([
-        _norm(e.get("headline")),
-        _norm(e.get("title")),
-        _norm(e.get("summary")),
-    ])
-    m = _ORANGE_RED_RE.search(text)
-    if m:
-        return m.group(1).title()
-
-    return ""
+    return _colour_code(e)
 
 
 def _bucket_label(e: dict) -> str | None:
-    level = _display_level(e)
-    event = _event(e)
-
-    if level not in {"Orange", "Red"}:
-        return None
-
-    return f"{level} - {event}"
+    return nz_bucket_label(e)
 
 
 def _bullet_color(e: dict) -> str:
@@ -254,9 +205,8 @@ def render(entries, conf):
     MetService NZ renderer:
       Region -> Colour bucket -> alerts
 
-    Important:
-      filtering is based on public Orange/Red level,
-      not CAP severity.
+    Filtering is driven by computation.nz_bucket_label(...)
+    so badge logic and detail logic stay identical.
     """
     feed_key = conf.get("key", "metservice_nz")
     translate_enabled = bool(
