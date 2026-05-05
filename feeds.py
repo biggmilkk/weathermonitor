@@ -168,4 +168,15 @@ def get_feed_definitions():
             },
             "group": "g2_even",
         },
+
+        "metservice_nz": {
+            "label": "MetService (New Zealand)",
+            "type": "rss_metservice_nz",
+            "url": "https://alerts.metservice.com/cap/atom",
+            "conf": {
+                "translate_to_en": False,
+                "max_concurrency": 6,
+            },
+            "group": "g2_odd",
+        },
     }
