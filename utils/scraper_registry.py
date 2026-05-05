@@ -65,4 +65,7 @@ SCRAPER_REGISTRY: Dict[str, ScraperEntry] = {
 
     # --- SMN Argentina  ---
     "rss_smn_argentina": ScraperEntry("smn", "scrape_smn_argentina_async"),
+
+     # --- MetService New Zealand ---
+    "rss_metservice_nz": ScraperEntry("metservice_nz", "scrape_metservice_nz_async"),
 }
