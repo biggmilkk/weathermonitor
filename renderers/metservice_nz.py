@@ -242,6 +242,7 @@ def render(entries, conf):
     bucket_lastseen = st.session_state[lastseen_key]
 
     items = sort_newest(attach_timestamp(entries or []))
+    st.write(items)
 
     filtered = []
     for e in items:
