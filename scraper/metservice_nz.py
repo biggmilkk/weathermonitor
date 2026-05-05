@@ -6,10 +6,10 @@ import hashlib
 import logging
 import re
 import xml.etree.ElementTree as ET
-from email.utils import parsedate_to_datetime
 from typing import Any
 
 import aiohttp
+from dateutil import parser as dateparser
 
 # --------------------------------------------------------------------
 # Constants
@@ -24,14 +24,6 @@ TIMEOUT_TOTAL = 25
 CONNECTOR_LIMIT = 10
 
 logger = logging.getLogger(__name__)
-
-NZ_WARNING_LEVEL_ORDER = {
-    "Red": 4,
-    "Orange": 3,
-    "Severe": 3,
-    "Moderate": 2,
-    "Minor": 1,
-}
 
 WATCH_RE = re.compile(r"\bwatch\b", re.IGNORECASE)
 WARNING_RE = re.compile(r"\bwarning\b", re.IGNORECASE)
@@ -70,7 +62,7 @@ def _parse_dt_to_iso(s: str) -> str:
     if not s:
         return ""
     try:
-        return parsedate_to_datetime(s).isoformat()
+        return dateparser.parse(s).isoformat()
     except Exception:
         return s
 
@@ -83,17 +75,20 @@ def _slug_hash(*parts: str) -> str:
 def _event_to_display(event: str) -> str:
     e = _norm(event).lower()
     mapping = {
-        "rain": "Heavy Rain",
-        "wind": "Strong Wind",
+        "rain": "Rain",
+        "wind": "Wind",
         "snow": "Snow",
         "thunderstorm": "Thunderstorm",
         "thunderstorms": "Thunderstorm",
         "flood": "Flood",
+        "ice": "Ice",
+        "fog": "Fog",
+        "frost": "Frost",
     }
     if e in mapping:
         return mapping[e]
     if not e:
-        return "Weather"
+        return "Alert"
     return e.replace("_", " ").replace("-", " ").title()
 
 
@@ -107,45 +102,41 @@ def _extract_cap_parameter(info: ET.Element | None, value_name: str) -> str:
     return ""
 
 
-def _classify_from_title_and_colour(*, title: str, colour_code: str, cap_severity: str) -> tuple[str, str, bool]:
+def _public_level_from_title_or_colour(title: str, colour_code: str) -> str:
     """
-    Returns:
-      level: Red / Orange / Moderate / Minor / ...
-      bucket: Warning / Watch / Alert
-      keep: whether this entry should be surfaced
-
-    MetService CAP severity can still be "Moderate" even when the product is
-    operationally an Orange Warning, so we trust headline/ColourCode first.
+    Public NZ level should be driven by MetService's colour scheme.
     """
     t = _norm(title)
-    colour = _norm(colour_code)
 
-    is_warning = bool(WARNING_RE.search(t))
-    is_watch = bool(WATCH_RE.search(t))
+    if _norm(colour_code).lower() == "red" or RED_RE.search(t):
+        return "Red"
+    if _norm(colour_code).lower() == "orange" or ORANGE_RE.search(t):
+        return "Orange"
+    return ""
 
-    if is_warning:
-        if RED_RE.search(t) or colour.lower() == "red":
-            return "Red", "Warning", True
-        if ORANGE_RE.search(t) or colour.lower() == "orange":
-            return "Orange", "Warning", True
-        if cap_severity:
-            return _norm(cap_severity), "Warning", True
-        return "Warning", "Warning", True
 
-    if is_watch:
-        if RED_RE.search(t) or colour.lower() == "red":
-            return "Red", "Watch", False
-        if ORANGE_RE.search(t) or colour.lower() == "orange":
-            return "Orange", "Watch", False
-        return _norm(cap_severity) or "Watch", "Watch", False
+def _classify_product(title: str) -> str:
+    """
+    Returns Warning / Watch / Alert
+    """
+    t = _norm(title)
+    if WARNING_RE.search(t):
+        return "Warning"
+    if WATCH_RE.search(t):
+        return "Watch"
+    return "Alert"
 
-    if RED_RE.search(t) or colour.lower() == "red":
-        return "Red", "Alert", True
-    if ORANGE_RE.search(t) or colour.lower() == "orange":
-        return "Orange", "Alert", True
 
-    level = _norm(cap_severity)
-    return level or "Alert", "Alert", False
+def _should_keep_entry(*, product_type: str, public_level: str) -> bool:
+    """
+    Keep only live Orange/Red warnings/alerts.
+    Drop watches by default.
+    """
+    if public_level not in {"Orange", "Red"}:
+        return False
+    if product_type == "Watch":
+        return False
+    return True
 
 
 def _semantic_alert_key(item: dict[str, Any]) -> str:
@@ -157,7 +148,7 @@ def _semantic_alert_key(item: dict[str, Any]) -> str:
 
     return "|".join([
         _norm(item.get("headline") or item.get("title")),
-        _norm(item.get("level")),
+        _norm(item.get("colour_code") or item.get("level")),
         _norm(item.get("event")),
         _norm(item.get("effective") or item.get("onset")),
         _norm(item.get("expires")),
@@ -179,8 +170,8 @@ def _parse_atom_entries(xml_text: str) -> list[dict[str, Any]]:
         title = _first_text(entry, "atom:title", ATOM_NS)
         entry_id = _first_text(entry, "atom:id", ATOM_NS)
         summary = _first_text(entry, "atom:summary", ATOM_NS)
-        updated = _first_text(entry, "atom:updated", ATOM_NS)
-        published = _first_text(entry, "atom:published", ATOM_NS)
+        updated = _parse_dt_to_iso(_first_text(entry, "atom:updated", ATOM_NS))
+        published = _parse_dt_to_iso(_first_text(entry, "atom:published", ATOM_NS))
         author = _first_text(entry, "atom:author/atom:name", ATOM_NS)
 
         related_link = ""
@@ -226,7 +217,7 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> dict[str, A
 
     identifier = _first_text(root, "cap:identifier", CAP_NS)
     sender = _first_text(root, "cap:sender", CAP_NS)
-    sent = _first_text(root, "cap:sent", CAP_NS)
+    sent = _parse_dt_to_iso(_first_text(root, "cap:sent", CAP_NS))
     status = _first_text(root, "cap:status", CAP_NS)
     msg_type = _first_text(root, "cap:msgType", CAP_NS)
     scope = _first_text(root, "cap:scope", CAP_NS)
@@ -241,9 +232,9 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> dict[str, A
     urgency = _first_text(info, "cap:urgency", CAP_NS)
     severity_cap = _first_text(info, "cap:severity", CAP_NS)
     certainty = _first_text(info, "cap:certainty", CAP_NS)
-    onset = _first_text(info, "cap:onset", CAP_NS)
-    effective = _first_text(info, "cap:effective", CAP_NS)
-    expires = _first_text(info, "cap:expires", CAP_NS)
+    onset = _parse_dt_to_iso(_first_text(info, "cap:onset", CAP_NS))
+    effective = _parse_dt_to_iso(_first_text(info, "cap:effective", CAP_NS))
+    expires = _parse_dt_to_iso(_first_text(info, "cap:expires", CAP_NS))
     sender_name = _first_text(info, "cap:senderName", CAP_NS)
     headline = _first_text(info, "cap:headline", CAP_NS)
     description = _first_text(info, "cap:description", CAP_NS)
@@ -253,25 +244,28 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> dict[str, A
     colour_code = _extract_cap_parameter(info, "ColourCode")
     colour_code_hex = _extract_cap_parameter(info, "ColourCodeHex")
     chance_of_upgrade = _extract_cap_parameter(info, "ChanceOfUpgrade")
-    next_update = _extract_cap_parameter(info, "NextUpdate")
+    next_update = _parse_dt_to_iso(_extract_cap_parameter(info, "NextUpdate"))
 
     area_descs = _all_texts(info, "cap:area/cap:areaDesc", CAP_NS)
-    region = ", ".join(area_descs)
+    primary_area = area_descs[0] if area_descs else "New Zealand"
+    region = ", ".join(area_descs) if area_descs else primary_area
 
     title = headline or fallback.get("title") or "MetService Alert"
-    level, bucket, keep = _classify_from_title_and_colour(
-        title=title,
-        colour_code=colour_code,
-        cap_severity=severity_cap,
-    )
+    product_type = _classify_product(title)
+    public_level = _public_level_from_title_or_colour(title, colour_code)
 
-    if not keep:
+    if not _should_keep_entry(product_type=product_type, public_level=public_level):
         return None
 
     event_display = _event_to_display(event_raw)
-    primary_area = area_descs[0] if area_descs else "New Zealand"
 
-    stable_suffix = _slug_hash(identifier or fallback.get("id") or title, level, region)
+    stable_suffix = _slug_hash(
+        identifier or fallback.get("id") or title,
+        public_level,
+        region,
+        effective or onset,
+        expires,
+    )
 
     return {
         "id": f"{identifier or fallback.get('id') or title}|{stable_suffix}",
@@ -283,9 +277,9 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> dict[str, A
         "instruction": instruction,
         "event": event_display,
         "event_raw": event_raw,
-        "severity": level,
-        "level": level,
-        "bucket": bucket,
+        "severity": severity_cap,
+        "level": public_level,
+        "bucket": product_type,
         "response_type": response_type,
         "urgency": urgency,
         "certainty": certainty,
@@ -300,16 +294,18 @@ def _parse_cap_alert_xml(xml_text: str, fallback: dict[str, Any]) -> dict[str, A
         "updated": fallback.get("updated") or sent or "",
         "sender": sender,
         "sender_name": sender_name or fallback.get("sender_name") or "Meteorological Service of New Zealand Limited",
-        "region": region or primary_area,
-        "location": region or primary_area,
-        "areas": area_descs[:],
-        "area_count": len(area_descs),
+        "region": primary_area,
+        "area_desc": primary_area,
+        "location": primary_area,
+        "areas": area_descs[:] if area_descs else [primary_area],
+        "area_count": len(area_descs) if area_descs else 1,
         "primary_area": primary_area,
-        "colour_code": colour_code,
+        "colour_code": public_level or colour_code,
         "colour_code_hex": colour_code_hex,
         "chance_of_upgrade": chance_of_upgrade,
         "next_update": next_update,
         "link": web or fallback.get("cap_link") or fallback.get("link") or "",
+        "web": web or fallback.get("link") or "",
         "source": "MetService New Zealand",
     }
 
@@ -358,9 +354,9 @@ async def scrape_metservice_nz_async(conf: dict | None, client=None) -> dict[str
       1) fetch official Atom index
       2) follow each CAP detail URL from link rel="related" type="application/cap+xml"
       3) parse CAP fields directly
-      4) classify using headline/ColourCode first (not CAP severity alone)
-      5) keep operational warnings (Orange/Red warnings, plus other warnings if present)
-      6) drop watches by default
+      4) classify using headline/ColourCode first
+      5) keep only Orange/Red warnings/alerts
+      6) drop watches
       7) dedupe repeated same-alert copies to latest semantic version
     """
     conf = conf or {}
