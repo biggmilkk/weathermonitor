@@ -176,6 +176,7 @@ def get_feed_definitions():
             "conf": {
                 "translate_to_en": False,
                 "max_concurrency": 6,
+                "min_severity_rank": 3,  # Orange and above
             },
             "group": "g2_odd",
         },
