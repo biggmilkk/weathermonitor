@@ -533,83 +533,43 @@ def smn_remaining_new_total(
 
 
 # --------------------------------------------------------------------
-# MetService (New Zealand) helpers
+# MetService NZ helpers
 # --------------------------------------------------------------------
 
 NZ_SEVERITY_ORDER: Mapping[str, int] = {
     "Red": 4,
     "Orange": 3,
-    "Yellow": 2,
+    "Severe": 3,
+    "Moderate": 2,
     "Minor": 1,
 }
 
-
 def nz_severity(e: Mapping[str, Any]) -> str:
-    """Canonical NZ severity accessor."""
-    return str(e.get("severity") or "").strip()
-
+    return str(e.get("severity") or e.get("level") or "").strip()
 
 def nz_event(e: Mapping[str, Any]) -> str:
-    """Canonical NZ event/type accessor."""
-    return str(e.get("event") or "").strip() or "Alert"
-
+    return str(e.get("event") or "").strip() or "Weather"
 
 def nz_region(e: Mapping[str, Any]) -> str:
-    """Canonical NZ top-level region accessor."""
-    region = e.get("region") or e.get("region_name") or "New Zealand"
+    region = e.get("primary_area") or e.get("region") or e.get("location") or "New Zealand"
     return str(region).strip() or "New Zealand"
 
-
-def nz_location(e: Mapping[str, Any]) -> str:
-    """
-    Canonical NZ item-level location accessor.
-
-    Region is already used as the section header, so prefer local areas.
-    """
-    region = nz_region(e)
-
-    areas = e.get("areas")
-    if isinstance(areas, Sequence) and not isinstance(areas, (str, bytes)):
-        cleaned = [str(x).strip() for x in areas if str(x).strip()]
-        if cleaned:
-            if cleaned == [region]:
-                return ""
-            return ", ".join(cleaned)
-
-    area_desc = e.get("area_desc") or e.get("area") or e.get("location")
-    if isinstance(area_desc, str) and area_desc.strip():
-        area_desc = area_desc.strip()
-        if area_desc != region:
-            return area_desc
-
-    return ""
-
+def nz_bucket(e: Mapping[str, Any]) -> str:
+    return str(e.get("bucket") or "").strip() or "Alert"
 
 def nz_bucket_label(e: Mapping[str, Any]) -> str | None:
-    """
-    Build the specific NZ bucket label used by BOTH renderer and new-count logic.
-
-    Examples:
-      Red - Heavy Rain
-      Orange - Strong Wind
-    """
     severity = nz_severity(e)
+    bucket = nz_bucket(e)
     event = nz_event(e)
     if not severity:
         return None
-    return f"{severity} - {event}"
-
+    return f"{severity} {bucket} - {event}"
 
 def nz_remaining_new_total(
     entries,
     *,
     last_seen_bkey_map,
 ) -> int:
-    """
-    NZ remaining-new counter using region|specific_bucket keys.
-
-    This MUST match the bucketing logic used in renderers/nz.py.
-    """
     total = 0
     for e in entries or []:
         bucket = nz_bucket_label(e)
