@@ -531,7 +531,6 @@ def smn_remaining_new_total(
 
     return total
 
-
 # --------------------------------------------------------------------
 # MetService NZ helpers
 # --------------------------------------------------------------------
@@ -550,11 +549,13 @@ def nz_colour_code(e: Mapping[str, Any]) -> str:
     we group on public MetService colour code, not CAP severity.
     """
     colour = e.get("colour_code") or e.get("level") or ""
-    return str(colour).strip()
+    colour = str(colour).strip()
+    return colour.title() if colour else ""
 
 
 def nz_event(e: Mapping[str, Any]) -> str:
-    return str(e.get("event") or "").strip() or "Alert"
+    event = str(e.get("event") or "").strip()
+    return event or "Alert"
 
 
 def nz_region(e: Mapping[str, Any]) -> str:
@@ -605,7 +606,6 @@ def nz_remaining_new_total(
             total += 1
 
     return total
-
 
 # --------------------------------------------------------------------
 # NWS (US National Weather Service) helpers
