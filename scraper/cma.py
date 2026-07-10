@@ -18,14 +18,17 @@ __all__ = ["scrape_cma_async", "scrape_async", "scrape"]
 # National-only CMA / NMC scraper
 # ---------------------------------------------------------------------
 #
-# Goal:
-#   Read the national warning list from the top-right warning panel on:
-#     https://www.nmc.cn/
+# What this scraper does:
+#   1. Fetches https://www.nmc.cn/
+#   2. Reads the national warning links shown in the top-right warning list.
+#   3. Keeps only Red / Orange national warnings by default.
+#   4. Fetches each detail page and extracts the full article body.
 #
-# It intentionally does NOT fetch local warnings from:
-#     https://weather.cma.cn/api/map/alarm?adcode=
-#
-# That local endpoint is too noisy for your app and is also often WAF-blocked.
+# What this scraper intentionally does NOT do:
+#   - It does not fetch local warnings from:
+#       https://weather.cma.cn/api/map/alarm?adcode=
+#   - It does not include local province/city warning-signal records.
+#   - It does not include Yellow / Blue warnings unless configured.
 # ---------------------------------------------------------------------
 
 NMC_BASE = "https://www.nmc.cn"
@@ -45,15 +48,8 @@ CN_COLOR_TO_EN = {
 
 EN_LEVELS = {"Red", "Orange", "Yellow", "Blue"}
 
-# Handles normal and spaced Chinese color text:
-#   红色, 红 色, 橙色, 橙 色, etc.
-RE_COLOR = re.compile(r"(红\s*色|橙\s*色|黄\s*色|蓝\s*色)")
-RE_WS = re.compile(r"\s+")
-RE_TAGS = re.compile(r"<[^>]+>")
-RE_SCRIPT_STYLE = re.compile(r"<(script|style)\b.*?</\1>", re.I | re.S)
-
-# Homepage national warning links can point to several NMC product sections.
-# These are national products, not local city/province warning-signal pages.
+# National warning/product paths that can appear in the homepage top-right list.
+# Local warning-signal pages use different paths and are intentionally ignored.
 NATIONAL_WARNING_PATH_HINTS = (
     "/publish/country/warning/",
     "/publish/mountainflood.html",
@@ -74,12 +70,32 @@ HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
 
+RE_WS = re.compile(r"\s+")
+RE_TAGS = re.compile(r"<[^>]+>")
+RE_SCRIPT_STYLE = re.compile(r"<(script|style)\b.*?</\1>", re.I | re.S)
+RE_COLOR = re.compile(r"(红\s*色|橙\s*色|黄\s*色|蓝\s*色)")
+RE_RELATIVE_AGE = re.compile(r"\s*\d+\s*(分钟前|小时前|天前)\s*$")
+
+WAF_MARKERS = (
+    "WEB 应用防火墙",
+    "人机识别检测",
+    "向右滑动填充拼图",
+    "captcha",
+    "js-challenge",
+)
+
 
 # ---------------------------------------------------------------------
 # Config helpers
 # ---------------------------------------------------------------------
 
 def _conf_value(conf: Dict[str, Any], key: str, default: Any = None) -> Any:
+    """
+    Support both:
+      {"allowed_levels": [...]}
+    and:
+      {"conf": {"allowed_levels": [...]}}
+    """
     nested = conf.get("conf") if isinstance(conf.get("conf"), dict) else {}
 
     if key in conf:
@@ -148,13 +164,130 @@ def _allowed_levels_from_conf(conf: Dict[str, Any]) -> Set[str]:
 
 
 # ---------------------------------------------------------------------
-# HTML helpers
+# General text / HTML helpers
+# ---------------------------------------------------------------------
+
+def _norm_text(value: Any) -> str:
+    text = html.unescape(str(value or ""))
+    text = text.replace("\xa0", " ")
+    return RE_WS.sub(" ", text).strip()
+
+
+def _looks_like_bad_response(text: str) -> bool:
+    sample = (text or "")[:1000]
+    return any(marker in sample for marker in WAF_MARKERS)
+
+
+async def _get_text(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    timeout: float,
+    referer: str = NMC_REFERER,
+) -> str:
+    headers = {**HEADERS, "Referer": referer}
+    resp = await client.get(url, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+
+    text = resp.text or ""
+
+    if _looks_like_bad_response(text):
+        sample = text[:220].replace("\n", " ").replace("\r", " ")
+        raise RuntimeError(f"NMC returned challenge/WAF HTML for {url}: {sample}")
+
+    return text
+
+
+def _html_to_text(raw_html: str) -> str:
+    """
+    Convert NMC HTML to readable text while preserving useful paragraph breaks.
+    """
+    if not raw_html:
+        return ""
+
+    s = RE_SCRIPT_STYLE.sub("\n", raw_html)
+
+    # Preserve common block boundaries before removing tags.
+    s = re.sub(r"(?i)<br\s*/?>", "\n", s)
+    s = re.sub(r"(?i)</(?:p|div|li|tr|td|h1|h2|h3|h4|h5|h6)>", "\n", s)
+    s = re.sub(r"(?i)<(?:p|div|li|tr|td|h1|h2|h3|h4|h5|h6)\b[^>]*>", "\n", s)
+
+    s = RE_TAGS.sub(" ", s)
+    s = html.unescape(s)
+    s = s.replace("\xa0", " ")
+
+    lines: List[str] = []
+    for line in s.splitlines():
+        line = _norm_text(line)
+        if line:
+            lines.append(line)
+
+    return "\n".join(lines)
+
+
+def _repair_nmc_spacing(value: Any) -> str:
+    """
+    NMC article pages often expose text with odd spaces inserted between
+    Chinese characters and digits, for example:
+      台风 橙色 预警
+      第 9 号
+      83 0 公里
+      20～2 5 公里
+      250～9 00毫米
+
+    This normalizes those display artifacts.
+    """
+    text = _norm_text(value)
+    if not text:
+        return ""
+
+    # Remove spaces between Chinese characters.
+    text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
+
+    # Remove spaces between Chinese text and numbers.
+    text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=\d)", "", text)
+    text = re.sub(r"(?<=\d)\s+(?=[\u4e00-\u9fff])", "", text)
+
+    # Remove spaces inside numbers and ranges.
+    text = re.sub(r"(?<=\d)\s+(?=\d)", "", text)
+    text = re.sub(r"(?<=\d)\s+(?=[～~\-—])", "", text)
+    text = re.sub(r"(?<=[～~\-—])\s+(?=\d)", "", text)
+
+    # Remove spaces around Chinese punctuation.
+    text = re.sub(r"\s+([，。！？、：；）】》])", r"\1", text)
+    text = re.sub(r"([（【《])\s+", r"\1", text)
+
+    # Tighten common numeric units.
+    text = re.sub(
+        r"(?<=\d)\s+(?=[年月日时分秒点号级度米公里百帕毫米公里/秒])",
+        "",
+        text,
+    )
+
+    return text.strip()
+
+
+def _clean_article_text(text: str) -> str:
+    """
+    Normalize article text but preserve paragraph breaks.
+    """
+    lines: List[str] = []
+
+    for line in (text or "").splitlines():
+        cleaned = _repair_nmc_spacing(line)
+        if cleaned:
+            lines.append(cleaned)
+
+    return "\n".join(lines).strip()
+
+
+# ---------------------------------------------------------------------
+# Anchor parsing
 # ---------------------------------------------------------------------
 
 class _AnchorCollector(HTMLParser):
     """
-    Tiny stdlib-only anchor parser.
-    Avoids requiring BeautifulSoup.
+    stdlib-only anchor parser. It collects all <a href="...">text</a> pairs.
     """
 
     def __init__(self) -> None:
@@ -191,58 +324,14 @@ class _AnchorCollector(HTMLParser):
             self.links.append((href, text))
 
 
-def _norm_text(value: Any) -> str:
-    text = html.unescape(str(value or ""))
-    return RE_WS.sub(" ", text).strip()
-
-
-def _html_to_text(raw_html: str) -> str:
-    cleaned = RE_SCRIPT_STYLE.sub(" ", raw_html or "")
-    cleaned = RE_TAGS.sub(" ", cleaned)
-    cleaned = html.unescape(cleaned)
-    return RE_WS.sub(" ", cleaned).strip()
-
-
-def _looks_like_bad_response(text: str) -> bool:
-    sample = (text or "")[:1000]
-
-    # NMC usually works, but this catches accidental proxy/login/challenge pages.
-    bad_markers = (
-        "WEB 应用防火墙",
-        "人机识别检测",
-        "向右滑动填充拼图",
-        "captcha",
-        "js-challenge",
-    )
-
-    return any(marker in sample for marker in bad_markers)
-
-
-async def _get_text(
-    client: httpx.AsyncClient,
-    url: str,
-    *,
-    timeout: float,
-    referer: str = NMC_REFERER,
-) -> str:
-    headers = {**HEADERS, "Referer": referer}
-    resp = await client.get(url, headers=headers, timeout=timeout)
-    resp.raise_for_status()
-
-    text = resp.text or ""
-
-    if _looks_like_bad_response(text):
-        sample = text[:220].replace("\n", " ").replace("\r", " ")
-        raise RuntimeError(f"NMC returned challenge/WAF HTML for {url}: {sample}")
-
-    return text
-
-
 # ---------------------------------------------------------------------
 # Severity and time parsing
 # ---------------------------------------------------------------------
 
 def _extract_level(text_or_item: Any) -> Optional[str]:
+    """
+    Extract Red / Orange / Yellow / Blue from Chinese warning text.
+    """
     if isinstance(text_or_item, dict):
         text = " ".join(
             _norm_text(v)
@@ -251,6 +340,7 @@ def _extract_level(text_or_item: Any) -> Optional[str]:
                 text_or_item.get("headline"),
                 text_or_item.get("summary"),
                 text_or_item.get("description"),
+                text_or_item.get("body"),
                 text_or_item.get("level"),
             )
             if v
@@ -270,20 +360,21 @@ def _extract_level(text_or_item: Any) -> Optional[str]:
 
 def _parse_pubtime_from_text(text: str) -> Optional[str]:
     """
-    Parse NMC national times such as:
-      2026 年 07 月 10 日 18 时
+    Parse NMC issue times such as:
+      2026年07月10日18时
       7月10日18时
-    as China Standard Time, then return UTC ISO.
+
+    The parsed time is treated as China Standard Time and returned as UTC ISO.
     """
-    text = _norm_text(text)
+    clean = _repair_nmc_spacing(text)
     now_cst = datetime.now(CST)
 
     m = re.search(
-        r"(?P<y>\d{4})\s*年\s*"
-        r"(?P<m>\d{1,2})\s*月\s*"
-        r"(?P<d>\d{1,2})\s*日\s*"
-        r"(?P<h>\d{1,2})\s*时",
-        text,
+        r"(?P<y>\d{4})年"
+        r"(?P<m>\d{1,2})月"
+        r"(?P<d>\d{1,2})日"
+        r"(?P<h>\d{1,2})时",
+        clean,
     )
     if m:
         local_dt = datetime(
@@ -297,10 +388,10 @@ def _parse_pubtime_from_text(text: str) -> Optional[str]:
         return local_dt.astimezone(timezone.utc).isoformat()
 
     m = re.search(
-        r"(?P<m>\d{1,2})\s*月\s*"
-        r"(?P<d>\d{1,2})\s*日\s*"
-        r"(?P<h>\d{1,2})\s*时",
-        text,
+        r"(?P<m>\d{1,2})月"
+        r"(?P<d>\d{1,2})日"
+        r"(?P<h>\d{1,2})时",
+        clean,
     )
     if m:
         local_dt = datetime(
@@ -327,7 +418,7 @@ def _timestamp_from_iso(value: Optional[str], fallback: float) -> float:
 
 
 # ---------------------------------------------------------------------
-# National warning extraction
+# Homepage national-warning extraction
 # ---------------------------------------------------------------------
 
 def _absolute_nmc_url(href: str) -> str:
@@ -340,17 +431,16 @@ def _is_nmc_url(url: str) -> bool:
     except Exception:
         return False
 
-    return parsed.netloc in {"www.nmc.cn", "nmc.cn", ""}
+    return parsed.netloc in {"", "www.nmc.cn", "nmc.cn"}
 
 
 def _is_relevant_national_warning_url(url: str) -> bool:
     if not _is_nmc_url(url):
         return False
 
-    parsed = urlparse(url)
-    path = parsed.path
+    path = urlparse(url).path or ""
 
-    if not path.endswith(".html") and not path.endswith("/"):
+    if not path:
         return False
 
     return any(hint in path for hint in NATIONAL_WARNING_PATH_HINTS)
@@ -358,45 +448,15 @@ def _is_relevant_national_warning_url(url: str) -> bool:
 
 def _clean_homepage_title(text: str) -> str:
     """
-    Homepage link text may include a badge like '预警' and a relative age.
-    Keep the actual warning title readable.
+    Homepage link text usually looks like:
+      预警 中央气象台7月10日18时继续发布台风橙色预警 6小时前
+
+    This removes the UI badge and trailing relative age.
     """
-    text = _norm_text(text)
-
-    # Remove common badge prefix duplicated into anchor text.
-    text = re.sub(r"^(预警|警报|快讯)\s+", "", text)
-
-    # Remove trailing relative time, if it appears inside the anchor text.
-    text = re.sub(r"\s*\d+\s*(分钟前|小时前|天前)\s*$", "", text)
-
-    return _norm_text(text)
-
-
-def _extract_detail_summary(text: str, fallback_title: str) -> str:
-    """
-    Extract a compact useful paragraph from a detail page.
-    """
-    text = _norm_text(text)
-
-    # Try to start around the official issuing sentence.
-    patterns = (
-        r"(中央气象台.*?预警[:：].*?)(?:防御指南|相关产品|推荐服务|$)",
-        r"(水利部和中国气象局.*?预警[:：].*?)(?:相关产品|推荐服务|$)",
-        r"(自然资源部与中国气象局.*?预警[:：].*?)(?:相关产品|推荐服务|$)",
-        r"(.*?发布.*?预警[:：].*?)(?:防御指南|相关产品|推荐服务|$)",
-    )
-
-    for pattern in patterns:
-        m = re.search(pattern, text)
-        if m:
-            return _norm_text(m.group(1))[:900]
-
-    # Fallback: a small window around the title.
-    idx = text.find(fallback_title[:20]) if fallback_title else -1
-    if idx >= 0:
-        return _norm_text(text[idx: idx + 900])
-
-    return ""
+    title = _norm_text(text)
+    title = re.sub(r"^(预警|警报|快讯)\s+", "", title)
+    title = RE_RELATIVE_AGE.sub("", title)
+    return _repair_nmc_spacing(title)
 
 
 def _homepage_entries_from_html(
@@ -421,18 +481,15 @@ def _homepage_entries_from_html(
         if not title:
             continue
 
-        # This is the key filter:
-        # keep only top-list national warnings that explicitly say Red/Orange.
         level = _extract_level(title)
         if level not in allowed_levels:
             continue
 
-        # Avoid nav/menu duplicates and repeated page links.
-        # For the homepage top-right list, the full title includes the issuing
-        # sentence, while nav links usually do not include a color level.
+        # Avoid repeated national category/menu links.
+        # Menu links normally do not contain color levels, but this also
+        # protects against duplicated homepage modules.
         if url in seen_links:
             continue
-
         seen_links.add(url)
 
         published = _parse_pubtime_from_text(title)
@@ -448,6 +505,8 @@ def _homepage_entries_from_html(
                 "level": level,
                 "region": "China: National",
                 "summary": "",
+                "description": "",
+                "body": "",
                 "published": published,
                 "timestamp": ts,
                 "link": url,
@@ -458,36 +517,215 @@ def _homepage_entries_from_html(
     return entries
 
 
+# ---------------------------------------------------------------------
+# Detail-page article extraction
+# ---------------------------------------------------------------------
+
+def _find_article_start(clean: str, allowed_levels: Set[str]) -> int:
+    """
+    Locate the real article body, not the nav/menu text.
+
+    Typical starts:
+      中央气象台7月10日18时继续发布台风橙色预警：
+      水利部和中国气象局7月10日18时联合发布红色山洪灾害气象预警：
+      自然资源部与中国气象局7月10日18时联合发布橙色地质灾害气象风险预警：
+    """
+    if not clean:
+        return -1
+
+    allowed_cn_colors = []
+    for cn, en in CN_COLOR_TO_EN.items():
+        if en in allowed_levels:
+            allowed_cn_colors.append(cn)
+
+    color_alt = "|".join(re.escape(c) for c in allowed_cn_colors) or r"红色|橙色"
+    issuer_alt = (
+        r"中央气象台|"
+        r"水利部和中国气象局|"
+        r"自然资源部与中国气象局|"
+        r"农业农村部和中国气象局|"
+        r"国家防总办公室、应急管理部和中国气象局|"
+        r"中国气象局"
+    )
+
+    patterns = (
+        rf"(?:{issuer_alt})[^\n]{{0,140}}?(?:继续发布|联合发布|发布)"
+        rf"[^\n]{{0,100}}?(?:{color_alt})[^\n]{{0,40}}?(?:预警|预报)[:：]",
+        rf"[^\n]{{0,120}}?(?:继续发布|联合发布|发布)"
+        rf"[^\n]{{0,100}}?(?:{color_alt})[^\n]{{0,40}}?(?:预警|预报)[:：]",
+    )
+
+    matches = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, clean):
+            matches.append(match)
+
+    if not matches:
+        return -1
+
+    # Use the last match before the article end area. This avoids breadcrumb/menu
+    # fragments and works well on NMC detail pages.
+    return max(match.start() for match in matches)
+
+
+def _find_article_end(clean: str, start: int) -> int:
+    if start < 0:
+        return len(clean)
+
+    markers = (
+        "\n防御指南",
+        "防御指南：",
+        "\n相关产品",
+        "\n推荐服务",
+        "\n国家气象中心版权所有",
+        "国家气象中心 版权所有",
+        "本站所刊登的信息",
+    )
+
+    candidates: List[int] = []
+
+    for marker in markers:
+        pos = clean.find(marker, start + 1)
+        if pos > start:
+            candidates.append(pos)
+
+    return min(candidates) if candidates else len(clean)
+
+
+def _fallback_start_from_title(clean: str, fallback_title: str) -> int:
+    title = _repair_nmc_spacing(fallback_title)
+
+    if not title:
+        return -1
+
+    # Try the first meaningful chunk of the homepage title.
+    chunks = [
+        title,
+        title.replace("继续发布", "发布"),
+    ]
+
+    for chunk in chunks:
+        short = chunk[:30]
+        if short:
+            pos = clean.find(short)
+            if pos >= 0:
+                return pos
+
+    # Last fallback: look for the first line containing Red/Orange warning.
+    for match in re.finditer(r"[^\n]*(红色|橙色)[^\n]*(预警|预报)[：:]", clean):
+        return match.start()
+
+    return -1
+
+
+def _extract_detail_article(
+    detail_text: str,
+    *,
+    fallback_title: str,
+    allowed_levels: Set[str],
+) -> str:
+    """
+    Extract the full national warning body from an NMC detail page.
+
+    The returned text intentionally excludes the 防御指南 section and footer.
+    """
+    clean = _clean_article_text(detail_text)
+    if not clean:
+        return ""
+
+    start = _find_article_start(clean, allowed_levels)
+
+    if start < 0:
+        start = _fallback_start_from_title(clean, fallback_title)
+
+    if start < 0:
+        logging.warning(
+            "[CMA/NMC DETAIL] Could not locate article start. "
+            "title=%r sample=%r",
+            fallback_title,
+            clean[:400],
+        )
+        return ""
+
+    end = _find_article_end(clean, start)
+    if end <= start:
+        end = len(clean)
+
+    article = clean[start:end].strip()
+
+    # Remove repeated small section headers if they appear immediately before body.
+    article = re.sub(
+        r"^(台风预警|暴雨预警|强对流天气预警|地质灾害气象风险预警|"
+        r"山洪灾害气象预警|中小河流洪水气象风险预警|农业气象灾害风险预警)\s*",
+        "",
+        article,
+    ).strip()
+
+    # Keep enough text for the full warning body, but avoid accidentally
+    # storing a full page/footer if extraction changes.
+    return article[:8000].strip()
+
+
 async def _enrich_entry_from_detail_page(
     client: httpx.AsyncClient,
     entry: Dict[str, Any],
     *,
     timeout: float,
+    allowed_levels: Set[str],
 ) -> Dict[str, Any]:
     """
-    Fetch detail page for better summary/published time.
-    If anything fails, keep the homepage-derived entry.
+    Fetch the detail page and populate summary / description / body.
+    If enrichment fails, keep the homepage-derived entry.
     """
-    url = str(entry.get("link") or "")
+    url = str(entry.get("link") or "").strip()
+    title = str(entry.get("title") or "").strip()
+
     if not url:
         return entry
 
     try:
-        raw_html = await _get_text(client, url, timeout=timeout, referer=NMC_HOME_URL)
+        raw_html = await _get_text(
+            client,
+            url,
+            timeout=timeout,
+            referer=NMC_HOME_URL,
+        )
     except Exception as exc:
-        logging.debug("[CMA/NMC DETAIL] Could not fetch %s: %s", url, exc)
+        logging.warning("[CMA/NMC DETAIL] Could not fetch %s: %s", url, exc)
         return entry
 
-    text = _html_to_text(raw_html)
-
-    if not text:
+    detail_text = _html_to_text(raw_html)
+    if not detail_text:
+        logging.warning("[CMA/NMC DETAIL] Empty detail text for %s", url)
         return entry
 
-    detail_level = _extract_level(text)
+    article = _extract_detail_article(
+        detail_text,
+        fallback_title=title,
+        allowed_levels=allowed_levels,
+    )
+
+    if article:
+        entry["summary"] = article
+        entry["description"] = article
+        entry["body"] = article
+        logging.warning(
+            "[CMA/NMC DETAIL] Enriched %r summary_len=%d",
+            title,
+            len(article),
+        )
+    else:
+        logging.warning(
+            "[CMA/NMC DETAIL] Detail fetched but no article extracted: %s title=%r",
+            url,
+            title,
+        )
+
+    detail_level = _extract_level(article or detail_text)
     if detail_level in EN_LEVELS:
         entry["level"] = detail_level
 
-    detail_published = _parse_pubtime_from_text(text)
+    detail_published = _parse_pubtime_from_text(article or detail_text)
     if detail_published:
         entry["published"] = detail_published
         entry["timestamp"] = _timestamp_from_iso(
@@ -495,12 +733,12 @@ async def _enrich_entry_from_detail_page(
             float(entry.get("timestamp") or 0.0),
         )
 
-    summary = _extract_detail_summary(text, str(entry.get("title") or ""))
-    if summary:
-        entry["summary"] = summary
-
     return entry
 
+
+# ---------------------------------------------------------------------
+# Dedupe / sorting
+# ---------------------------------------------------------------------
 
 def _entry_key(entry: Dict[str, Any]) -> str:
     return str(entry.get("link") or entry.get("id") or entry.get("title") or "")
@@ -512,6 +750,11 @@ def _dedupe_entries(entries: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
     for entry in entries:
         key = _entry_key(entry)
+        if not key:
+            key = "|".join(
+                str(entry.get(k) or "")
+                for k in ("source_kind", "region", "title", "published")
+            )
 
         if key in seen:
             continue
@@ -522,15 +765,16 @@ def _dedupe_entries(entries: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
-def _sort_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    # Newest first, but preserve homepage order when timestamps tie.
+def _sort_entries(entries: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Newest first. Preserve homepage order for warnings with the same timestamp.
+    """
     return sorted(
         entries,
         key=lambda e: (
-            float(e.get("timestamp") or 0.0),
-            -int(e.get("_order") or 0),
+            -float(e.get("timestamp") or 0.0),
+            int(e.get("_order") or 999999),
         ),
-        reverse=True,
     )
 
 
@@ -543,27 +787,32 @@ async def scrape_cma_async(
     client: httpx.AsyncClient,
 ) -> Dict[str, Any]:
     """
-    National-only CMA/NMC scraper.
+    National-only CMA/NMC warning scraper.
 
-    It reads the warning links shown in the top-right panel of:
-      https://www.nmc.cn/
+    Recommended feed config:
 
-    Default:
-      allowed_levels = ["Red", "Orange"]
-
-    Optional config:
       {
-        "allowed_levels": ["Red", "Orange"],
-        "timeout": 15,
-        "fetch_detail_pages": true
+          "key": "cma_china",
+          "type": "rss_cma",
+          "label": "CMA China",
+          "group": "g2_even",
+          "conf": {
+              "allowed_levels": ["Red", "Orange"],
+              "fetch_detail_pages": true,
+              "timeout": 15
+          }
       }
+
+    Optional config keys:
+      allowed_levels: ["Red", "Orange"]     # default
+      fetch_detail_pages: true              # default
+      timeout: 15                           # default seconds
     """
     timeout = float(_conf_value(conf, "timeout", 15) or 15)
     allowed_levels = _allowed_levels_from_conf(conf)
     fetch_detail_pages = _conf_bool(conf, "fetch_detail_pages", True)
 
     now_ts = datetime.now(timezone.utc).timestamp()
-    errors: List[str] = []
 
     try:
         homepage_html = await _get_text(
@@ -592,6 +841,7 @@ async def scrape_cma_async(
                 client,
                 entry,
                 timeout=timeout,
+                allowed_levels=allowed_levels,
             )
             for entry in entries
         ]
@@ -601,15 +851,14 @@ async def scrape_cma_async(
         enriched: List[Dict[str, Any]] = []
         for entry, result in zip(entries, results):
             if isinstance(result, Exception):
-                logging.debug("[CMA/NMC DETAIL ERROR] %s", result)
+                logging.warning("[CMA/NMC DETAIL ERROR] %s", result)
                 enriched.append(entry)
-                continue
-
-            enriched.append(result)
+            else:
+                enriched.append(result)
 
         entries = enriched
 
-    # Keep only configured levels after enrichment.
+    # Final threshold check after detail enrichment.
     entries = [
         entry
         for entry in entries
@@ -619,21 +868,21 @@ async def scrape_cma_async(
     entries = _dedupe_entries(entries)
     entries = _sort_entries(entries)
 
+    # Remove internal ordering helper before handing entries to the renderer.
+    for entry in entries:
+        entry.pop("_order", None)
+
     logging.warning(
-        "[CMA/NMC DEBUG] Parsed %d national entries; allowed_levels=%s",
+        "[CMA/NMC DEBUG] Parsed %d national entries; allowed_levels=%s; detail_pages=%s",
         len(entries),
         sorted(allowed_levels),
+        fetch_detail_pages,
     )
 
-    result: Dict[str, Any] = {
+    return {
         "source": "CMA/NMC",
         "entries": entries,
     }
-
-    if errors:
-        result["error"] = "; ".join(errors)
-
-    return result
 
 
 # ---------------------------------------------------------------------
