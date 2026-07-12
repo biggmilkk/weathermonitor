@@ -201,46 +201,146 @@ def ec_remaining_new_total(
 
 
 # --------------------------------------------------------------------
-# CMA (China Meteorological Administration) helpers
+# CMA / NMC China helpers
 # --------------------------------------------------------------------
+
+CMA_DEFAULT_COUNT_LEVELS: tuple[str, ...] = ("Red", "Orange", "Yellow")
+
+CMA_CN_COLOR_TO_EN: Mapping[str, str] = {
+    "红色": "Red",
+    "橙色": "Orange",
+    "黄色": "Yellow",
+    "蓝色": "Blue",
+}
 
 CMA_LEVEL_TO_BUCKET: Mapping[str, str] = {
     "Red": "Red Warning",
     "Orange": "Orange Warning",
+    "Yellow": "Yellow Warning",
+    "Blue": "Blue Warning",
 }
 
+CMA_LEVEL_TO_BUCKET_CN: Mapping[str, str] = {
+    "Red": "红色预警",
+    "Orange": "橙色预警",
+    "Yellow": "黄色预警",
+    "Blue": "蓝色预警",
+}
 
-def cma_bucket_from_level(level: str | None) -> str | None:
-    """Map CMA 'level' to a generic bucket label (only Orange/Red)."""
-    if not level:
-        return None
-    return CMA_LEVEL_TO_BUCKET.get(str(level).strip())
-
+CMA_LEVEL_ORDER: Mapping[str, int] = {
+    "Red": 0,
+    "Orange": 1,
+    "Yellow": 2,
+    "Blue": 3,
+}
 
 CMA_PHENOMENON_CN_TO_EN: Mapping[str, str] = {
+    # National NMC products.
+    "强对流天气": "Severe Convective Weather",
+    "台风": "Typhoon",
+    "暴雨": "Heavy Rain",
+    "大风": "Gale",
+    "大雾": "Heavy Fog",
+    "沙尘暴": "Sandstorm",
+    "暴雪": "Snowstorm",
+    "寒潮": "Cold Wave",
+    "冰冻": "Freezing",
+    "高温": "High Temperature",
+    "气象干旱": "Meteorological Drought",
+    "低温": "Low Temperature",
+    "山洪灾害气象": "Mountain Flood Risk",
+    "山洪灾害": "Mountain Flood Risk",
+    "地质灾害气象风险": "Geological Hazard Risk",
+    "地质灾害": "Geological Hazard Risk",
+    "中小河流洪水气象风险": "Small and Medium River Flood Risk",
+    "中小河流洪水": "Small and Medium River Flood Risk",
+    "渍涝风险气象": "Waterlogging Risk",
+    "渍涝": "Waterlogging Risk",
+    "农业气象灾害风险": "Agrometeorological Hazard Risk",
+    "农业气象灾害": "Agrometeorological Hazard Risk",
+
+    # Local / legacy CMA signal names kept for compatibility.
     "雷雨大风": "Thunderstorm Gale",
     "道路结冰": "Road Icing",
     "强对流": "Severe Convective Weather",
     "森林火险": "Forest Fire Risk",
-    "地质灾害": "Geological Disaster",
     "暴风雪": "Blizzard",
-    "暴雨": "Heavy Rain",
-    "暴雪": "Snowstorm",
-    "寒潮": "Cold Wave",
-    "高温": "High Temperature",
-    "低温": "Low Temperature",
-    "大风": "Gale",
-    "沙尘暴": "Sandstorm",
     "冰雹": "Hail",
-    "大雾": "Fog",
     "霾": "Haze",
     "干旱": "Drought",
-    "台风": "Typhoon",
     "洪水": "Flood",
     "雷电": "Lightning",
     "霜冻": "Frost",
     "寒冷": "Cold",
 }
+
+_CMA_LEVEL_WORD_RE = re.compile(r"(红\s*色|橙\s*色|黄\s*色|蓝\s*色)", flags=re.IGNORECASE)
+
+
+def cma_normalize_level(level: Any) -> str | None:
+    """
+    Normalize CMA/NMC severity level to:
+      Red / Orange / Yellow / Blue
+
+    Accepts English level strings or Chinese color words.
+    """
+    if level is None:
+        return None
+
+    text = str(level).strip()
+    if not text:
+        return None
+
+    compact = re.sub(r"\s+", "", text)
+
+    if compact in CMA_CN_COLOR_TO_EN:
+        return CMA_CN_COLOR_TO_EN[compact]
+
+    lowered = compact.lower()
+    for canon in CMA_LEVEL_TO_BUCKET.keys():
+        if lowered == canon.lower():
+            return canon
+
+    m = _CMA_LEVEL_WORD_RE.search(compact)
+    if m:
+        color = re.sub(r"\s+", "", m.group(1))
+        return CMA_CN_COLOR_TO_EN.get(color)
+
+    return None
+
+
+def cma_level(e: Mapping[str, Any]) -> str | None:
+    """
+    Extract a normalized CMA level from explicit fields first, then text.
+
+    This lets bucket/count logic still work if a scraper gives only a title like:
+      中央气象台7月12日10时继续发布台风黄色预警
+    """
+    for key in ("level", "severity", "colour", "color"):
+        direct = cma_normalize_level(e.get(key))
+        if direct:
+            return direct
+
+    text = " ".join(
+        str(v or "").strip()
+        for v in (
+            e.get("headline"),
+            e.get("title"),
+            e.get("summary"),
+            e.get("description"),
+            e.get("body"),
+        )
+        if v
+    )
+    return cma_normalize_level(text)
+
+
+def cma_bucket_from_level(level: str | None) -> str | None:
+    """Map CMA level to a generic English bucket label."""
+    normalized = cma_normalize_level(level)
+    if not normalized:
+        return None
+    return CMA_LEVEL_TO_BUCKET.get(normalized)
 
 
 def cma_headline_text(e: Mapping[str, Any]) -> str:
@@ -248,15 +348,33 @@ def cma_headline_text(e: Mapping[str, Any]) -> str:
     return str(e.get("headline") or e.get("title") or "").strip()
 
 
+def cma_text_for_matching(e: Mapping[str, Any]) -> str:
+    """All useful CMA/NMC text fields collapsed for matching."""
+    return " ".join(
+        str(v or "").strip()
+        for v in (
+            e.get("headline"),
+            e.get("title"),
+            e.get("summary"),
+            e.get("description"),
+            e.get("body"),
+        )
+        if v
+    )
+
+
 def cma_extract_phenomenon_cn(text: str) -> str | None:
     """
-    Extract Chinese warning phenomenon from a headline/title.
+    Extract Chinese warning phenomenon from headline/title/body.
+
     Examples:
       暴雨橙色预警
-      大风橙色预警
+      台风黄色预警
+      强对流天气黄色预警
+      地质灾害气象风险橙色预警
       雷电红色预警信号
     """
-    t = str(text or "").strip()
+    t = re.sub(r"\s+", "", str(text or "").strip())
     if not t:
         return None
 
@@ -264,9 +382,21 @@ def cma_extract_phenomenon_cn(text: str) -> str | None:
         if key in t:
             return key
 
-    m = re.search(r"([\u4e00-\u9fff]{1,12})(红色|橙色)预警", t)
+    # Generic fallback: capture text immediately before color + warning/forecast.
+    m = re.search(
+        r"([\u4e00-\u9fff]{1,24})(红色|橙色|黄色|蓝色)(预警|预警信号|警报|警报信号|预报)",
+        t,
+    )
     if m:
-        return str(m.group(1)).strip() or None
+        candidate = str(m.group(1)).strip()
+        candidate = re.sub(
+            r"^(中央气象台|水利部和中国气象局|自然资源部与中国气象局|"
+            r"农业农村部和中国气象局|国家防总办公室|应急管理部和中国气象局|"
+            r"中国气象局).*?(继续发布|联合发布|发布)",
+            "",
+            candidate,
+        )
+        return candidate or None
 
     return None
 
@@ -281,21 +411,26 @@ def cma_bucket_label(
 
     Examples:
       translate_to_en=True:
+        Yellow Warning - Typhoon
         Orange Warning - Heavy Rain
-        Red Warning - Fog
+        Red Warning - Geological Hazard Risk
 
       translate_to_en=False:
+        黄色预警 - 台风
         橙色预警 - 暴雨
-        红色预警 - 大雾
+        红色预警 - 地质灾害气象风险
     """
-    level = str(e.get("level") or "").strip()
-    generic_en = {"Red": "Red Warning", "Orange": "Orange Warning"}.get(level)
-    generic_cn = {"Red": "红色预警", "Orange": "橙色预警"}.get(level)
+    level = cma_level(e)
+    if not level:
+        return None
+
+    generic_en = CMA_LEVEL_TO_BUCKET.get(level)
+    generic_cn = CMA_LEVEL_TO_BUCKET_CN.get(level)
 
     if not generic_en or not generic_cn:
         return None
 
-    phenomenon_cn = cma_extract_phenomenon_cn(cma_headline_text(e))
+    phenomenon_cn = cma_extract_phenomenon_cn(cma_text_for_matching(e))
     if not phenomenon_cn:
         return generic_en if translate_to_en else generic_cn
 
@@ -311,14 +446,31 @@ def cma_remaining_new_total(
     *,
     last_seen_bkey_map,
     translate_to_en: bool = True,
+    allowed_levels: Sequence[str] = CMA_DEFAULT_COUNT_LEVELS,
 ) -> int:
     """
     CMA remaining-new counter using province|specific_bucket keys.
 
     This MUST match the bucketing logic used in renderers/cma.py.
+
+    Default levels counted:
+      Red, Orange, Yellow
+
+    Blue is supported by the helper functions, but not counted unless callers
+    explicitly pass allowed_levels=("Red", "Orange", "Yellow", "Blue").
     """
+    normalized_allowed = {
+        lvl
+        for lvl in (cma_normalize_level(x) for x in allowed_levels)
+        if lvl
+    }
+
     total = 0
     for e in entries or []:
+        level = cma_level(e)
+        if level not in normalized_allowed:
+            continue
+
         bucket = cma_bucket_label(e, translate_to_en=translate_to_en)
         if not bucket:
             continue
@@ -531,6 +683,7 @@ def smn_remaining_new_total(
 
     return total
 
+
 # --------------------------------------------------------------------
 # MetService NZ helpers
 # --------------------------------------------------------------------
@@ -588,6 +741,7 @@ def nz_remaining_new_total(
             total += 1
 
     return total
+
 
 # --------------------------------------------------------------------
 # NWS (US National Weather Service) helpers
