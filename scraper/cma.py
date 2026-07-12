@@ -23,6 +23,8 @@ __all__ = ["scrape_cma_async", "scrape_async", "scrape"]
 #   2. Reads the national warning links shown in the top-right warning list.
 #   3. Keeps Red / Orange / Yellow national warnings by default.
 #   4. Fetches each detail page and extracts the full article body.
+#   5. Uses a text fallback so homepage links with awkward/nested markup
+#      still produce entries.
 #
 # What this scraper intentionally does NOT do:
 #   - It does not fetch local warnings from:
@@ -35,7 +37,6 @@ NMC_BASE = "https://www.nmc.cn"
 NMC_HOME_URL = f"{NMC_BASE}/"
 NMC_REFERER = NMC_HOME_URL
 
-# Updated default: include Yellow too.
 DEFAULT_ALLOWED_LEVELS = {"Red", "Orange", "Yellow"}
 
 CST = timezone(timedelta(hours=8))
@@ -49,6 +50,15 @@ CN_COLOR_TO_EN = {
 
 EN_LEVELS = {"Red", "Orange", "Yellow", "Blue"}
 
+NATIONAL_ISSUER_PATTERN = (
+    r"中央气象台|"
+    r"水利部和中国气象局|"
+    r"自然资源部与中国气象局|"
+    r"农业农村部和中国气象局|"
+    r"国家防总办公室、应急管理部和中国气象局|"
+    r"中国气象局"
+)
+
 # National warning/product paths that can appear in the homepage top-right list.
 # Local warning-signal pages use different paths and are intentionally ignored.
 NATIONAL_WARNING_PATH_HINTS = (
@@ -59,6 +69,28 @@ NATIONAL_WARNING_PATH_HINTS = (
     "/publish/swdz/zxhlhsqxyj.html",
     "/publish/nongyeqixiang/quanguonongyeqixiangzaihaifengxianyujing/",
 )
+
+# Used by the text fallback. Put more-specific keys before broad keys.
+PRODUCT_URL_BY_KEYWORD: List[Tuple[str, str]] = [
+    ("强对流", "/publish/country/warning/strong_convection.html"),
+    ("台风", "/publish/country/warning/typhoon.html"),
+    ("暴雨", "/publish/country/warning/downpour.html"),
+    ("大风", "/publish/country/warning/gale.html"),
+    ("大雾", "/publish/country/warning/fog.html"),
+    ("沙尘暴", "/publish/country/warning/sand.html"),
+    ("暴雪", "/publish/country/warning/snow.html"),
+    ("寒潮", "/publish/country/warning/cold.html"),
+    ("冰冻", "/publish/country/warning/freeze.html"),
+    ("高温", "/publish/country/warning/high-temperature.html"),
+    ("气象干旱", "/publish/country/warning/drought.html"),
+    ("干旱", "/publish/country/warning/drought.html"),
+    ("低温", "/publish/country/warning/low-temperature.html"),
+    ("山洪", "/publish/mountainflood.html"),
+    ("地质灾害", "/publish/geohazard.html"),
+    ("中小河流洪水", "/publish/swdz/zxhlhsqxyj.html"),
+    ("渍涝", "/publish/waterlogging.html"),
+    ("农业气象灾害", "/publish/nongyeqixiang/quanguonongyeqixiangzaihaifengxianyujing/"),
+]
 
 HEADERS = {
     "User-Agent": (
@@ -92,18 +124,21 @@ WAF_MARKERS = (
 
 def _conf_value(conf: Dict[str, Any], key: str, default: Any = None) -> Any:
     """
-    Support both:
-      {"allowed_levels": [...]}
-    and:
+    Prefer nested feed config:
       {"conf": {"allowed_levels": [...]}}
+    over stale top-level keys:
+      {"allowed_levels": [...]}
+
+    This avoids an old top-level Red/Orange setting silently overriding
+    a newer nested Red/Orange/Yellow setting.
     """
     nested = conf.get("conf") if isinstance(conf.get("conf"), dict) else {}
 
-    if key in conf:
-        return conf.get(key)
-
     if isinstance(nested, dict) and key in nested:
         return nested.get(key)
+
+    if key in conf:
+        return conf.get(key)
 
     return default
 
@@ -230,7 +265,7 @@ def _repair_nmc_spacing(value: Any) -> str:
     """
     NMC article pages often expose text with odd spaces inserted between
     Chinese characters and digits, for example:
-      台风 橙色 预警
+      台风 黄 色 预警
       第 9 号
       83 0 公里
       20～2 5 公里
@@ -460,7 +495,58 @@ def _clean_homepage_title(text: str) -> str:
     return _repair_nmc_spacing(title)
 
 
-def _homepage_entries_from_html(
+def _title_looks_national(title: str) -> bool:
+    if not title:
+        return False
+
+    return bool(re.search(NATIONAL_ISSUER_PATTERN, title))
+
+
+def _url_for_national_warning_title(title: str) -> Optional[str]:
+    """
+    Map a national warning title from the homepage text to the canonical
+    NMC warning detail page.
+    """
+    compact = _repair_nmc_spacing(title)
+
+    for keyword, path in PRODUCT_URL_BY_KEYWORD:
+        if keyword in compact:
+            return _absolute_nmc_url(path)
+
+    return None
+
+
+def _make_homepage_entry(
+    *,
+    title: str,
+    url: str,
+    level: str,
+    order: int,
+    now_ts: float,
+    source_kind: str = "national",
+) -> Dict[str, Any]:
+    published = _parse_pubtime_from_text(title)
+    ts = _timestamp_from_iso(published, now_ts)
+
+    return {
+        "source": "CMA/NMC",
+        "source_kind": source_kind,
+        "id": url,
+        "headline": title,
+        "title": title,
+        "level": level,
+        "region": "China: National",
+        "summary": "",
+        "description": "",
+        "body": "",
+        "published": published,
+        "timestamp": ts,
+        "link": url,
+        "_order": order,
+    }
+
+
+def _homepage_entries_from_anchors(
     raw_html: str,
     *,
     allowed_levels: Set[str],
@@ -486,36 +572,124 @@ def _homepage_entries_from_html(
         if level not in allowed_levels:
             continue
 
-        # Avoid repeated national category/menu links.
-        # Menu links normally do not contain color levels, but this also
-        # protects against duplicated homepage modules.
+        # Skip local/province-style warnings. National homepage items usually
+        # contain issuers such as 中央气象台, 水利部和中国气象局, etc.
+        if not _title_looks_national(title):
+            continue
+
         if url in seen_links:
             continue
+
         seen_links.add(url)
 
-        published = _parse_pubtime_from_text(title)
-        ts = _timestamp_from_iso(published, now_ts)
-
         entries.append(
-            {
-                "source": "CMA/NMC",
-                "source_kind": "national",
-                "id": url,
-                "headline": title,
-                "title": title,
-                "level": level,
-                "region": "China: National",
-                "summary": "",
-                "description": "",
-                "body": "",
-                "published": published,
-                "timestamp": ts,
-                "link": url,
-                "_order": order,
-            }
+            _make_homepage_entry(
+                title=title,
+                url=url,
+                level=level,
+                order=order,
+                now_ts=now_ts,
+            )
         )
 
     return entries
+
+
+def _homepage_entries_from_text_fallback(
+    raw_html: str,
+    *,
+    allowed_levels: Set[str],
+    now_ts: float,
+    start_order: int = 10000,
+) -> List[Dict[str, Any]]:
+    """
+    Fallback for NMC homepage changes where the warning title is visible in
+    page text but the <a> text parser misses it.
+
+    This intentionally requires a national issuer, so it does not pull in the
+    local/province warning list farther down the homepage.
+    """
+    text = _html_to_text(raw_html)
+    clean = _clean_article_text(text)
+
+    if not clean:
+        return []
+
+    issuer = NATIONAL_ISSUER_PATTERN
+    color = r"红色|橙色|黄色|蓝色"
+
+    # Capture a compact national title ending at 预警 or 预报.
+    pattern = re.compile(
+        rf"((?:{issuer})[^\n]{{0,180}}?(?:{color})[^\n]{{0,80}}?(?:预警|预报))"
+    )
+
+    entries: List[Dict[str, Any]] = []
+    seen_titles: Set[str] = set()
+
+    for idx, match in enumerate(pattern.finditer(clean)):
+        title = _clean_homepage_title(match.group(1))
+        if not title:
+            continue
+
+        level = _extract_level(title)
+        if level not in allowed_levels:
+            continue
+
+        url = _url_for_national_warning_title(title)
+        if not url:
+            continue
+
+        key = f"{url}|{title}"
+        if key in seen_titles:
+            continue
+
+        seen_titles.add(key)
+
+        entries.append(
+            _make_homepage_entry(
+                title=title,
+                url=url,
+                level=level,
+                order=start_order + idx,
+                now_ts=now_ts,
+            )
+        )
+
+    return entries
+
+
+def _homepage_entries_from_html(
+    raw_html: str,
+    *,
+    allowed_levels: Set[str],
+    now_ts: float,
+) -> List[Dict[str, Any]]:
+    """
+    Extract national warnings from both:
+      1. normal homepage anchors
+      2. text fallback for nested/awkward homepage markup
+    """
+    anchor_entries = _homepage_entries_from_anchors(
+        raw_html,
+        allowed_levels=allowed_levels,
+        now_ts=now_ts,
+    )
+
+    fallback_entries = _homepage_entries_from_text_fallback(
+        raw_html,
+        allowed_levels=allowed_levels,
+        now_ts=now_ts,
+        start_order=10000,
+    )
+
+    combined = _dedupe_entries(anchor_entries + fallback_entries)
+
+    logging.warning(
+        "[CMA/NMC DEBUG] homepage_candidates=%s",
+        [(e.get("level"), e.get("title"), e.get("link")) for e in combined],
+    )
+
+    return combined
 
 
 # ---------------------------------------------------------------------
@@ -540,20 +714,13 @@ def _find_article_start(clean: str, allowed_levels: Set[str]) -> int:
             allowed_cn_colors.append(cn)
 
     color_alt = "|".join(re.escape(c) for c in allowed_cn_colors) or r"红色|橙色|黄色"
-    issuer_alt = (
-        r"中央气象台|"
-        r"水利部和中国气象局|"
-        r"自然资源部与中国气象局|"
-        r"农业农村部和中国气象局|"
-        r"国家防总办公室、应急管理部和中国气象局|"
-        r"中国气象局"
-    )
+    issuer_alt = NATIONAL_ISSUER_PATTERN
 
     patterns = (
-        rf"(?:{issuer_alt})[^\n]{{0,140}}?(?:继续发布|联合发布|发布)"
-        rf"[^\n]{{0,100}}?(?:{color_alt})[^\n]{{0,40}}?(?:预警|预报)[:：]",
-        rf"[^\n]{{0,120}}?(?:继续发布|联合发布|发布)"
-        rf"[^\n]{{0,100}}?(?:{color_alt})[^\n]{{0,40}}?(?:预警|预报)[:：]",
+        rf"(?:{issuer_alt})[^\n]{{0,180}}?(?:继续发布|联合发布|发布)"
+        rf"[^\n]{{0,120}}?(?:{color_alt})[^\n]{{0,60}}?(?:预警|预报)[:：]",
+        rf"[^\n]{{0,160}}?(?:继续发布|联合发布|发布)"
+        rf"[^\n]{{0,120}}?(?:{color_alt})[^\n]{{0,60}}?(?:预警|预报)[:：]",
     )
 
     matches = []
@@ -657,7 +824,9 @@ def _extract_detail_article(
     # Remove repeated small section headers if they appear immediately before body.
     article = re.sub(
         r"^(台风预警|暴雨预警|强对流天气预警|地质灾害气象风险预警|"
-        r"山洪灾害气象预警|中小河流洪水气象风险预警|农业气象灾害风险预警)\s*",
+        r"山洪灾害气象预警|中小河流洪水气象风险预警|农业气象灾害风险预警|"
+        r"大风预警|大雾预警|沙尘暴预警|暴雪预警|寒潮预警|冰冻预警|"
+        r"高温预警|气象干旱预警|低温预警|渍涝风险气象预警)\s*",
         "",
         article,
     ).strip()
@@ -710,28 +879,33 @@ async def _enrich_entry_from_detail_page(
         entry["summary"] = article
         entry["description"] = article
         entry["body"] = article
+
+        detail_level = _extract_level(article)
+        if detail_level in EN_LEVELS:
+            entry["level"] = detail_level
+
+        detail_published = _parse_pubtime_from_text(article)
+        if detail_published:
+            entry["published"] = detail_published
+            entry["timestamp"] = _timestamp_from_iso(
+                detail_published,
+                float(entry.get("timestamp") or 0.0),
+            )
+
         logging.warning(
-            "[CMA/NMC DETAIL] Enriched %r summary_len=%d",
+            "[CMA/NMC DETAIL] Enriched %r level=%s summary_len=%d",
             title,
+            entry.get("level"),
             len(article),
         )
     else:
+        # Do not overwrite the homepage-derived level from full-page text.
+        # Full pages contain nav links and related products that can confuse
+        # level extraction.
         logging.warning(
             "[CMA/NMC DETAIL] Detail fetched but no article extracted: %s title=%r",
             url,
             title,
-        )
-
-    detail_level = _extract_level(article or detail_text)
-    if detail_level in EN_LEVELS:
-        entry["level"] = detail_level
-
-    detail_published = _parse_pubtime_from_text(article or detail_text)
-    if detail_published:
-        entry["published"] = detail_published
-        entry["timestamp"] = _timestamp_from_iso(
-            detail_published,
-            float(entry.get("timestamp") or 0.0),
         )
 
     return entry
@@ -813,6 +987,13 @@ async def scrape_cma_async(
     allowed_levels = _allowed_levels_from_conf(conf)
     fetch_detail_pages = _conf_bool(conf, "fetch_detail_pages", True)
 
+    logging.warning(
+        "[CMA/NMC DEBUG] raw_top_allowed=%r raw_nested_allowed=%r final_allowed=%s",
+        conf.get("allowed_levels"),
+        (conf.get("conf") or {}).get("allowed_levels") if isinstance(conf.get("conf"), dict) else None,
+        sorted(allowed_levels),
+    )
+
     now_ts = datetime.now(timezone.utc).timestamp()
 
     try:
@@ -872,6 +1053,11 @@ async def scrape_cma_async(
     # Remove internal ordering helper before handing entries to the renderer.
     for entry in entries:
         entry.pop("_order", None)
+
+    logging.warning(
+        "[CMA/NMC DEBUG] returning_entries=%s",
+        [(e.get("level"), e.get("title"), e.get("link")) for e in entries],
+    )
 
     logging.warning(
         "[CMA/NMC DEBUG] Parsed %d national entries; allowed_levels=%s; detail_pages=%s",
