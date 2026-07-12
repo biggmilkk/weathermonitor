@@ -21,20 +21,21 @@ __all__ = ["scrape_cma_async", "scrape_async", "scrape"]
 # What this scraper does:
 #   1. Fetches https://www.nmc.cn/
 #   2. Reads the national warning links shown in the top-right warning list.
-#   3. Keeps only Red / Orange national warnings by default.
+#   3. Keeps Red / Orange / Yellow national warnings by default.
 #   4. Fetches each detail page and extracts the full article body.
 #
 # What this scraper intentionally does NOT do:
 #   - It does not fetch local warnings from:
 #       https://weather.cma.cn/api/map/alarm?adcode=
 #   - It does not include local province/city warning-signal records.
-#   - It does not include Yellow / Blue warnings unless configured.
+#   - It does not include Blue warnings unless configured.
 # ---------------------------------------------------------------------
 
 NMC_BASE = "https://www.nmc.cn"
 NMC_HOME_URL = f"{NMC_BASE}/"
 NMC_REFERER = NMC_HOME_URL
 
+# Updated default: include Yellow too.
 DEFAULT_ALLOWED_LEVELS = {"Red", "Orange", "Yellow"}
 
 CST = timezone(timedelta(hours=8))
@@ -538,7 +539,7 @@ def _find_article_start(clean: str, allowed_levels: Set[str]) -> int:
         if en in allowed_levels:
             allowed_cn_colors.append(cn)
 
-    color_alt = "|".join(re.escape(c) for c in allowed_cn_colors) or r"红色|橙色"
+    color_alt = "|".join(re.escape(c) for c in allowed_cn_colors) or r"红色|橙色|黄色"
     issuer_alt = (
         r"中央气象台|"
         r"水利部和中国气象局|"
@@ -611,8 +612,8 @@ def _fallback_start_from_title(clean: str, fallback_title: str) -> int:
             if pos >= 0:
                 return pos
 
-    # Last fallback: look for the first line containing Red/Orange warning.
-    for match in re.finditer(r"[^\n]*(红色|橙色)[^\n]*(预警|预报)[：:]", clean):
+    # Last fallback: look for the first line containing a colored warning.
+    for match in re.finditer(r"[^\n]*(红色|橙色|黄色)[^\n]*(预警|预报)[：:]", clean):
         return match.start()
 
     return -1
@@ -797,16 +798,16 @@ async def scrape_cma_async(
           "label": "CMA China",
           "group": "g2_even",
           "conf": {
-              "allowed_levels": ["Red", "Orange", 'Yellow'],
+              "allowed_levels": ["Red", "Orange", "Yellow"],
               "fetch_detail_pages": true,
               "timeout": 15
           }
       }
 
     Optional config keys:
-      allowed_levels: ["Red", "Orange"]     # default
-      fetch_detail_pages: true              # default
-      timeout: 15                           # default seconds
+      allowed_levels: ["Red", "Orange", "Yellow"]  # default
+      fetch_detail_pages: true                     # default
+      timeout: 15                                  # default seconds
     """
     timeout = float(_conf_value(conf, "timeout", 15) or 15)
     allowed_levels = _allowed_levels_from_conf(conf)
