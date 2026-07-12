@@ -35,7 +35,7 @@ NMC_BASE = "https://www.nmc.cn"
 NMC_HOME_URL = f"{NMC_BASE}/"
 NMC_REFERER = NMC_HOME_URL
 
-DEFAULT_ALLOWED_LEVELS = {"Red", "Orange"}
+DEFAULT_ALLOWED_LEVELS = {"Red", "Orange", "Yellow"}
 
 CST = timezone(timedelta(hours=8))
 
@@ -797,7 +797,7 @@ async def scrape_cma_async(
           "label": "CMA China",
           "group": "g2_even",
           "conf": {
-              "allowed_levels": ["Red", "Orange"],
+              "allowed_levels": ["Red", "Orange", 'Yellow'],
               "fetch_detail_pages": true,
               "timeout": 15
           }
